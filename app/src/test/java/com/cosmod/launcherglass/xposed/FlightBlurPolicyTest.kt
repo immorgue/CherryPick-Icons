@@ -23,4 +23,10 @@ class FlightBlurPolicyTest {
         assertFalse(FlightBlurPolicy.live(true,true))
         assertTrue(FlightBlurPolicy.live(true,false))
     }
+    @Test fun disabledLimitUsesGlobalFpsWithoutExceedingIt(){
+        assertEquals(60,FlightBlurPolicy.fps(60,false))
+        assertEquals(45,FlightBlurPolicy.fps(45,false))
+        assertEquals(20,FlightBlurPolicy.fps(20,false))
+        assertEquals(60,FlightBlurPolicy.fps(120,false))
+    }
 }

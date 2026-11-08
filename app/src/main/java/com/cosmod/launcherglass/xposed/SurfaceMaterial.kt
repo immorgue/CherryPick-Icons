@@ -61,10 +61,11 @@ internal object SurfaceMaterial {
     private fun shape(bounds:Rect,radius:Float,path:Path?,native:android.graphics.drawable.Drawable?=null,nativeMask:Bitmap?=null,
                       pathFingerprint:Long?=null,identity:Any?=null,view:View?=null):Shape {
         val longest=maxOf(bounds.width(),bounds.height()).coerceAtLeast(1)
-        // A cluster's native corner is also the flight silhouette. Preserve
-        // its exact radius/aspect ratio instead of quantizing the small mask.
+        // Keep the cluster mask's aspect ratio and radius without snapping
+        // to the 4 px buckets. Exact final clipping is a native vector path;
+        // inflating this texture to full size only made cold builds expensive.
         val exact=view?.javaClass?.name=="com.android.launcher3.viewcontainer.GridRecyclerView"
-        val scale=minOf(1f,(if(exact)1024f else 384f)/longest)
+        val scale=minOf(1f,384f/longest)
         val rawW=bounds.width()*scale;val rawH=bounds.height()*scale
         // About 1% quantization absorbs sub-pixel layout and drag jitter; the
         // canvas scale in draw() maps the mask back onto the exact bounds.
@@ -79,7 +80,7 @@ internal object SurfaceMaterial {
             else -> 1L
         }
         val fingerprint=if(family==2L)normalizedFingerprint(path!!,bounds,w,h)else family
-        val key=Key(w,h,(radius*scale*2f).roundToInt(),fingerprint,
+        val key=Key(w,h,if(exact)java.lang.Float.floatToIntBits(radius)else (radius*scale*2f).roundToInt(),fingerprint,
             if(nativeMask!=null)31*System.identityHashCode(nativeMask)+nativeMask.generationId else if(hasPath)0 else System.identityHashCode(native?.constantState ?: native))
         val now=SystemClock.uptimeMillis()
         val track=identity?.let {tracks[it]}
@@ -89,7 +90,7 @@ internal object SurfaceMaterial {
             }
             return cached
         }
-        if(track!=null && view!=null && now-track.builtAt<REBUILD_INTERVAL_MS && compatible(track,key,family)){
+        if(!exact && track!=null && view!=null && now-track.builtAt<REBUILD_INTERVAL_MS && compatible(track,key,family)){
             // Animated bounds (hover, resize, folder morph): reuse the recent
             // mask for a few frames instead of rasterizing mask, rim and
             // overlay on every frame. One delayed repaint restores the exact

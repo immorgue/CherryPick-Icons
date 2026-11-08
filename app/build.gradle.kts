@@ -11,8 +11,8 @@ android {
         applicationId = "com.cosmod.launcherglass"
         minSdk = 31
         targetSdk = 35
-        versionCode = 254
-        versionName = "0.2.54-dev"
+        versionCode = 255
+        versionName = "0.2.55-dev"
     }
 
     signingConfigs {
@@ -53,6 +53,7 @@ android {
     }
 
     lint {
+        lintConfig = file("lint.xml")
         abortOnError = true
         checkReleaseBuilds = true
     }

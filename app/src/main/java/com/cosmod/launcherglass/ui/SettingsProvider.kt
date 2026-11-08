@@ -62,6 +62,7 @@ class SettingsProvider : ContentProvider() {
                 }
                 bundle.putBoolean(KEY_GPU_EFFECTS,prefs.getBoolean(KEY_GPU_EFFECTS,true))
                 bundle.putBoolean(KEY_EXPERIMENTAL_LIQUID,prefs.getBoolean(KEY_EXPERIMENTAL_LIQUID,false))
+                bundle.putBoolean(KEY_LIMIT_CLOSING_BLUR,prefs.getBoolean(KEY_LIMIT_CLOSING_BLUR,true))
                 for(scope in ScopedSettingsKeys.all){
                     bundle.putBoolean(scope.own,prefs.getBoolean(scope.own,false))
                     for(base in scope.integers){
@@ -144,6 +145,7 @@ class SettingsProvider : ContentProvider() {
                     }
                     if(b.containsKey(KEY_GPU_EFFECTS))editor.putBoolean(KEY_GPU_EFFECTS,b.getBoolean(KEY_GPU_EFFECTS))
                     if(b.containsKey(KEY_EXPERIMENTAL_LIQUID))editor.putBoolean(KEY_EXPERIMENTAL_LIQUID,b.getBoolean(KEY_EXPERIMENTAL_LIQUID))
+                    if(b.containsKey(KEY_LIMIT_CLOSING_BLUR))editor.putBoolean(KEY_LIMIT_CLOSING_BLUR,b.getBoolean(KEY_LIMIT_CLOSING_BLUR))
                     for(scope in ScopedSettingsKeys.all){
                         if(b.containsKey(scope.own))editor.putBoolean(scope.own,b.getBoolean(scope.own))
                         for(base in scope.integers){val key=scope.key(base);if(b.containsKey(key))editor.putInt(key,b.getInt(key))}
@@ -266,6 +268,7 @@ class SettingsProvider : ContentProvider() {
         const val KEY_DEVELOPER_MODE = "developer_mode"
         const val KEY_GPU_EFFECTS = "gpu_effects"
         const val KEY_EXPERIMENTAL_LIQUID = "experimental_liquid_optics"
+        const val KEY_LIMIT_CLOSING_BLUR = "limit_closing_blur_fps"
         const val KEY_BLUR_TONE_ENABLED = "blur_tone_enabled"
         const val KEY_PHOTO_WIDGET_BLUR = "photo_widget_blur"
         const val KEY_COLOR_DEPTH_ENABLED = "blur_color_depth_enabled"

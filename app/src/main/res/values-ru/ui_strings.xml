@@ -84,6 +84,8 @@
     <string name="ui_energy_saving_description">Пауза, когда обои и экран неподвижны</string>
     <string name="ui_logs">Репорт · логи и APK лаунчера</string>
     <string name="ui_report_creating">Собирается ZIP-репорт…</string>
+    <string name="ui_limit_closing_blur">Блюр при закрытии: лимит 30 FPS</string>
+    <string name="ui_limit_closing_blur_hint">Ограничивает обновления блюра летящей обратно иконки или мультипапки. Выключи, чтобы использовать общий лимит FPS блюра. Движение иконки сохраняет штатную частоту лаунчера. Вне режима разработчика действует лимит 30 FPS.</string>
     <string name="ui_support_project">Поддержать проект</string>
     <string name="ui_support_project_button">Поддержать\nпроект</string>
     <string name="ui_author_profile">by @immorgue — профиль в Telegram</string>

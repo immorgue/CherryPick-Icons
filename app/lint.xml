@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<lint>
+    <!-- Local OEM binaries are audit inputs, not source text. Keep marker
+         checks on code while avoiding a text scan of the 150 MB RAR archive. -->
+    <issue id="MergeMarker">
+        <ignore path="../apks.rar" />
+        <ignore path="../apks/**" />
+    </issue>
+</lint>

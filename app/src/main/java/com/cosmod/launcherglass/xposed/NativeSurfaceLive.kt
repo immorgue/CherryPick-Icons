@@ -266,7 +266,7 @@ object NativeSurfaceLive {
                         pending.set(false)
                         if(active){
                             val now=System.nanoTime()
-                            val fps=FlightBlurPolicy.fps(PrefsHelper.liveFps)
+                            val fps=FlightBlurPolicy.fps(PrefsHelper.liveFps,PrefsHelper.limitClosingBlur)
                             val wait=synchronized(lock){
                                 frames.values.filter {it.closing && hasNativePose(it.capture)}
                                     .minOfOrNull {it.clock.remainingNs(now,fps)} ?: 0L
@@ -293,7 +293,7 @@ object NativeSurfaceLive {
                 frames.entries.filter {it.value.closing}.map {it.key to it.value}
             }
             val now = SystemClock.uptimeMillis()
-            val fps=FlightBlurPolicy.fps(PrefsHelper.liveFps)
+            val fps=FlightBlurPolicy.fps(PrefsHelper.liveFps,PrefsHelper.limitClosingBlur)
             val nowNs=System.nanoTime()
             val wallpaper = WallpaperHelper.getBlurredWallpaper(IconGlassHook.appContext)
             for((surface,frame) in work) {
@@ -384,7 +384,7 @@ object NativeSurfaceLive {
             capture.recordId?.let {templates[it]=capture}
             frames[capture.surface] = frame(capture)
             refreshActive()
-            GlassLogger.i("LiveSurface", "Leased material: record=${capture.recordId}, draws=${capture.draws.size}, source=${capture.source?.javaClass?.simpleName}, live=${frames[capture.surface]?.closing}, limit=${FlightBlurPolicy.fps(PrefsHelper.liveFps)}")
+            GlassLogger.i("LiveSurface", "Leased material: record=${capture.recordId}, draws=${capture.draws.size}, source=${capture.source?.javaClass?.simpleName}, live=${frames[capture.surface]?.closing}, limit=${FlightBlurPolicy.fps(PrefsHelper.liveFps,PrefsHelper.limitClosingBlur)}")
         }
         main.postDelayed({retire("unused preparation") {it===capture && !hasNativePose(it)}},4000L)
         schedule()

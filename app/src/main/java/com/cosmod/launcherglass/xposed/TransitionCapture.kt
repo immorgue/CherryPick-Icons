@@ -23,18 +23,21 @@ internal object TransitionCapture {
         var interior:RenderNode?=null
         var guardCorners=true
         var nativeMask:Bitmap?=null
+        var materialClip:Path?=null
     }
     private val captures=Collections.synchronizedMap(WeakHashMap<Bitmap,Boolean>())
     private val scenes=Collections.synchronizedMap(WeakHashMap<Bitmap,Scene>())
     private val drawableScenes=Collections.synchronizedMap(WeakHashMap<Drawable,Scene>())
     private class Cached(val scene:Scene,val bitmap:Bitmap,val tag:Any?,val builtAt:Long=android.os.SystemClock.uptimeMillis())
-    private data class Source(val id:Long,val user:Any?,val width:Int,val height:Int)
+    private data class Source(val id:Long,val user:Any?,val width:Int,val height:Int,
+        val contour:MultiIconMaterialHook.Contour?,val geometry:Long)
     private val cached=HashMap<Any,Cached>()
     private fun source(view:View):Any {
         val owner=NativeIconAccess.field(view,"attachedShortcutContainer") as? View ?: view
         val info=owner.tag ?: view.tag ?: return owner
         val id=(NativeIconAccess.field(info,"id") as? Number)?.toLong() ?: return owner
-        return if(id>=0)Source(id,NativeIconAccess.field(info,"user"),view.width,view.height)else owner
+        return if(id>=0)Source(id,NativeIconAccess.field(info,"user"),view.width,view.height,
+            MultiIconMaterialHook.contour(view),SurfaceMaterial.geometryRevision)else owner
     }
     private val target=ThreadLocal<View?>()
     private val recording=ThreadLocal<Boolean>()
@@ -153,7 +156,7 @@ internal object TransitionCapture {
         if(view.width<=0 || view.height<=0)return false
         val key=source(view)
         cached[key]?.takeIf {it.scene.width==view.width && it.scene.height==view.height &&
-            !it.bitmap.isRecycled}?.let {
+            !it.bitmap.isRecycled && it.scene.adornments?.isRecycled==false}?.let {
             pending.set(it.scene)
             android.os.Trace.beginSection("CherryPick.transitionScene.cached")
             try {canvas.drawBitmap(it.bitmap,0f,0f,null)}finally{android.os.Trace.endSection()}
@@ -161,24 +164,41 @@ internal object TransitionCapture {
         }
         val scene=Scene(view.width,view.height)
         scene.guardCorners=view.javaClass.name.contains("GridRecyclerView")
+        scene.materialClip=MultiIconMaterialHook.contour(view)?.path(view)
         recording.set(true);pending.set(scene)
         android.os.Trace.beginSection("CherryPick.transitionScene")
         try {
             // Keep the original complete BitmapDrawable and all OEM size/span
             // metadata. Live rendering replaces only its draw, never its type
             // or the inputs used by native 1x2/2x1 morphing and edge extension.
-            val image=oneShot(view,scene.width,scene.height)
-                ?: run {pending.remove();return false}
-            // Fancy calendar/clock artwork can be GPU-only. A software
-            // Picture silently lost those layers. Record the adornments on
-            // the GPU as well, omitting only the captured live materials.
-            scene.adornments=oneShot(view,scene.width,scene.height,scene)
-            scene.nativeMask=image
-            if(scene.elements.isEmpty() || scene.adornments==null)pending.remove()
-            else {
-                if(cached.values.sumOf {it.bitmap.allocationByteCount.toLong()+(it.scene.adornments?.allocationByteCount ?: 0)}>12L*1024*1024)cached.clear()
-                cached[key]=Cached(scene,image,view.tag)
+            // Record the hierarchy once. The material commands are retained
+            // separately. The complete OEM bitmap can be composed from these
+            // commands without traversing the native hierarchy a second time.
+            val node=RenderNode("CherryPick.clusterArtwork").apply {setPosition(0,0,scene.width,scene.height)}
+            val artwork=node.beginRecording(scene.width,scene.height)
+            scene.canvas=artwork
+            try {view.draw(artwork)}finally{scene.canvas=null;node.endRecording()}
+            if(scene.elements.isEmpty()) {
+                pending.remove()
+                // A launcher version without captured material commands must
+                // keep its complete native drawing, including GPU-only icons.
+                val image=try {rasterize(node,scene.width,scene.height)}finally{node.discardDisplayList()} ?: return false
+                canvas.drawBitmap(image,0f,0f,null)
+                return true
             }
+            // Freeze native artwork before retaining it: child RenderNodes
+            // belong to launcher Views and can be cleared/rebound mid-flight.
+            // Keeping that live hierarchy here would bring back missing icons.
+            scene.adornments=try {hardwareBitmap(node,scene.width,scene.height)}finally{node.discardDisplayList()}
+                ?: run {pending.remove();return false}
+            val full=RenderNode("CherryPick.clusterSnapshot").apply {setPosition(0,0,scene.width,scene.height)}
+            val complete=full.beginRecording(scene.width,scene.height)
+            try {renderContents(scene,scene.adornments,complete,Rect(0,0,scene.width,scene.height),255)}finally{full.endRecording()}
+            val image=try {rasterize(full,scene.width,scene.height)}finally{full.discardDisplayList()}
+                ?: run {pending.remove();return false}
+            scene.nativeMask=image
+            if(cached.values.sumOf {it.bitmap.allocationByteCount.toLong()+(it.scene.adornments?.allocationByteCount ?: 0)}>12L*1024*1024)cached.clear()
+            cached[key]=Cached(scene,image,view.tag)
             flattenEdges(image)
             canvas.drawBitmap(image,0f,0f,null)
             return true
@@ -219,41 +239,37 @@ internal object TransitionCapture {
             return c.a < .995 || (hasNativeMask > .5 && nativeMask.eval(p).a < .995) ? half4(0.0) : c;
         }
     """
-    private fun renderContents(scene:Scene,bitmap:Bitmap,canvas:Canvas,bounds:Rect,alpha:Int){
+    private fun renderContents(scene:Scene,bitmap:Bitmap?,canvas:Canvas,bounds:Rect,alpha:Int){
         val outer=if(alpha<255)canvas.saveLayerAlpha(RectF(bounds),alpha)else canvas.save()
         try {
             val base=Matrix().apply {setRectToRect(RectF(0f,0f,scene.width.toFloat(),scene.height.toFloat()),RectF(bounds),Matrix.ScaleToFit.FILL)}
             canvas.concat(base)
             canvas.clipRect(0,0,scene.width,scene.height)
-            for(element in scene.elements){
-                val saved=canvas.save()
-                try {
-                    canvas.concat(element.matrix);canvas.clipRect(element.clip)
-                    val world=Matrix().apply {setConcat(base,element.matrix)}
-                    NativeSurfaceLive.withSampleTransform(world){element.render(canvas)}
-                }finally{canvas.restoreToCount(saved)}
-            }
-            canvas.drawBitmap(com.cosmod.launcherglass.util.WallpaperHelper.forCanvas(bitmap,canvas),null,
+            val materialSave=canvas.save()
+            scene.materialClip?.let {canvas.clipPath(it)}
+            try {
+                for(element in scene.elements){
+                    val saved=canvas.save()
+                    try {
+                        canvas.concat(element.matrix);canvas.clipRect(element.clip)
+                        val world=Matrix().apply {setConcat(base,element.matrix)}
+                        NativeSurfaceLive.withSampleTransform(world){element.render(canvas)}
+                    }finally{canvas.restoreToCount(saved)}
+                }
+            }finally{canvas.restoreToCount(materialSave)}
+            val image=checkNotNull(bitmap){"Native cluster artwork is unavailable"}
+            canvas.drawBitmap(com.cosmod.launcherglass.util.WallpaperHelper.forCanvas(image,canvas),null,
                 Rect(0,0,scene.width,scene.height),Paint(Paint.FILTER_BITMAP_FLAG))
         }finally{canvas.restoreToCount(outer)}
     }
-    /** Previous path: a throwaway render context per snapshot. Mutable result. */
-    private fun oneShot(view:View,width:Int,height:Int,scene:Scene?=null):Bitmap? {
-        val node=RenderNode("CherryPick.transitionSnapshot")
-        try {
-            node.setPosition(0,0,width,height)
-            val recording=node.beginRecording(width,height)
-            scene?.canvas=recording
-            try {view.draw(recording)}finally{scene?.canvas=null;node.endRecording()}
-            val hardware=try {XposedHelpers.callStaticMethod(HardwareRenderer::class.java,"createHardwareBitmap",node,width,height)}
-                catch(_:Throwable){XposedHelpers.callStaticMethod(Class.forName("android.view.ThreadedRenderer"),"createHardwareBitmap",node,width,height)} as? Bitmap
-                ?: return null
-            // Only the complete OEM snapshot needs a software bitmap. Keep
-            // adornments GPU-owned; software fallback converts lazily if needed.
-            if(scene!=null)return hardware
-            return try {hardware.copy(Bitmap.Config.ARGB_8888,true)}finally{hardware.recycle()}
-        }finally{node.discardDisplayList()}
+    /** One full rasterization required by the OEM bitmap snapshot API. */
+    private fun rasterize(node:RenderNode,width:Int,height:Int):Bitmap? {
+        val hardware=hardwareBitmap(node,width,height) ?: return null
+        return try {hardware.copy(Bitmap.Config.ARGB_8888,true)}finally{hardware.recycle()}
     }
+    private fun hardwareBitmap(node:RenderNode,width:Int,height:Int):Bitmap? =
+        try {XposedHelpers.callStaticMethod(HardwareRenderer::class.java,"createHardwareBitmap",node,width,height)}
+            catch(_:Throwable){XposedHelpers.callStaticMethod(Class.forName("android.view.ThreadedRenderer"),"createHardwareBitmap",node,width,height)} as? Bitmap
 
     private fun flattenEdges(bitmap:Bitmap){
         val width=bitmap.width

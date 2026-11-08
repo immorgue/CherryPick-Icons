@@ -84,6 +84,8 @@
     <string name="ui_energy_saving_description">Pause while the wallpaper and screen are still</string>
     <string name="ui_logs">Bug report · logs and launcher APK</string>
     <string name="ui_report_creating">Creating ZIP report…</string>
+    <string name="ui_limit_closing_blur">Closing icon blur: 30 FPS limit</string>
+    <string name="ui_limit_closing_blur_hint">Limits blur updates while an icon or multi-icon folder flies back to the desktop. Turn off to use the global blur FPS setting. The icon motion keeps the launcher’s native frame rate. Outside developer mode the 30 FPS limit applies.</string>
     <string name="ui_support_project">Support the project</string>
     <string name="ui_support_project_button">Support\nthe project</string>
     <string name="ui_author_profile">by @immorgue — Telegram profile</string>

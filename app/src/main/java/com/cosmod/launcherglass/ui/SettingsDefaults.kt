@@ -97,6 +97,7 @@ object SettingsDefaults {
         SettingsProvider.KEY_DEVELOPER_MODE to false,
         SettingsProvider.KEY_GPU_EFFECTS to true,
         SettingsProvider.KEY_EXPERIMENTAL_LIQUID to false,
+        SettingsProvider.KEY_LIMIT_CLOSING_BLUR to true,
         SettingsProvider.KEY_COLOR_DEPTH_ENABLED to false,
         SettingsProvider.KEY_HAZE_ENABLED to false,
         SettingsProvider.KEY_DISABLE_EDGE_OPTIMIZATION to true,

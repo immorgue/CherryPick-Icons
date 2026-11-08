@@ -12,6 +12,19 @@ import java.lang.ref.WeakReference
 /** Native shortcut clusters keep their individual items, hit targets and transitions. */
 internal object MultiIconMaterialHook {
     private fun enabled()=PrefsHelper.enabled && PrefsHelper.blurEnabled
+    internal data class Contour(val bounds:Rect,val radius:Float,val spanX:Int,val spanY:Int) {
+        fun path(view:View)=Path().takeIf {NativeFolderPath.create(view,it,RectF(bounds),radius,spanX,spanY)}
+    }
+    internal fun contour(view:View):Contour? {
+        if(!view.javaClass.name.endsWith(".GridRecyclerView"))return null
+        val bounds=(NativeIconAccess.field(view,"mRect") as? Rect)?.takeUnless {it.isEmpty} ?: return null
+        val radius=(NativeIconAccess.field(view,"mRadius") as? Number)?.toFloat() ?: return null
+        val owner=NativeIconAccess.field(view,"attachedShortcutContainer") as? View
+        val info=owner?.tag ?: view.tag
+        val x=(info?.let {NativeIconAccess.call(it,"getSpanX")} as? Number)?.toInt() ?: 1
+        val y=(info?.let {NativeIconAccess.call(it,"getSpanY")} as? Number)?.toInt() ?: 1
+        return Contour(Rect(bounds),radius,x,y)
+    }
     private class GridPlate(view:View,val native:Drawable):Drawable(){
         private val owner=WeakReference(view)
         private val clip=Path()
@@ -29,12 +42,10 @@ internal object MultiIconMaterialHook {
             }
         }
         private fun drawMaterial(canvas:Canvas,view:View){
-            val rect=(NativeIconAccess.field(view,"mRect") as? Rect)?.takeUnless {it.isEmpty} ?: bounds
-            val nativeRadius=(NativeIconAccess.field(view,"mRadius") as? Number)?.toFloat() ?: 0f
-            val container=NativeIconAccess.field(view,"attachedShortcutContainer") as? View
-            val info=container?.tag ?: view.tag
-            val sx=(info?.let {NativeIconAccess.call(it,"getSpanX")} as? Number)?.toInt() ?: 1
-            val sy=(info?.let {NativeIconAccess.call(it,"getSpanY")} as? Number)?.toInt() ?: 1
+            val contour=contour(view) ?: return native.draw(canvas)
+            val rect=contour.bounds
+            val nativeRadius=contour.radius
+            val sx=contour.spanX;val sy=contour.spanY
             if(previous!=rect || radius!=nativeRadius || spans!=sx*100+sy || geometry!=SurfaceMaterial.geometryRevision){
                 clip.reset()
                 if(!NativeFolderPath.create(view,clip,RectF(rect),nativeRadius,sx,sy)){native.draw(canvas);return}
@@ -42,8 +53,12 @@ internal object MultiIconMaterialHook {
                 // The OEM contour is a function of size, radius and spans only.
                 fingerprint=SurfaceMaterial.descriptor("grid",sx,sy)
             }
-            if(!SurfaceMaterial.draw(canvas,rect,view,this,nativeRadius,clip,alpha=native.alpha,
-                style=GlassStyle.icons().copy(extendedLens=true),pathFingerprint=fingerprint,fallback=native))native.draw(canvas)
+            val saved=canvas.save()
+            try {
+                canvas.clipPath(clip)
+                if(!SurfaceMaterial.draw(canvas,rect,view,this,nativeRadius,clip,alpha=native.alpha,
+                    style=GlassStyle.icons().copy(extendedLens=true),pathFingerprint=fingerprint,fallback=native))native.draw(canvas)
+            }finally{canvas.restoreToCount(saved)}
         }
         override fun onBoundsChange(bounds:Rect){native.bounds=bounds}
         override fun setAlpha(alpha:Int){if(native.alpha!=alpha){native.alpha=alpha;invalidateSelf()}}
