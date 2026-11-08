@@ -2,8 +2,9 @@ package com.cosmod.launcherglass.util
 
 /** The base stays sharp; only extracted highlights contribute to the halo. */
 internal object LiquidOptics {
-    fun needsBackdrop(radius:Int,liquid:Boolean)=liquid || radius>0
-    fun blurRadius(radius:Int,height:Int,liquid:Boolean)=if(liquid)0f else radius*height/800f
+    fun needsBackdrop(radius:Int,liquid:Boolean,experimental:Boolean=true)=(experimental && liquid) || radius>0
+    fun blurRadius(radius:Int,height:Int,liquid:Boolean,experimental:Boolean=true)=
+        if(liquid && experimental)0f else radius*height/800f*(if(liquid).28f else 1f)
     fun highlight(r:Float,g:Float,b:Float)=((.2126f*r+.7152f*g+.0722f*b-.55f)/.45f).coerceIn(0f,1f)
     fun veil(x:Float,y:Float):Float {
         val dx=x-.18f;val dy=(y-.08f)*.85f

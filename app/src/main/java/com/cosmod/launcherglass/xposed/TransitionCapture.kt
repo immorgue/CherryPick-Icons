@@ -1,230 +1,260 @@
 package com.cosmod.launcherglass.xposed
 
-import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.Color
-import android.graphics.HardwareRenderer
-import android.graphics.PixelFormat
-import android.graphics.RenderNode
+import android.graphics.*
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
-import android.media.ImageReader
 import android.os.Looper
 import android.view.View
 import com.cosmod.launcherglass.util.GlassLogger
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedHelpers
-import java.nio.ByteBuffer
 import java.util.Collections
 import java.util.WeakHashMap
+import java.util.concurrent.CompletableFuture
 import kotlin.math.roundToInt
 
-/**
- * App launch/return transitions of a multi-icon (ShortcutContainer) float a
- * Picture snapshot of its GridRecyclerView
- * (IconDrawableLoader -> BitmapUtils.convertViewToBitmapInMainExecutor).
- *
- * That snapshot is a composed view, not an icon. Re-extracting an "icon"
- * from it (IconDrawableView.setDrawable) produced a dark plate with the items
- * stretched, so it stays native. Recorded on the software Picture canvas, the
- * plate would also fall back to the CPU material and differ from the screen;
- * the view is instead rendered once by the GPU, exactly as displayed, and that
- * image is what the native Picture contains.
- *
- * The launcher records this snapshot several times per launch cycle on the
- * main thread. A one-shot HardwareRenderer.createHardwareBitmap builds and
- * tears down a render context and image queue for every call (the teardown
- * also drops GPU layers of the live items it drew), followed by a separate
- * readback. One small offscreen renderer is kept instead; any failure falls
- * back to the one-shot path for good.
- */
+/** A cluster is a scene, not an icon bitmap. Only native adornments are baked. */
 internal object TransitionCapture {
+    private class Element(val matrix:Matrix,val clip:Rect,val render:(Canvas)->Unit)
+    private class Scene(val width:Int,val height:Int){
+        var canvas:Canvas?=null
+        var adornments:Bitmap?=null
+        val elements=ArrayList<Element>()
+        var interior:RenderNode?=null
+        var guardCorners=true
+        var nativeMask:Bitmap?=null
+    }
     private val captures=Collections.synchronizedMap(WeakHashMap<Bitmap,Boolean>())
+    private val scenes=Collections.synchronizedMap(WeakHashMap<Bitmap,Scene>())
+    private val drawableScenes=Collections.synchronizedMap(WeakHashMap<Drawable,Scene>())
+    private class Cached(val scene:Scene,val bitmap:Bitmap,val tag:Any?,val builtAt:Long=android.os.SystemClock.uptimeMillis())
+    private data class Source(val id:Long,val user:Any?,val width:Int,val height:Int)
+    private val cached=HashMap<Any,Cached>()
+    private fun source(view:View):Any {
+        val owner=NativeIconAccess.field(view,"attachedShortcutContainer") as? View ?: view
+        val info=owner.tag ?: view.tag ?: return owner
+        val id=(NativeIconAccess.field(info,"id") as? Number)?.toLong() ?: return owner
+        return if(id>=0)Source(id,NativeIconAccess.field(info,"user"),view.width,view.height)else owner
+    }
     private val target=ThreadLocal<View?>()
-    private val rendering=ThreadLocal<Boolean>()
-    private val failures=HashSet<String>()
+    private val recording=ThreadLocal<Boolean>()
+    private val pending=ThreadLocal<Scene?>()
     private var logs=0
-
+    private val failures=HashSet<String>()
+    val renderingSnapshot:Boolean get()=recording.get()==true
+    fun onSettingsChanged(){
+        if(Looper.myLooper()!=Looper.getMainLooper()){
+            android.os.Handler(Looper.getMainLooper()).post {onSettingsChanged()};return
+        }
+        cached.clear()
+    }
+    fun onWorkspaceDraw(view:View){
+        val key=source(view)
+        val entry=cached[key] ?: return
+        if(!renderingSnapshot && android.os.SystemClock.uptimeMillis()-entry.builtAt>5000L &&
+            com.cosmod.launcherglass.util.LiveBlurEngine.isResumed &&
+            !com.cosmod.launcherglass.util.LiveBlurEngine.isAppLaunchInProgress &&
+            !com.cosmod.launcherglass.util.LiveBlurEngine.hasRecentMotion)cached.remove(key)
+    }
+    fun rememberDrawable(drawable:Drawable){
+        val bitmap=(drawable as? BitmapDrawable)?.bitmap ?: return
+        scenes[bitmap]?.let {drawableScenes[drawable]=it}
+    }
+    fun drawLive(drawable:BitmapDrawable,canvas:Canvas):Boolean {
+        val scene=drawableScenes[drawable] ?: scenes[drawable.bitmap] ?: return false
+        val overlay=scene.adornments?.takeUnless {it.isRecycled} ?: return false
+        val bounds=Rect(drawable.bounds);val alpha=drawable.alpha
+        if(bounds.isEmpty)return false
+        NativeSurfaceLive.capture(canvas,scene.width,scene.height){renderScene(scene,overlay,it,bounds,alpha)}
+        renderScene(scene,overlay,canvas,bounds,alpha)
+        return true
+    }
+    fun captures(canvas:Canvas):Boolean {
+        val scene=pending.get() ?: return false
+        return scene.canvas!=null && (scene.canvas===canvas || IconGlassHook.previewCaptureMatrix(canvas)!=null)
+    }
+    @Suppress("DEPRECATION")
+    fun captureElement(canvas:Canvas,render:(Canvas)->Unit):Boolean {
+        val scene=pending.get() ?: return false
+        if(scene.canvas==null)return false
+        val matrix=if(scene.canvas===canvas)Matrix().also {canvas.getMatrix(it)}
+            else IconGlassHook.previewCaptureMatrix(canvas) ?: return false
+        scene.elements.add(Element(matrix,Rect(canvas.clipBounds),render))
+        return true
+    }
     fun install(loader:ClassLoader){
         val utils=XposedHelpers.findClassIfExists("com.oplus.basecommon.util.BitmapUtils",loader) ?: return
-        ModuleHooks.hookAllMethods(utils,"convertViewToBitmapInMainExecutor",object:XC_MethodHook(){
-            override fun afterHookedMethod(param:MethodHookParam){
-                (param.result as? Bitmap)?.let {captures[it]=true}
+        // A large closed folder is also a composed snapshot, but is not a
+        // ShortcutContainer/GridRecyclerView. Capture its page materials via
+        // the inherited View.draw entry without changing its native corners.
+        ModuleHooks.findAndHookMethod(View::class.java,"draw",Canvas::class.java,object:XC_MethodHook(){
+            override fun beforeHookedMethod(param:MethodHookParam){
+                val view=param.thisObject as? View ?: return
+                if(target.get()!==view || !view.javaClass.name.contains("FolderIcon"))return
+                val canvas=param.args.firstOrNull() as? Canvas ?: return
+                if(drawHardware(view,canvas))param.result=null
             }
         })
-        // The edge-filled transition drawable copies the snapshot first.
+        ModuleHooks.hookAllMethods(BitmapDrawable::class.java,"draw",object:XC_MethodHook(){
+            override fun beforeHookedMethod(param:MethodHookParam){
+                val drawable=param.thisObject as? BitmapDrawable ?: return
+                val canvas=param.args.firstOrNull() as? Canvas ?: return
+                try {
+                    if(drawLive(drawable,canvas))param.result=null
+                }catch(t:Throwable){
+                    if(failures.add(t.javaClass.name+":"+t.message))GlassLogger.e("Transition","Live scene unavailable; complete native bitmap retained",t)
+                }
+            }
+        })
+        ModuleHooks.hookAllMethods(utils,"convertViewToBitmapInMainExecutor",object:XC_MethodHook(){
+            override fun afterHookedMethod(param:MethodHookParam){(param.result as? Bitmap)?.let {captures[it]=true}}
+        })
         ModuleHooks.hookAllMethods(utils,"convertBitmapToMutable",object:XC_MethodHook(){
             override fun afterHookedMethod(param:MethodHookParam){
                 val source=param.args.firstOrNull() as? Bitmap ?: return
                 val result=param.result as? Bitmap ?: return
                 if(captures[source]==true)captures[result]=true
+                scenes[source]?.let {scenes[result]=it}
             }
         })
-        // Runs on the thread that records the Picture (main executor).
-        val recorder=com.cosmod.launcherglass.util.LauncherMethodResolver.snapshotRecorder(utils,View::class.java)
-        if(recorder==null){
-            GlassLogger.i("Transition","Snapshot recorder unavailable; multi-icon transitions keep the software snapshot")
-            return
-        }
-        GlassLogger.i("Transition","Snapshot recorder: ${recorder.name}")
+        val recorder=com.cosmod.launcherglass.util.LauncherMethodResolver.snapshotRecorder(utils,View::class.java) ?: return
         ModuleHooks.hookMethod(recorder,object:XC_MethodHook(){
+            @Suppress("UNCHECKED_CAST")
             override fun beforeHookedMethod(param:MethodHookParam){
                 val view=param.args.lastOrNull() as? View ?: return
-                param.setObjectExtra("priorTarget",target.get())
-                param.setObjectExtra("captureTarget",true)
-                target.set(view)
+                val future=param.args.getOrNull(3) as? CompletableFuture<Any?> ?: return
+                param.setObjectExtra("priorTarget",target.get());param.setObjectExtra("priorScene",pending.get())
+                param.setObjectExtra("sceneCapture",true)
+                target.set(view);pending.remove()
+                // Publish the recipe before waking the caller waiting for the
+                // Bitmap, including when that caller is on another thread.
+                param.args[3]=object:CompletableFuture<Any?>(){
+                    override fun complete(value:Any?):Boolean {
+                        if(value is Bitmap)pending.get()?.takeIf {it.elements.isNotEmpty()}?.let {
+                            captures[value]=true;scenes[value]=it
+                            if(logs++<12)GlassLogger.i("Transition","Live cluster scene: ${it.width}x${it.height}, elements=${it.elements.size}")
+                        }
+                        return future.complete(value)
+                    }
+                    override fun completeExceptionally(error:Throwable)=future.completeExceptionally(error)
+                }
             }
             override fun afterHookedMethod(param:MethodHookParam){
-                if(param.getObjectExtra("captureTarget")!=true)return
+                if(param.getObjectExtra("sceneCapture")!=true)return
                 target.set(param.getObjectExtra("priorTarget") as? View)
+                pending.set(param.getObjectExtra("priorScene") as? Scene)
             }
         })
     }
-
-    /** A transition snapshot of a composed view; never an icon to re-extract. */
-    fun isViewCapture(drawable:Drawable):Boolean {
-        val bitmap=(drawable as? BitmapDrawable)?.bitmap ?: return false
-        return captures[bitmap]==true
-    }
-
-    /**
-     * Draws [view] into the native snapshot [canvas] from a GPU rendering of
-     * the same view. Child display lists and live samples are reused, so the
-     * snapshot equals the resting view. False keeps the native software draw.
-     */
+    fun isViewCapture(drawable:Drawable)=((drawable as? BitmapDrawable)?.bitmap)?.let {captures[it]==true} ?: false
+    /** Record native badges/labels once and retain exact material geometry as GPU recipes. */
     fun drawHardware(view:View,canvas:Canvas):Boolean {
-        if(target.get()!==view || rendering.get()==true || canvas.isHardwareAccelerated)return false
-        if(!PrefsHelper.enabled || !view.isAttachedToWindow || !view.isHardwareAccelerated)return false
-        val width=view.width
-        val height=view.height
-        if(width<=0 || height<=0)return false
-        rendering.set(true)
-        android.os.Trace.beginSection("CherryPick.transitionSnapshot")
-        try {
-            val reused=if(Looper.myLooper()===Looper.getMainLooper())Offscreen.render(view,width,height)else null
-            val pixels=reused ?: oneShot(view,width,height) ?: return false
-            flattenEdges(pixels)
-            canvas.drawBitmap(pixels,0f,0f,null)
-            if(logs++<6)GlassLogger.i("Transition","GPU snapshot for ${view.javaClass.simpleName}: ${width}x$height${if(reused!=null)", reused renderer" else ""}")
+        if(target.get()!==view || recording.get()==true || canvas.isHardwareAccelerated || !PrefsHelper.enabled)return false
+        if(view.width<=0 || view.height<=0)return false
+        val key=source(view)
+        cached[key]?.takeIf {it.scene.width==view.width && it.scene.height==view.height &&
+            !it.bitmap.isRecycled}?.let {
+            pending.set(it.scene)
+            android.os.Trace.beginSection("CherryPick.transitionScene.cached")
+            try {canvas.drawBitmap(it.bitmap,0f,0f,null)}finally{android.os.Trace.endSection()}
             return true
-        }catch(t:Throwable){
-            if(failures.add(t.javaClass.name+":"+t.message))GlassLogger.e("Transition","GPU snapshot unavailable; native snapshot kept",t)
-            return false
-        }finally{
-            android.os.Trace.endSection()
-            rendering.remove()
         }
+        val scene=Scene(view.width,view.height)
+        scene.guardCorners=view.javaClass.name.contains("GridRecyclerView")
+        recording.set(true);pending.set(scene)
+        android.os.Trace.beginSection("CherryPick.transitionScene")
+        try {
+            // Keep the original complete BitmapDrawable and all OEM size/span
+            // metadata. Live rendering replaces only its draw, never its type
+            // or the inputs used by native 1x2/2x1 morphing and edge extension.
+            val image=oneShot(view,scene.width,scene.height)
+                ?: run {pending.remove();return false}
+            // Fancy calendar/clock artwork can be GPU-only. A software
+            // Picture silently lost those layers. Record the adornments on
+            // the GPU as well, omitting only the captured live materials.
+            scene.adornments=oneShot(view,scene.width,scene.height,scene)
+            scene.nativeMask=image
+            if(scene.elements.isEmpty() || scene.adornments==null)pending.remove()
+            else {
+                if(cached.values.sumOf {it.bitmap.allocationByteCount.toLong()+(it.scene.adornments?.allocationByteCount ?: 0)}>12L*1024*1024)cached.clear()
+                cached[key]=Cached(scene,image,view.tag)
+            }
+            flattenEdges(image)
+            canvas.drawBitmap(image,0f,0f,null)
+            return true
+        }finally{recording.remove();android.os.Trace.endSection()}
     }
-
+    private fun renderScene(scene:Scene,bitmap:Bitmap,canvas:Canvas,bounds:Rect,alpha:Int){
+        // The original complete native buffer stays below the live child.
+        // Do not composite another antialiased edge over its corner coverage:
+        // different buffer resolutions otherwise shimmer as the surface scales.
+        if(scene.guardCorners && NativeSurfaceLive.isSampling && canvas.isHardwareAccelerated && android.os.Build.VERSION.SDK_INT>=33){
+            val node=scene.interior ?: RenderNode("CherryPick.clusterInterior").apply {
+                setPosition(0,0,scene.width,scene.height)
+                val shader=RuntimeShader(INTERIOR)
+                shader.setInputShader("nativeMask",BitmapShader(scene.nativeMask ?: bitmap,Shader.TileMode.CLAMP,Shader.TileMode.CLAMP))
+                shader.setFloatUniform("hasNativeMask",if(scene.nativeMask!=null)1f else 0f)
+                setRenderEffect(RenderEffect.createRuntimeShaderEffect(shader,"content"))
+                scene.interior=this
+            }
+            val recording=node.beginRecording(scene.width,scene.height)
+            val base=Matrix().apply {setRectToRect(RectF(0f,0f,scene.width.toFloat(),scene.height.toFloat()),RectF(bounds),Matrix.ScaleToFit.FILL)}
+            try {NativeSurfaceLive.withSampleTransform(base){renderContents(scene,bitmap,recording,Rect(0,0,scene.width,scene.height),255)}}
+            finally{node.endRecording()}
+            val saved=canvas.save()
+            try {canvas.concat(base);node.alpha=alpha/255f;canvas.drawRenderNode(node)}finally{canvas.restoreToCount(saved)}
+            return
+        }
+        renderContents(scene,bitmap,canvas,bounds,alpha)
+    }
+    private const val INTERIOR="""
+        uniform shader content;
+        uniform shader nativeMask;
+        uniform float hasNativeMask;
+        half4 main(float2 p) {
+            half4 c=content.eval(p);
+            // The native layer supplies the original fractional edge alpha.
+            // Use the native snapshot's exact silhouette/radius as the upper bound.
+            // A downsampled material mask must never expose glass outside it.
+            return c.a < .995 || (hasNativeMask > .5 && nativeMask.eval(p).a < .995) ? half4(0.0) : c;
+        }
+    """
+    private fun renderContents(scene:Scene,bitmap:Bitmap,canvas:Canvas,bounds:Rect,alpha:Int){
+        val outer=if(alpha<255)canvas.saveLayerAlpha(RectF(bounds),alpha)else canvas.save()
+        try {
+            val base=Matrix().apply {setRectToRect(RectF(0f,0f,scene.width.toFloat(),scene.height.toFloat()),RectF(bounds),Matrix.ScaleToFit.FILL)}
+            canvas.concat(base)
+            canvas.clipRect(0,0,scene.width,scene.height)
+            for(element in scene.elements){
+                val saved=canvas.save()
+                try {
+                    canvas.concat(element.matrix);canvas.clipRect(element.clip)
+                    val world=Matrix().apply {setConcat(base,element.matrix)}
+                    NativeSurfaceLive.withSampleTransform(world){element.render(canvas)}
+                }finally{canvas.restoreToCount(saved)}
+            }
+            canvas.drawBitmap(com.cosmod.launcherglass.util.WallpaperHelper.forCanvas(bitmap,canvas),null,
+                Rect(0,0,scene.width,scene.height),Paint(Paint.FILTER_BITMAP_FLAG))
+        }finally{canvas.restoreToCount(outer)}
+    }
     /** Previous path: a throwaway render context per snapshot. Mutable result. */
-    private fun oneShot(view:View,width:Int,height:Int):Bitmap? {
+    private fun oneShot(view:View,width:Int,height:Int,scene:Scene?=null):Bitmap? {
         val node=RenderNode("CherryPick.transitionSnapshot")
         try {
             node.setPosition(0,0,width,height)
             val recording=node.beginRecording(width,height)
-            try {view.draw(recording)}finally{node.endRecording()}
+            scene?.canvas=recording
+            try {view.draw(recording)}finally{scene?.canvas=null;node.endRecording()}
             val hardware=try {XposedHelpers.callStaticMethod(HardwareRenderer::class.java,"createHardwareBitmap",node,width,height)}
                 catch(_:Throwable){XposedHelpers.callStaticMethod(Class.forName("android.view.ThreadedRenderer"),"createHardwareBitmap",node,width,height)} as? Bitmap
                 ?: return null
-            // A software copy keeps the Picture playable on any canvas.
+            // Only the complete OEM snapshot needs a software bitmap. Keep
+            // adornments GPU-owned; software fallback converts lazily if needed.
+            if(scene!=null)return hardware
             return try {hardware.copy(Bitmap.Config.ARGB_8888,true)}finally{hardware.recycle()}
         }finally{node.discardDisplayList()}
     }
 
-    /**
-     * One reusable offscreen render context (main thread only). The view is
-     * recorded into its content node exactly like the one-shot path and read
-     * back from a CPU-readable image queue.
-     */
-    private object Offscreen {
-        private var renderer:HardwareRenderer?=null
-        private var reader:ImageReader?=null
-        private val root=RenderNode("CherryPick.transitionSnapshot")
-        private var width=0
-        private var height=0
-        private var misses=0
-        private var broken=false
-
-        fun render(view:View,w:Int,h:Int):Bitmap? {
-            if(broken)return null
-            try {
-                val renderer=renderer ?: HardwareRenderer().also {
-                    it.isOpaque=false
-                    // As createHardwareBitmap: no light source, so no shadows.
-                    it.setLightSourceGeometry(0f,0f,0f,0f)
-                    it.setLightSourceAlpha(0f,0f)
-                    it.setContentRoot(root)
-                    renderer=it
-                }
-                var images=reader
-                if(images==null || width!=w || height!=h){
-                    val previous=images
-                    images=ImageReader.newInstance(w,h,PixelFormat.RGBA_8888,2)
-                    reader=images;width=w;height=h
-                    renderer.setSurface(images.surface)
-                    previous?.close()
-                }
-                // Stale frames from an earlier miss must not be mistaken for this one.
-                images.acquireLatestImage()?.close()
-                root.setPosition(0,0,w,h)
-                val recording=root.beginRecording(w,h)
-                try {view.draw(recording)}finally{root.endRecording()}
-                val sync=try {renderer.createRenderRequest().setWaitForPresent(true).syncAndDraw()}
-                    finally{root.discardDisplayList()}
-                val lost=HardwareRenderer.SYNC_LOST_SURFACE_REWARD_IF_FOUND or HardwareRenderer.SYNC_CONTEXT_IS_STOPPED or HardwareRenderer.SYNC_FRAME_DROPPED
-                val image=if(sync and lost==0)images.acquireLatestImage()else null
-                if(image==null){
-                    if(++misses>=3)retire("no frame (sync=$sync)")
-                    return null
-                }
-                try {
-                    val plane=image.planes[0]
-                    val buffer=plane.buffer
-                    val row=w*4
-                    val stride=plane.rowStride
-                    if(plane.pixelStride!=4 || stride<row)return null.also {retire("pixel layout ${plane.pixelStride}/$stride")}
-                    val bitmap=Bitmap.createBitmap(w,h,Bitmap.Config.ARGB_8888)
-                    buffer.rewind()
-                    if(stride==row && buffer.remaining()>=row*h)bitmap.copyPixelsFromBuffer(buffer)
-                    else {
-                        val packed=ByteBuffer.allocate(row*h)
-                        for(y in 0 until h){
-                            val start=y*stride
-                            buffer.limit(minOf(buffer.capacity(),start+row))
-                            buffer.position(start)
-                            packed.put(buffer)
-                        }
-                        packed.rewind()
-                        bitmap.copyPixelsFromBuffer(packed)
-                    }
-                    misses=0
-                    return bitmap
-                }finally{image.close()}
-            }catch(t:Throwable){
-                GlassLogger.e("Transition","Reusable snapshot renderer unavailable; one-shot snapshots kept",t)
-                retire(null)
-                return null
-            }
-        }
-
-        private fun retire(reason:String?){
-            broken=true
-            if(reason!=null)GlassLogger.i("Transition","Reusable snapshot renderer retired: $reason")
-            try {renderer?.destroy()}catch(_:Throwable){}
-            try {reader?.close()}catch(_:Throwable){}
-            renderer=null;reader=null
-            root.discardDisplayList()
-        }
-    }
-
-    /**
-     * While the launch window is taller or wider than the cluster, the
-     * outermost snapshot pixels are extended across the gap. The plate edge
-     * carries the lens rim and the refracted backdrop, so every extended row
-     * became a streak. Each side is blended into its own median plate colour
-     * over a short band; the extension then continues as a flat plate.
-     * Alpha is kept, transparent corners stay transparent.
-     */
     private fun flattenEdges(bitmap:Bitmap){
         val width=bitmap.width
         val height=bitmap.height

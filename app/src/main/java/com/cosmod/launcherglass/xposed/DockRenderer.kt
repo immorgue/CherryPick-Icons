@@ -13,21 +13,62 @@ internal class DockRenderer {
     private var key:List<Any?>?=null
     private var lens:LiquidGlassShader?=null
     private var lastWallpaper:Bitmap?=null
+    private val sampleClock=SampleFrameClock()
+    private var sampledWallpaper:Bitmap?=null
+    private var sampledSource:RectF?=null
+    private var sampledStyle:GlassStyle?=null
+    private var sampleWidth=0
+    private var sampleHeight=0
+    private var staticWallpaper:Bitmap?=null
+    private var staticSource:RectF?=null
+    private var staticBounds=Rect()
+    private var staticScreenWidth=0
+    private var staticScreenHeight=0
     private val solid:Shader=LinearGradient(0f,0f,1f,0f,Color.WHITE,Color.WHITE,Shader.TileMode.CLAMP)
-    fun reset(){lastWallpaper=null;key=null;plate.discardDisplayList()}
+    fun reset(){lastWallpaper=null;staticWallpaper=null;staticSource=null;sampledWallpaper=null;sampledSource=null;sampledStyle=null;key=null;plate.discardDisplayList()}
     fun draw(canvas:Canvas, view:View, rect:Rect, path:Path?, radius:Float, alpha:Float):Boolean {
         val style=DockSettings.style().copy(extendedLens=true)
         val w=rect.width();val h=rect.height()
         if(w<=0 || h<=0)return false
         val clear=IconMaterialRenderer.clearGlass(style)
         val current=if(!clear)WallpaperHelper.getDockWallpaper(view.context)?.takeUnless {it.isRecycled} else null
-        val wallpaper=if(clear)null else (current ?: lastWallpaper?.takeUnless {it.isRecycled}) ?: return false
+        var wallpaper=if(clear)null else (current ?: lastWallpaper?.takeUnless {it.isRecycled}) ?: return false
         if(current!=null && !current.isRecycled)lastWallpaper=current
-        val source=wallpaper?.let {
-            val world=Matrix();XposedHelpers.callMethod(view,"transformMatrixToGlobal",world)
-            val screen=RectF(rect);world.mapRect(screen)
+        var source=wallpaper?.let {
             val dm=view.resources.displayMetrics
-            WallpaperFootprint.source(it,dm.widthPixels,dm.heightPixels,screen)
+            if(!WallpaperHelper.isLiveWallpaper(view.context)){
+                if(staticWallpaper!==it || staticBounds!=rect || staticScreenWidth!=dm.widthPixels || staticScreenHeight!=dm.heightPixels){
+                    // Resolve resting layout coordinates, ignoring OEM unlock,
+                    // launch and press transforms. Those move the retained dock
+                    // as a whole; they do not change a static wallpaper sample.
+                    val screen=RectF(rect)
+                    var current:View?=view
+                    while(current!=null){
+                        val parent=current.parent as? View
+                        screen.offset((current.left-(parent?.scrollX ?: 0)).toFloat(),(current.top-(parent?.scrollY ?: 0)).toFloat())
+                        current=parent
+                    }
+                    staticWallpaper=it;staticBounds.set(rect);staticScreenWidth=dm.widthPixels;staticScreenHeight=dm.heightPixels
+                    staticSource=WallpaperFootprint.source(it,dm.widthPixels,dm.heightPixels,screen)
+                }
+                staticSource!!
+            }else{
+                val world=Matrix();XposedHelpers.callMethod(view,"transformMatrixToGlobal",world)
+                val screen=RectF(rect);world.mapRect(screen)
+                WallpaperFootprint.source(it,dm.widthPixels,dm.heightPixels,screen)
+            }
+        }
+        if(canvas.isHardwareAccelerated){
+            val now=System.nanoTime()
+            val fps=PrefsHelper.liveFps.coerceIn(1,60)
+            val changed=sampledWallpaper!==wallpaper || sampledSource!=source
+            if(changed && sampledStyle==style && sampleWidth==w && sampleHeight==h &&
+                sampledWallpaper?.isRecycled==false && sampleClock.remainingNs(now,fps)>0L){
+                wallpaper=sampledWallpaper;source=sampledSource
+            }else if(changed || sampledStyle!=style || sampleWidth!=w || sampleHeight!=h){
+                sampledWallpaper=wallpaper;sampledSource=source?.let(::RectF);sampledStyle=style
+                sampleWidth=w;sampleHeight=h;sampleClock.record(now,fps)
+            }
         }
         val shape=path ?: Path().apply {addRoundRect(RectF(rect),radius,radius,Path.Direction.CW)}
         if(canvas.isHardwareAccelerated){
@@ -35,12 +76,13 @@ internal class DockRenderer {
                 PrefsHelper.gpuEffects,PrefsHelper.gradientOpacity,PrefsHelper.iconStroke,PrefsHelper.strokeOpacity,
                 SurfaceMaterial.geometryRevision)
             if(key!=next || !plate.hasDisplayList()){
+                android.os.Trace.beginSection("CherryPick.dockRecord")
                 plate.setPosition(0,0,w,h)
                 val recording=plate.beginRecording(w,h)
                 try {
                     recording.translate(-rect.left.toFloat(),-rect.top.toFloat())
                     drawPlate(recording,rect,shape,radius,1f,wallpaper,source,style)
-                }finally{plate.endRecording()}
+                }finally{plate.endRecording();android.os.Trace.endSection()}
                 key=next
             }
             plate.alpha=alpha.coerceIn(0f,1f)

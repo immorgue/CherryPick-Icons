@@ -35,12 +35,27 @@ object NativeSurfaceLive {
     private val controls=ConcurrentHashMap<SurfaceControl,Lease>()
     private data class Sample(val capture:Capture,val draw:Draw,val pose:Pose?)
     private val sampling=ThreadLocal<Sample?>()
+    internal val isSampling:Boolean get()=sampling.get()!=null
+    private val sampleTransform=ThreadLocal<Matrix?>()
+    internal fun withSampleTransform(matrix:Matrix,draw:()->Unit){
+        val old=sampleTransform.get()
+        sampleTransform.set(if(old==null)matrix else Matrix().apply {setConcat(old,matrix)})
+        try {draw()}finally{sampleTransform.set(old)}
+    }
     private data class Draw(val matrix: Matrix, val clip: Rect, val render: (Canvas) -> Unit)
-    private data class Capture(val surface: Surface, val source: View?, val tag: Any?,
+    private fun sourceIdentity(view:View?):FlightSourceIdentity? {
+        view ?: return null
+        val owner=NativeIconAccess.field(view,"attachedShortcutContainer") as? View ?: view
+        val info=owner.tag ?: return null
+        val id=(NativeIconAccess.field(info,"id") as? Number)?.toLong()?.takeIf {it>=0} ?: return null
+        return FlightSourceIdentity(id,NativeIconAccess.field(info,"user"))
+    }
+    private data class Capture(val surface: Surface, val source: View?, val identity:FlightSourceIdentity?,
         val lease: Lease?, val recordId: Int?, val token: Any, val draws: MutableList<Draw> = ArrayList(),
         var canvasWidth:Int=1,var canvasHeight:Int=1,var materialWidth:Int=210,var materialHeight:Int=210)
     private data class Frame(val capture: Capture, val started: Long,
-        var wallpaper: Bitmap?, var last: Long = 0L, var redraws: Int = 0, var poseVersion:Long = -1L,val clock:SampleFrameClock=SampleFrameClock())
+        var wallpaper: Bitmap?, var closing:Boolean=false,var direction:Int=0,var last: Long = 0L, var redraws: Int = 0, var poseVersion:Long = -1L,
+        val clock:SampleFrameClock=SampleFrameClock(),val progress:SurfaceProgress=SurfaceProgress(started))
     private val leases = WeakHashMap<Surface, Lease>()
     private val tokens = WeakHashMap<Surface, Any>()
     private val frames = WeakHashMap<Surface, Frame>()
@@ -80,6 +95,17 @@ object NativeSurfaceLive {
         override fun removeEldestEntry(eldest:MutableMap.MutableEntry<Int,Capture>?)=size>12
     }
     private val recording = ThreadLocal<Capture?>()
+    @Volatile private var returning=false
+    fun onFlightStarted(opening:Boolean){
+        returning=!opening
+        synchronized(lock){
+            frames.values.filter {it.direction==0}.forEach {it.closing=!opening}
+            refreshActive()
+        }
+        if(active)schedule()
+    }
+    private fun frame(capture:Capture)=Frame(capture,SystemClock.uptimeMillis(),null,
+        FlightBlurPolicy.live(returning,LiveBlurEngine.activePointerCount>0))
     private val record = ThreadLocal<Int?>()
     private val legacyTransfer = ThreadLocal<XC_MethodHook.MethodHookParam?>()
     var usesLegacyRenderer = false
@@ -93,18 +119,19 @@ object NativeSurfaceLive {
 
     /** Copy geometry from the initial native draw, and retain only this icon's material. */
     @Suppress("DEPRECATION")
-    fun capture(canvas: Canvas, width:Int,height:Int,render: (Canvas) -> Unit) {
-        val target = recording.get() ?: return
+    fun capture(canvas: Canvas, width:Int,height:Int,render: (Canvas) -> Unit):Boolean {
+        val target = recording.get() ?: return TransitionCapture.captureElement(canvas,render)
         target.canvasWidth=canvas.width;target.canvasHeight=canvas.height
         target.materialWidth=width;target.materialHeight=height
         target.draws.add(Draw(Matrix().also { canvas.getMatrix(it) }, Rect(canvas.clipBounds), render))
+        return false
     }
 
     private fun refreshActive() {
         // ColorOS prepares a surface on pointer down, before it knows whether
         // this is a launch or a page swipe. Preparation must not freeze the
         // desktop source or show a stationary child over the scrolling icon.
-        val flying=frames.values.filter {hasNativePose(it.capture)}
+        val flying=frames.values.filter {it.closing && hasNativePose(it.capture)}
         val next=flying.isNotEmpty()
         animatedSources=flying.mapNotNull {it.capture.source}.toSet()
         if(active!=next){active=next;main.post {LiveBlurEngine.onNativeSurfacesChanged()}}
@@ -117,6 +144,7 @@ object NativeSurfaceLive {
         val pose=sample.pose ?: return null
         if(!pose.positioned || !pose.transformed)return null
         val rect=RectF(bounds)
+        sampleTransform.get()?.mapRect(rect)
         draw.matrix.mapRect(rect)
         val matrix=Matrix().apply {setValues(floatArrayOf(pose.xx,pose.xy,pose.x,pose.yx,pose.yy,pose.y,0f,0f,1f))}
         matrix.mapRect(rect)
@@ -125,6 +153,7 @@ object NativeSurfaceLive {
     private fun observeTransform(param:XC_MethodHook.MethodHookParam,position:Boolean){
         val control=param.args.firstOrNull() as? SurfaceControl ?: return
         val lease=controls[control] ?: return
+        val previousPose=lease.pose.get()
         val wasReady=lease.pose.get().let {it.positioned && it.transformed}
         if(position){
             val x=(param.args.getOrNull(1) as? Number)?.toFloat() ?: return
@@ -142,6 +171,22 @@ object NativeSurfaceLive {
             }
             lease.pose.updateAndGet {old -> if(old.transformed && old.xx==values[0] && old.xy==values[1] && old.yx==values[3] && old.yy==values[4])old else
                 old.copy(xx=values[0],xy=values[1],yx=values[3],yy=values[4],transformed=true,version=old.version+1)}
+        }
+        if(!position && previousPose.transformed){
+            val pose=lease.pose.get()
+            val direction=FlightBlurPolicy.direction(kotlin.math.abs(previousPose.xx*previousPose.yy-previousPose.xy*previousPose.yx),
+                kotlin.math.abs(pose.xx*pose.yy-pose.xy*pose.yx))
+            if(direction!=0)synchronized(lock){
+                // OEM reuses the opening Surface when HOME reverses an unfinished launch.
+                // Direction must follow that reversal, rather than latch the first trend.
+                for(frame in frames.values)if(frame.capture.lease===lease && frame.direction!=direction){
+                    frame.direction=direction;frame.closing=direction<0
+                    GlassLogger.limited("LiveSurface","native-direction",100){"Native direction: record=${frame.capture.recordId}, closing=${frame.closing}"}
+                    if(!frame.closing)releaseChild(control)
+                }
+                refreshActive()
+            }
+            if(active)schedule()
         }
         if(!wasReady && lease.pose.get().let {it.positioned && it.transformed}) {
             synchronized(lock){refreshActive()}
@@ -181,12 +226,12 @@ object NativeSurfaceLive {
         val id=try {XposedHelpers.callMethod(record,"getRecordId") as? Int}catch(_:Throwable){null} ?: return
         synchronized(lock){
             val old=templates[id] ?: return
-            if(old.lease?.control?.isValid!=true || old.source?.tag!==old.tag)return
+            if(old.lease?.control?.isValid!=true || old.identity?.replacedBy(sourceIdentity(old.source))==true)return
             if(frames[old.surface]?.capture?.recordId==id)return
             val capture=old.copy(token=Any())
             tokens[capture.surface]=capture.token;captures[capture.surface]=capture
             controls[capture.lease!!.control]=capture.lease
-            frames[capture.surface]=Frame(capture,SystemClock.uptimeMillis(),null)
+            frames[capture.surface]=frame(capture)
             refreshActive()
         }
         schedule()
@@ -199,7 +244,10 @@ object NativeSurfaceLive {
                 val frame = frames.remove(capture.surface)
                 capture.lease?.let {
                     controls.remove(it.control,it)
-                    if(reason!="showOriginalIcon")releaseChild(it.control)
+                    // The native record can be reused, the child producer can
+                    // too. Detach before the OEM retires its parent, otherwise
+                    // every open/return allocates another BufferQueue/context.
+                    releaseChild(it.control)
                 }
                 GlassLogger.i("LiveSurface", "Retired record=${capture.recordId}, redraws=${frame?.redraws ?: 0}, pose=${capture.lease?.pose?.get()}, reason=$reason")
             }
@@ -207,20 +255,32 @@ object NativeSurfaceLive {
         }
         refreshActive()
     }
-    private fun schedule() {
+    private fun schedule(delayMs:Long=0L) {
         if(!active || !pending.compareAndSet(false,true))return
         // A single in-flight job, aligned to display frames. The launcher UI
         // never waits for lockHardwareCanvas / GPU buffer submission here.
-        main.post {
+        main.postDelayed({
             Choreographer.getInstance().postFrameCallback {
                 submitter.post {
                     try {ticker.run()}finally{
                         pending.set(false)
-                        if(active)schedule()
+                        if(active){
+                            val now=System.nanoTime()
+                            val fps=FlightBlurPolicy.fps(PrefsHelper.liveFps)
+                            val wait=synchronized(lock){
+                                frames.values.filter {it.closing && hasNativePose(it.capture)}
+                                    .minOfOrNull {it.clock.remainingNs(now,fps)} ?: 0L
+                            }
+                            // Only request a display callback when a material
+                            // can be updated. Native transforms still run at
+                            // display cadence; do not wake UI/worker at 120 Hz
+                            // just to reject most submissions at 33 FPS.
+                            schedule(wait/1_000_000L)
+                        }
                     }
                 }
             }
-        }
+        },delayMs)
     }
     private val ticker = object : Runnable {
         override fun run() {
@@ -230,19 +290,20 @@ object NativeSurfaceLive {
                     children.keys.toList().forEach {releaseChild(it)}
                     refreshActive(); return
                 }
-                frames.entries.map {it.key to it.value}
+                frames.entries.filter {it.value.closing}.map {it.key to it.value}
             }
             val now = SystemClock.uptimeMillis()
-            val fps=MiniIconRefresh.fps(PrefsHelper.liveFps,false,false)
+            val fps=FlightBlurPolicy.fps(PrefsHelper.liveFps)
             val nowNs=System.nanoTime()
             val wallpaper = WallpaperHelper.getBlurredWallpaper(IconGlassHook.appContext)
             for((surface,frame) in work) {
                     val owner = frame.capture
                     val output=synchronized(lock) {
                     if(frames[surface]!==frame) return@synchronized null
-                    if (now - frame.started > 4000L || tokens[surface] !== owner.token ||
+                    if (frame.progress.expired(now,owner.lease?.pose?.get()?.version ?: -1L) || tokens[surface] !== owner.token ||
                         leases[surface] !== owner.lease || owner.lease?.control?.isValid != true ||
-                        owner.source?.tag !== owner.tag) {
+                        owner.identity?.replacedBy(sourceIdentity(owner.source))==true) {
+                        GlassLogger.limited("LiveSurface","invalid-lease",100){"Invalidated record=${owner.recordId}: expired=${frame.progress.expired(now,owner.lease?.pose?.get()?.version ?: -1L)}, token=${tokens[surface]===owner.token}, lease=${leases[surface]===owner.lease}, control=${owner.lease?.control?.isValid}, identity=${owner.identity} -> ${sourceIdentity(owner.source)}, redraws=${frame.redraws}"}
                         frames.remove(surface); captures.remove(surface); owner.lease?.let {controls.remove(it.control,it);releaseChild(it.control)}
                         return@synchronized null
                     }
@@ -276,7 +337,7 @@ object NativeSurfaceLive {
                         if (canvas != null)try {
                             output.surface.unlockCanvasAndPost(canvas)
                             synchronized(lock){
-                                if(frames[surface]===frame && tokens[surface]===owner.token && leases[surface]===owner.lease){
+                                if(frame.closing && frames[surface]===frame && tokens[surface]===owner.token && leases[surface]===owner.lease){
                                     output.show()
                                     frame.wallpaper=wallpaper;frame.last=now;frame.poseVersion=poseVersion;frame.redraws++
                                     frame.clock.record(nowNs,fps)
@@ -301,7 +362,7 @@ object NativeSurfaceLive {
             val token = Any(); tokens[surface] = token
             if (!PrefsHelper.enabled || !surface.isValid) return
             val source = sourceView
-            val capture = Capture(surface, source, source?.tag, leases[surface], record.get(), token)
+            val capture = Capture(surface, source, sourceIdentity(source), leases[surface], record.get(), token)
             captures[surface] = capture
             param.setObjectExtra("capture", capture)
             param.setObjectExtra("priorCapture", recording.get()); recording.set(capture)
@@ -321,9 +382,9 @@ object NativeSurfaceLive {
         synchronized(lock) {
             if (tokens[capture.surface] !== capture.token || leases[capture.surface] !== capture.lease) return
             capture.recordId?.let {templates[it]=capture}
-            frames[capture.surface] = Frame(capture, SystemClock.uptimeMillis(), null)
+            frames[capture.surface] = frame(capture)
             refreshActive()
-            GlassLogger.i("LiveSurface", "Leased material: record=${capture.recordId}, draws=${capture.draws.size}, source=${capture.source?.javaClass?.simpleName}")
+            GlassLogger.i("LiveSurface", "Leased material: record=${capture.recordId}, draws=${capture.draws.size}, source=${capture.source?.javaClass?.simpleName}, live=${frames[capture.surface]?.closing}, limit=${FlightBlurPolicy.fps(PrefsHelper.liveFps)}")
         }
         main.postDelayed({retire("unused preparation") {it===capture && !hasNativePose(it)}},4000L)
         schedule()

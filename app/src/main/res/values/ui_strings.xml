@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="ui_experimental_liquid">Experimental Liquid optics</string>
+    <string name="ui_experimental_liquid_hint">Sharp Liquid background with highlight glow from the desktop designer PR. Off uses the previous blur and refraction. Desktop editing works in both modes.</string>
     <string name="ui_desktop_sizing">Sizes and spacing</string>
     <string name="ui_desktop_icon_size">Icons and folders</string>
     <string name="ui_desktop_icon_size_hint">100% keeps the system size. Enlargement is limited by the cell width.</string>
@@ -80,7 +82,8 @@
     <string name="ui_static_blur_description">A cached blurred wallpaper sample</string>
     <string name="ui_energy_saving">Power saving</string>
     <string name="ui_energy_saving_description">Pause while the wallpaper and screen are still</string>
-    <string name="ui_logs">Diagnostics · logs</string>
+    <string name="ui_logs">Bug report · logs and launcher APK</string>
+    <string name="ui_report_creating">Creating ZIP report…</string>
     <string name="ui_support_project">Support the project</string>
     <string name="ui_support_project_button">Support\nthe project</string>
     <string name="ui_author_profile">by @immorgue — Telegram profile</string>
@@ -94,7 +97,7 @@
     <string name="ui_color_mode_accessibility">Coloring: %1$s, select mode</string>
     <string name="ui_color_preview">Color preview %1$s</string>
     <string name="ui_module_description">Glass icons for the ColorOS launcher</string>
-    <string name="ui_log_error">Could not read logs: %1$s</string>
+    <string name="ui_log_error">Could not create report: %1$s</string>
     <string name="ui_flux_only_title">Unsupported icon style</string>
     <string name="ui_flux_only_warning">A different icon style is selected. CherryPick currently supports only Flux icons. Select Flux in the system icon settings for correct appearance and animations.</string>
     <string name="ui_credits_title">With help from</string>
@@ -106,7 +109,7 @@
     <string name="ui_liquid_distortion">Refraction strength</string>
     <string name="ui_developer_mode">Developer mode</string>
     <string name="ui_blur_tone">Tone and color</string>
-    <string name="ui_share_logs">Share diagnostic log</string>
+    <string name="ui_share_logs">Share ZIP report</string>
     <string name="ui_blur_vibrancy">Backdrop vibrancy</string>
     <string name="ui_blur_vibrancy_hint">Boosts the wallpaper colors beneath the blur while keeping dark areas dark. Reduces color suppression from tinting.</string>
     <string name="ui_dock">Dock</string>
@@ -127,7 +130,7 @@
     <string name="ui_photo_widget_tint">Use icon color</string>
     <string name="ui_color_depth">Limit blur color depth</string>
     <string name="ui_optimize_mini_icons">Folder mini-icons: 30 FPS</string>
-    <string name="ui_optimize_mini_icons_hint">Limits small icons in 1×1 folders and tiny previews in large folders to 30 FPS. Blur and refraction stay enabled. Large icons follow the global blur limit; limits below 30 FPS also apply to miniatures.</string>
+    <string name="ui_optimize_mini_icons_hint">Limits small icons in 1×1 folders and tiny previews in large folders to 30 FPS. Blur stays enabled; refraction is disabled for these miniatures. Large icons follow the global blur limit; limits below 30 FPS also apply to miniatures.</string>
     <string name="ui_artwork_icons">Icons without a plate (experimental)</string>
     <string name="ui_artwork_transparency">Tint transparency</string>
     <string name="ui_artwork_icons_hint">For icons that are a full picture without a single-colour plate (games, photos, gradients): the picture is recoloured into the palette tones and the glass shows through it. Works in developer mode.</string>

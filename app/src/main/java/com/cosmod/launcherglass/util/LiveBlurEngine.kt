@@ -144,6 +144,7 @@ object LiveBlurEngine {
 
     fun onAppLaunchStarted() = onMainThread {
         isAppLaunchInProgress = true
+        com.cosmod.launcherglass.xposed.NativeSurfaceLive.onFlightStarted(opening=true)
         stopFrameLoop()
     }
 
@@ -152,6 +153,7 @@ object LiveBlurEngine {
         isAppLaunchInProgress = false
         isResumed = true
         lastMotionTimeMs = SystemClock.uptimeMillis()
+        com.cosmod.launcherglass.xposed.NativeSurfaceLive.onFlightStarted(opening=false)
         transitionRefreshUntilMs = maxOf(transitionRefreshUntilMs, lastMotionTimeMs + 600L)
         if (wasSuspended) IconGlassHook.invalidateActiveIcons(onlyChangedDrawerSamples=true)
         startTickerIfNeeded()
@@ -340,6 +342,7 @@ object LiveBlurEngine {
     fun onActivityResumed() = onMainThread {
         isAppLaunchInProgress = false
         isResumed = true
+        com.cosmod.launcherglass.xposed.NativeSurfaceLive.onFlightStarted(opening=false)
         lastMotionTimeMs = SystemClock.uptimeMillis()
         // Reset both halves of the scheduler together after rapid pause/resume.
         mainHandler.removeCallbacks(tickerRunnable)

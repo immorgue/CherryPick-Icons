@@ -18,6 +18,7 @@ internal class LiquidGlassShader private constructor(private val shader:RuntimeS
     private var previousFilter:ColorMatrixColorFilter?=null
     private var filterSet=false
     fun update(wallpaper:Bitmap,mask:Shader,source:RectF,width:Int,height:Int,filter:ColorMatrixColorFilter?,rounding:Float,style:GlassStyle=GlassStyle.icons()):Shader {
+        shader.setFloatUniform("experimental",if(PrefsHelper.experimentalLiquid)1f else 0f)
         if(image!==wallpaper){
             backdrop=GlassGeometry.wallpaperShader(wallpaper)
             shader.setInputShader("backdrop",backdrop!!)
@@ -39,6 +40,7 @@ internal class LiquidGlassShader private constructor(private val shader:RuntimeS
     }
     /** Lens over a RenderEffect input of [wrapperW]x[wrapperH] whose plate starts at [margin]. */
     fun updateLifted(mask:Shader,width:Int,height:Int,margin:Float,wrapperW:Int,wrapperH:Int,filter:ColorMatrixColorFilter?,rounding:Float,style:GlassStyle):RuntimeShader {
+        shader.setFloatUniform("experimental",if(PrefsHelper.experimentalLiquid)1f else 0f)
         shader.setInputShader("mask",mask)
         geometry(width,height,rounding,style)
         shader.setFloatUniform("origin",margin,margin)
@@ -95,6 +97,7 @@ internal class LiquidGlassShader private constructor(private val shader:RuntimeS
         // the same contour-normal refraction; only backdrop addressing differs.
         private const val HEADER="""
             uniform shader backdrop;
+            uniform float experimental;
             uniform shader mask;
             uniform float2 capPadding;
             uniform float2 capSize;
@@ -160,7 +163,7 @@ internal class LiquidGlassShader private constructor(private val shader:RuntimeS
             half4 shade(half4 sampled,float2 xy,float3 glow) {
                 float3 color=clamp(float3(dot(float4(sampled),rowR),dot(float4(sampled),rowG),dot(float4(sampled),rowB))+bias,0.0,1.0);
                 float2 delta=(xy/size-float2(.18,.08))*float2(1.0,.85);
-                float veil=.025+.045*exp(-dot(delta,delta)*2.4);
+                float veil=experimental*(.025+.045*exp(-dot(delta,delta)*2.4));
                 color=clamp(color+(1.0-color)*veil+glow*.18,0.0,1.0);
                 // The shared contour texture supplies identical edge lighting
                 // in Frosted and Liquid Glass, honoring the contour toggle.
@@ -174,6 +177,7 @@ internal class LiquidGlassShader private constructor(private val shader:RuntimeS
             half4 main(float2 xy) {
                 float2 uv=(xy+lensOffset(xy))/size;
                 float2 q=crop.xy+uv*crop.zw;
+                if(experimental<.5)return shade(backdrop.eval(q),xy,float3(0.0));
                 return shade(backdrop.eval(q),xy,bloom(q,crop.zw*.035));
             }
         """
@@ -188,6 +192,7 @@ internal class LiquidGlassShader private constructor(private val shader:RuntimeS
                 float2 p=xy-origin;
                 if(p.x<0.0 || p.y<0.0 || p.x>size.x || p.y>size.y)return half4(0.0);
                 float2 q=clamp(origin+p+lensOffset(p),float2(.5),limit-float2(.5));
+                if(experimental<.5)return shade(backdrop.eval(q),p,float3(0.0));
                 return shade(backdrop.eval(q),p,bloom(q,size*.035));
             }
         """

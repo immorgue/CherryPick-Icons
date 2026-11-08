@@ -2,6 +2,7 @@ package com.cosmod.launcherglass.xposed
 
 /** Mini previews may lower the global material FPS limit to 30; other icons retain the global limit. */
 internal object MiniIconRefresh {
+    fun refraction(liquid:Boolean,mini:Boolean,enabled:Boolean)=liquid && !(mini && enabled)
     fun fps(globalFps:Int,mini:Boolean,enabled:Boolean)=
         minOf(globalFps.coerceIn(1,60),if(mini && enabled)30 else 60)
     fun isMini(preview:Boolean,width:Float,height:Float,nativeWidth:Int,nativeHeight:Int):Boolean =

@@ -4,6 +4,12 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class LiquidOpticsTest {
+    @Test fun disabledExperimentRestoresPreviousBlurAndZeroRadiusSemantics(){
+        assertFalse(LiquidOptics.needsBackdrop(0,true,false))
+        assertTrue(LiquidOptics.needsBackdrop(7,true,false))
+        assertEquals(7f*600/800*.28f,LiquidOptics.blurRadius(7,600,true,false),.001f)
+        assertEquals(7f*600/800,LiquidOptics.blurRadius(7,600,false,false),.001f)
+    }
     @Test fun zeroBlurKeepsLiquidBackdropButClearsFrosted() {
         assertTrue(LiquidOptics.needsBackdrop(0,true))
         assertFalse(LiquidOptics.needsBackdrop(0,false))

@@ -42,6 +42,9 @@ internal object DockMaterial {
         val pathRect=Rect()
         var pathRadius=Float.NaN
         var path:Path?=null
+        var layer:DockLayer?=null
+        var attaching=false
+        var suppressNative=false
     }
     private val docks=WeakHashMap<View,Dock>()
     private val iconMethods=HashMap<Class<*>,Method?>()
@@ -53,27 +56,43 @@ internal object DockMaterial {
     fun enabled()=PrefsHelper.enabled && PrefsHelper.blurEnabled && PrefsHelper.dockEnabled
 
     fun install(loader:ClassLoader){
+        DockLayer.install()
         val type=XposedHelpers.findClassIfExists("com.android.launcher3.OplusHotseat",loader)
         if(type==null){GlassLogger.i("Dock","OplusHotseat not found; dock unavailable");return}
-        if(type.declaredFields.none {it.name=="mDockerBackgroundDrawable"}){
-            // shortcut: Android 16 draws the plate as the row background; support it before enabling this renderer there.
-            GlassLogger.i("Dock","Native row-background dock retained on this launcher")
-            return
+        val rowBackground=type.declaredFields.none {it.name=="mDockerBackgroundDrawable"}
+        if(rowBackground) {
+            ModuleHooks.hookAllMethods(type,"setDockerBackground",object:XC_MethodHook(){
+                override fun afterHookedMethod(param:MethodHookParam) {
+                    val owner=param.thisObject as? ViewGroup ?: return
+                    wrapRowBackground(owner,docks.getOrPut(owner){Dock()})
+                }
+            })
+            XposedHelpers.findClassIfExists("com.android.launcher.custom.OplusToolUtils",loader)?.let {tools ->
+                ModuleHooks.hookAllMethods(tools,"drawDockerBack",object:XC_MethodHook(){
+                    override fun beforeHookedMethod(param:MethodHookParam) {
+                        val owner=param.args.getOrNull(1) as? ViewGroup ?: return
+                        if(enabled() && docks[owner]?.suppressNative==true)param.result=null
+                    }
+                })
+            }
         }
         ModuleHooks.hookAllMethods(type,"onDraw",object:XC_MethodHook(){
             override fun beforeHookedMethod(param:MethodHookParam){
                 val view=param.thisObject as? ViewGroup ?: return
                 val dock=docks.getOrPut(view){Dock()}
-                if(!enabled())return
+                if(rowBackground)wrapRowBackground(view,dock)
+                if(!enabled()){suppressNative(view,dock,false);return}
                 observe(view,dock)
                 val canvas=param.args.firstOrNull() as? Canvas ?: return
                 try {
-                    if(!draw(view,canvas,dock))return
+                    if(!draw(view,canvas,dock)){suppressNative(view,dock,false);return}
+                    suppressNative(view,dock,true)
+                    if(rowBackground)return
                     // One dock: skip the native plate for this frame.
                     val native=NativeIconAccess.field(view,"mDockerBackgroundDrawable") as? Drawable ?: return
                     XposedHelpers.setObjectField(view,"mDockerBackgroundDrawable",null)
                     param.setObjectExtra(NATIVE,native)
-                }catch(t:Throwable){fail(t)}
+                }catch(t:Throwable){suppressNative(view,dock,false);fail(t)}
             }
             override fun afterHookedMethod(param:MethodHookParam){
                 val native=param.getObjectExtra(NATIVE) as? Drawable ?: return
@@ -98,16 +117,62 @@ internal object DockMaterial {
         })
     }
 
+    private fun suppressNative(owner:ViewGroup,dock:Dock,value:Boolean) {
+        if(dock.suppressNative==value)return
+        dock.suppressNative=value
+        (NativeIconAccess.field(owner,"mShortcutsAndWidgets") as? View)?.invalidate()
+    }
+
+    /** Older launchers put the plate on the child row, outside OplusHotseat.onDraw. */
+    private fun wrapRowBackground(owner:ViewGroup,dock:Dock) {
+        val row=NativeIconAccess.field(owner,"mShortcutsAndWidgets") as? View ?: return
+        val native=row.background ?: return
+        if(native is LegacyDockBackground)return
+        val wrapper=LegacyDockBackground(native,owner,dock)
+        row.background=wrapper
+        // View.setBackground detaches the previous drawable's callback.
+        wrapper.attach()
+    }
+    private class LegacyDockBackground(private val native:Drawable,owner:ViewGroup,private val dock:Dock):Drawable(),Drawable.Callback {
+        private val owner=WeakReference(owner)
+        fun attach(){native.callback=this}
+        override fun draw(canvas:Canvas) {
+            if(owner.get()==null || !enabled() || !dock.suppressNative)native.draw(canvas)
+        }
+        override fun onBoundsChange(bounds:Rect){native.bounds=bounds}
+        override fun setAlpha(alpha:Int){native.alpha=alpha}
+        override fun getAlpha()=native.alpha
+        override fun setColorFilter(filter:android.graphics.ColorFilter?){native.colorFilter=filter}
+        @Suppress("DEPRECATION") override fun getOpacity()=native.opacity
+        override fun isStateful()=native.isStateful
+        override fun onStateChange(state:IntArray)=native.setState(state)
+        override fun onLevelChange(level:Int)=native.setLevel(level)
+        override fun getPadding(padding:Rect)=native.getPadding(padding)
+        override fun getOutline(outline:android.graphics.Outline){native.getOutline(outline)}
+        override fun getOpticalInsets()=native.opticalInsets
+        override fun getIntrinsicWidth()=native.intrinsicWidth
+        override fun getIntrinsicHeight()=native.intrinsicHeight
+        override fun setVisible(visible:Boolean,restart:Boolean):Boolean {
+            val changed=super.setVisible(visible,restart)
+            return native.setVisible(visible,restart) || changed
+        }
+        override fun invalidateDrawable(who:Drawable){invalidateSelf()}
+        override fun scheduleDrawable(who:Drawable,what:Runnable,whenMillis:Long){scheduleSelf(what,whenMillis)}
+        override fun unscheduleDrawable(who:Drawable,what:Runnable){unscheduleSelf(what)}
+    }
+
     fun onSettingsChanged(){
         if(Looper.myLooper()!==Looper.getMainLooper()){android.os.Handler(Looper.getMainLooper()).post {onSettingsChanged()};return}
         for(view in docks.keys.toList()){
             docks[view]?.apply {
                 rect.setEmpty();target.setEmpty();renderer.reset();signature=null
+                layer?.apply {active=enabled();sync();invalidate()}
                 if(!enabled()){
                     listener?.let {if(observing?.isAlive==true)observing?.removeOnPreDrawListener(it)}
                     listener=null;observing=null
                 }
             }
+            (NativeIconAccess.field(view,"mShortcutsAndWidgets") as? View)?.invalidate()
             view.invalidate()
         }
     }
@@ -126,11 +191,14 @@ internal object DockMaterial {
         val listener=ViewTreeObserver.OnPreDrawListener {
             val v=weak.get()
             if(v!=null && enabled())try {
-                val matrix=Matrix();XposedHelpers.callMethod(v,"transformMatrixToGlobal",matrix)
-                val values=FloatArray(9);matrix.getValues(values)
+                val live=WallpaperHelper.isLiveWallpaper(v.context)
+                val values=if(live){
+                    val matrix=Matrix();XposedHelpers.callMethod(v,"transformMatrixToGlobal",matrix)
+                    FloatArray(9).also {matrix.getValues(it)}.toList()
+                }else emptyList()
                 val wall=if(!IconMaterialRenderer.clearGlass(DockSettings.style()))WallpaperHelper.getDockWallpaper(v.context) else null
-                val signature=listOf(*values.toTypedArray(),System.identityHashCode(wall),wall?.generationId,
-                    LiveBlurEngine.wallpaperScrollRatio,rowAlpha(v),DockSettings.style(),geometry(v))
+                val signature=listOf(values,System.identityHashCode(wall),wall?.generationId,
+                    if(live)LiveBlurEngine.wallpaperScrollRatio else 0f,rowAlpha(v),DockSettings.style(),geometry(v))
                 if(signature!=dock.signature){dock.signature=signature;v.invalidate()}
             }catch(_:Throwable){}
             true
@@ -138,6 +206,24 @@ internal object DockMaterial {
         observer.addOnPreDrawListener(listener);dock.observing=observer;dock.listener=listener
     }
     private fun draw(hotseat:ViewGroup,canvas:Canvas,dock:Dock):Boolean {
+        val layer=dock.layer
+        if(layer!=null && layer.isAttachedToWindow){
+            layer.active=enabled();layer.sync();layer.invalidate()
+            return true
+        }
+        if(!dock.attaching){
+            dock.attaching=true
+            val weak=WeakReference(hotseat)
+            hotseat.post {
+                try {weak.get()?.takeIf {it.isAttachedToWindow}?.let {owner ->
+                    dock.layer=DockLayer.attach(owner){view,target -> enabled() && drawPlate(view,target,dock)}
+                    owner.invalidate()
+                }}catch(t:Throwable){fail(t)}finally{dock.attaching=false}
+            }
+        }
+        return drawPlate(hotseat,canvas,dock)
+    }
+    private fun drawPlate(hotseat:ViewGroup,canvas:Canvas,dock:Dock):Boolean {
         // A hidden horizontal row must not expose the native plate during unlock/launch.
         val next=geometry(hotseat) ?: return rowAlpha(hotseat)==0f && NativeIconAccess.call(hotseat,"hasVerticalHotseat")!=true
         // Native spring translations already animate the row; a second animator lags behind it.
@@ -176,10 +262,9 @@ internal object DockMaterial {
         val center=container.left+container.width/2f
         val cell=(NativeIconAccess.call(hotseat,"getCellWidth") as? Number)?.toFloat() ?: size.toFloat()
         val half=DockGeometry.halfWidth(PrefsHelper.dockAutoLength,center,icons.left,icons.right,
-            hotseat.width.toFloat(),cell,size.toFloat(),side).coerceAtMost(minOf(center,hotseat.width-center))
-        // OEM unlock/drawer RenderEffects clip to the hotseat layer. Keep the entire contour inside it.
-        return Rect((center-half).roundToInt(),(icons.top-vertical).roundToInt().coerceAtLeast(0),
-            (center+half).roundToInt(),(icons.bottom+vertical).roundToInt().coerceAtMost(hotseat.height))
+            hotseat.width.toFloat(),cell,size.toFloat(),side)
+        val height=DockGeometry.vertical(icons.top,icons.bottom,vertical)
+        return Rect((center-half).roundToInt(),height.first,(center+half).roundToInt(),height.second)
     }
 
     /** The visible icon square of a hotseat item, in its own coordinates. */

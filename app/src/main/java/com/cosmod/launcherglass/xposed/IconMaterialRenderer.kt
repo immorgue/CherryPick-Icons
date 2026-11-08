@@ -138,7 +138,8 @@ object IconMaterialRenderer {
         val root=reference.get() ?: return
         pendingFrames.remove(root)
         if(PrefsHelper.enabled && PrefsHelper.blurEnabled &&
-            com.cosmod.launcherglass.util.LiveBlurEngine.isResumed && root.isAttachedToWindow && root.isShown){
+            com.cosmod.launcherglass.util.LiveBlurEngine.isResumed &&
+            !com.cosmod.launcherglass.util.LiveBlurEngine.isAppLaunchInProgress && root.isAttachedToWindow && root.isShown){
             IconGlassHook.noteDeferredSampleFrame()
             // In Live mode sample only in native pre-draw, after this frame's
             // animation transforms. A timer must not consume its FPS slot with
@@ -249,6 +250,11 @@ object IconMaterialRenderer {
         val filter=style.filter
         val finishKey=MaterialFinish.key()
         if(sampler.wallpaper===wallpaper && sampler.source==source && sampler.filter===filter && sampler.appliedStyle==style && sampler.finishKey==finishKey)return true
+        // Opening uses the retained material. Native transforms animate its
+        // existing display list; no new refraction effects are needed per frame.
+        // The returning flight has its independent live 30 FPS producer.
+        if(!NativeSurfaceLive.isSampling && com.cosmod.launcherglass.util.LiveBlurEngine.isAppLaunchInProgress &&
+            sampler.source!=null && sampler.wallpaper===wallpaper && sampler.appliedStyle==style && sampler.finishKey==finishKey)return true
         // The global blur limit applies to every material. Mini previews may
         // lower that limit to 30; neither draw path bypasses the same clock.
         val fps=MiniIconRefresh.fps(PrefsHelper.liveFps,sampler.mini,PrefsHelper.optimizeMiniIcons)
@@ -310,11 +316,12 @@ object IconMaterialRenderer {
         val width = bounds.width()
         val height = bounds.height()
         if (width <= 0 || height <= 0) return
-        // Blur switched off (radius 0): clear glass. No wallpaper sample at all,
-        // neither the blurred Frosted copy nor the Liquid lens: the only source
-        // is a low-resolution wallpaper screenshot, which itself looked blurred.
-        // The overlay (plate tint, volume, rim) stays; the real wallpaper shows
-        // through the translucent plate in full resolution.
+        // Mini folder previews retain blur/tint, but do not run a separate
+        // refraction shader for each tiny tile. The same policy applies to
+        // GPU samplers, CPU fallback and transition recordings.
+        val style=if(!MiniIconRefresh.refraction(style.liquid,binding?.mini==true,PrefsHelper.optimizeMiniIcons))style.copy(liquid=false)else style
+        // Frosted radius 0 needs no wallpaper sample. Liquid keeps its sharp
+        // backdrop for refraction even when its blur radius is zero.
         val clear = clearGlass(style)
         val wallpaper = if (clear) null else sampleWallpaper
         val source = if (clear) null else sampleSource
@@ -400,14 +407,13 @@ object IconMaterialRenderer {
             val plate=depthNode?.beginRecording(width,height) ?: softwarePlate?.let(::Canvas) ?: canvas
             try {
             if (wallpaper != null && source != null && material.mask != null) {
-                if(binding?.foreign==true && canvas.isHardwareAccelerated){
+                val borrowed=if(binding?.foreign==true && canvas.isHardwareAccelerated)foreignSampler(binding,material,width,height)else null
+                if(borrowed!=null){
                     // Never create, move or re-time a sampler from an OEM
                     // decoration recording; show the element's own sample.
-                    foreignSampler(binding,material,width,height)?.let {
-                        ensureContents(it)
-                        plate.drawRenderNode(it.node)
-                    }
-                }else if(binding!=null && canvas.isHardwareAccelerated){
+                    ensureContents(borrowed)
+                    plate.drawRenderNode(borrowed.node)
+                }else if(binding!=null && !binding.foreign && canvas.isHardwareAccelerated){
                     val entries=samplers.getOrPut(binding.view){WeakHashMap()}
                     var sampler=entries[binding.drawable]
                     if(sampler==null){
@@ -526,7 +532,7 @@ object IconMaterialRenderer {
     }
 
     /** Liquid always needs a backdrop for refraction, even with the blur switch off. */
-    fun clearGlass(style:GlassStyle)=!com.cosmod.launcherglass.util.LiquidOptics.needsBackdrop(style.radius,style.liquid)
+    fun clearGlass(style:GlassStyle)=!com.cosmod.launcherglass.util.LiquidOptics.needsBackdrop(style.radius,style.liquid,PrefsHelper.experimentalLiquid)
 
     /** The sampler an element's own draw bound for [material], preferring its latest. */
     private fun foreignSampler(binding:Binding,material:Material,width:Int,height:Int):Sampler? {
@@ -700,7 +706,7 @@ object IconMaterialRenderer {
         // sampler survives the preference transition for one frame.
         if(clearGlass(style))return false
         val scale=toNode.mapRadius(1f).coerceIn(.05f,20f)
-        val screenRadius=com.cosmod.launcherglass.util.LiquidOptics.blurRadius(style.radius.coerceIn(0,50),sampler.screenH,style.liquid)
+        val screenRadius=com.cosmod.launcherglass.util.LiquidOptics.blurRadius(style.radius.coerceIn(0,50),sampler.screenH,style.liquid,PrefsHelper.experimentalLiquid)
         val radius=kotlin.math.round(screenRadius*scale*4f)/4f
         val edge=minOf(w,h).toFloat()
         val liquid=style.liquid && material.mask!=null

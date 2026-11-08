@@ -354,8 +354,7 @@ class HookEntry : IXposedHookLoadPackage {
             try {IconGlassHook.init(lpparam)}
             catch(t:Throwable){GlassLogger.e("Compat","Icon hook setup incomplete; see failing API above",t)}
             try {
-                val config = XposedHelpers.findClassIfExists(
-                    "com.android.launcher.theme.LauncherIconConfig", lpparam.classLoader)
+                val config = NativeLauncherIcons.type(lpparam.classLoader)
                 if (config != null) {
                     var lastConfig: String? = null
                     var needsReload = false
@@ -377,8 +376,8 @@ class HookEntry : IXposedHookLoadPackage {
                         override fun afterHookedMethod(param: MethodHookParam) {
                             val fingerprint = try {
                                 val instance = param.thisObject
-                                    ?: XposedHelpers.getStaticObjectField(config, "sInstance") ?: return
-                                val nativeConfig = XposedHelpers.getObjectField(instance, "mIconConfig") ?: return
+                                    ?: NativeLauncherIcons.instance(config) ?: return
+                                val nativeConfig = NativeLauncherIcons.config(instance) ?: return
                                 val values = nativeConfig?.javaClass?.declaredFields
                                     ?.filter { !java.lang.reflect.Modifier.isStatic(it.modifiers) &&
                                         (it.type.isPrimitive || it.type == String::class.java) }
@@ -386,10 +385,10 @@ class HookEntry : IXposedHookLoadPackage {
                                         field.isAccessible = true
                                         "${field.name}=${field.get(nativeConfig)}"
                                     }
-                                val shapeValues=listOf("mSettingCorner","mG2SettingCornerRatio","mRadiusRatio","mRadiusType").joinToString { name ->
-                                    "$name=${try {XposedHelpers.getObjectField(instance,name)}catch(_:Throwable){null}}"
-                                }
-                                "${XposedHelpers.getObjectField(instance, "mIconPackName")}:$values:$shapeValues"
+                                val shapeValues=instance.javaClass.declaredFields
+                                    .filter {!java.lang.reflect.Modifier.isStatic(it.modifiers) && (it.type.isPrimitive || it.type==String::class.java)}
+                                    .sortedBy {it.name}.joinToString {field -> field.isAccessible=true;"${field.name}=${field.get(instance)}"}
+                                "${XposedHelpers.getObjectField(instance, if(NativeLauncherIcons.compact(config))"r" else "mIconPackName")}:$values:$shapeValues"
                             } catch (_: Throwable) { return }
                             synchronized(handler) {
                                 if (lastConfig == fingerprint) return
@@ -400,7 +399,7 @@ class HookEntry : IXposedHookLoadPackage {
                             }
                         }
                     }
-                    for (method in listOf("update", "updateIconConfigIfNecessary", "updateSettingConfig")) {
+                    for (method in if(NativeLauncherIcons.compact(config))listOf("x","z","B") else listOf("update", "updateIconConfigIfNecessary", "updateSettingConfig")) {
                         ModuleHooks.hookAllMethods(config, method, changed)
                     }
                 }

@@ -23,8 +23,14 @@ object IconGlassHook {
     private val drawingView=ThreadLocal<View?>()
     private val loadingView=ThreadLocal<View?>()
     private val previewTransform=ThreadLocal<Matrix?>()
+    private val previewCanvas=ThreadLocal<Canvas?>()
     private val folderPreview=ThreadLocal<Boolean>()
+    internal fun previewCaptureMatrix(canvas:Canvas):Matrix? =
+        if(folderPreview.get()==true)PreviewCoordinates.matrix(canvas,previewCanvas.get(),previewTransform.get())else null
     private val previewSizeLogs=HashSet<String>()
+    private val previewPageClocks=WeakHashMap<Drawable,SampleFrameClock>()
+    private val previewPaging=WeakHashMap<Drawable,Boolean>()
+    private val previewPageMatrices=WeakHashMap<Drawable,Matrix>()
     private fun bindPreviewItem(params:Any,owner:View?,depth:Int=0){
         if(depth>3)return
         val item=NativeIconAccess.field(params,"item")
@@ -53,7 +59,7 @@ object IconGlassHook {
     private var liveSnapshot=emptyList<WeakReference<View>>()
     private var liveSnapshotDirty=true
     private fun registeredViews():List<WeakReference<View>> {
-        if(liveSnapshotDirty){liveSnapshot=liveViews.keys.map(::WeakReference);liveSnapshotDirty=false}
+        if(liveSnapshotDirty){liveSnapshot=liveViews.keys.weakSnapshot().map(::WeakReference);liveSnapshotDirty=false}
         return liveSnapshot
     }
     private val liveRoots=WeakHashMap<View,ViewTreeObserver.OnPreDrawListener>()
@@ -102,7 +108,7 @@ object IconGlassHook {
             }
             if(current!=null && PrefsHelper.enabled && PrefsHelper.blurEnabled &&
                 PrefsHelper.blurMode==com.cosmod.launcherglass.ui.SettingsProvider.BLUR_MODE_LIVE &&
-                (LiveBlurEngine.isResumed || NativeSurfaceLive.active)) {
+                !LiveBlurEngine.isAppLaunchInProgress && LiveBlurEngine.isResumed) {
                 // Animation/scroll transforms are final now; sample the same
                 // position that this frame will present, not the previous tick.
                 android.os.Trace.beginSection("CherryPick.sampleBeforeDraw")
@@ -127,9 +133,13 @@ object IconGlassHook {
     }
     internal fun recoverDiscardedIcons(root:View):Int {
         var recovered=0
+        val visible=Rect()
         for(reference in registeredViews()){
             val view=reference.get() ?: continue
             if(view.rootView!==root || !view.isAttachedToWindow || !view.isShown)continue
+            // Recover as soon as a page becomes visible, including static mode.
+            // A discarded sample on a hidden page is not a reason to redraw it.
+            if(!view.getGlobalVisibleRect(visible))continue
             if(IconMaterialRenderer.restoreDiscardedSamples(view)){view.invalidate();recovered++}
         }
         return recovered
@@ -214,6 +224,14 @@ object IconGlassHook {
         if(view==null)return
         val refresh=Runnable {
             repaintStamps.remove(view)
+            if(view.javaClass.name.let {it.contains("GridRecyclerView") || it.contains("ShortcutContainer")}){
+                fun repair(child:View,depth:Int){
+                    IconMaterialRenderer.restoreDiscardedSamples(child)
+                    child.invalidate()
+                    if(depth<8 && child is android.view.ViewGroup)for(i in 0 until child.childCount)repair(child.getChildAt(i),depth+1)
+                }
+                repair(view,0)
+            }
             view.invalidate()
             // Snapshot teardown can evict samples belonging to other icons,
             // including previews on the adjacent workspace page.
@@ -241,19 +259,13 @@ object IconGlassHook {
             try {XposedHelpers.callMethod(view,"transformMatrixToGlobal",world)}catch(_:Throwable){continue}
             full.set(0f,0f,view.width.toFloat(),view.height.toFloat());world.mapRect(full)
             val metrics=view.resources.displayMetrics
-            val offscreen=full.right<=0f || full.bottom<=0f || full.left>=metrics.widthPixels || full.top>=metrics.heightPixels
-            val edge=view.javaClass.name.contains("BubbleTextView") &&
-                (full.left<-.5f || full.top<-.5f || full.right>metrics.widthPixels+.5f || full.bottom>metrics.heightPixels+.5f)
-            // Both update paths obey the edge optimization. The old switch only
-            // removed forceEdge, leaving the ordinary sampler path running.
-            if(edge && !PrefsHelper.disableEdgeOptimization && onlyChangedDrawerSamples)continue
-            // Forced edge repaint is only useful while pages actually move. On
-            // a stationary page the adjacent page's icons are permanently past
-            // the edge: invalidating them in every pre-draw requested the next
-            // frame forever and pinned LTPO displays at 60 Hz.
-            val forceEdge=edge && PrefsHelper.disableEdgeOptimization && LiveBlurEngine.hasRecentMotion
-            if(offscreen && !forceEdge)continue
-            if(onlyChangedDrawerSamples && !forceEdge && IconMaterialRenderer.hasBindings(view)){
+            // The override permits sampling a partially visible icon; it must
+            // not invalidate the entire adjacent page on every unlock/launch
+            // frame or bypass retained samplers and their material FPS clocks.
+            if(!LiveSamplePolicy.refresh(full.left,full.top,full.right,full.bottom,
+                    metrics.widthPixels,metrics.heightPixels,view.javaClass.name.contains("BubbleTextView"),
+                    !onlyChangedDrawerSamples || PrefsHelper.disableEdgeOptimization))continue
+            if(onlyChangedDrawerSamples && IconMaterialRenderer.hasBindings(view)){
                 if(IconMaterialRenderer.updateSamplers(view,wallpaper,world)){
                     if(beforeDraw==null)roots.add(view.rootView)
                     continue
@@ -262,13 +274,10 @@ object IconGlassHook {
                 view.invalidate()
                 continue
             }
-            if(!view.getGlobalVisibleRect(visible)){
-                if(!forceEdge)continue
-                visible.set(0,0,view.width,view.height)
-            }
+            if(!view.getGlobalVisibleRect(visible))continue
             view.getLocationOnScreen(location)
             val stamp=RepaintStamp(location[0],location[1],visible.width(),visible.height(),scroll,wallpaper,revision)
-            if(forceEdge || !onlyChangedDrawerSamples || repaintStamps[view]!=stamp || IconMaterialRenderer.needsRecording(view)){
+            if(!onlyChangedDrawerSamples || repaintStamps[view]!=stamp || IconMaterialRenderer.needsRecording(view)){
                 repaintStamps[view]=stamp
                 if(beforeDraw!=null && !LiveBlurEngine.isMoving)idleInvalidations++
                 view.invalidate()
@@ -522,7 +531,7 @@ object IconGlassHook {
                 // OEM edit-mode select dots record this icon again into their
                 // own node, often as a fresh constantState copy per draw. Show
                 // the element's own material: no per-copy layers or sampler.
-                val foreign=surfaceSource==null && owner!=null && ForeignDraw.isForeign(owner)
+                val foreign=surfaceSource==null && owner!=null && (ForeignDraw.isForeign(owner) || TransitionCapture.renderingSnapshot)
                 val identity=if(foreign)ForeignDraw.original(owner!!,drawable)else drawable
                 // The OEM can record an adjacent page before it becomes
                 // visible. A screen-space visibility rejection would cache an
@@ -535,8 +544,7 @@ object IconGlassHook {
                 // empty and draw the same live material inside the DragView.
                 if(surfaceSource==null && DragPreviewMaterial.captures(canvas)){
                     @Suppress("DEPRECATION")
-                    val local=Matrix().also {canvas.getMatrix(it)}
-                    previewTransform.get()?.let {local.setConcat(it,Matrix(local))}
+                    val local=PreviewCoordinates.matrix(canvas,previewCanvas.get(),previewTransform.get())
                     val rect=RectF(bounds);local.mapRect(rect)
                     val preview=folderPreview.get()==true || owner?.javaClass?.name?.contains("FolderIcon")==true
                     val mini=MiniIconRefresh.isMini(preview,rect.width(),rect.height(),bounds.width(),bounds.height())
@@ -562,16 +570,26 @@ object IconGlassHook {
                 val materialBounds=Rect(bounds)
                 if(surfaceSource==null && a!=null)NativeSurfaceLive.prewarm(parts.plateMaskBitmap.width,a.screenW)
                 val materialAlpha=drawable.alpha
-                NativeSurfaceLive.capture(canvas,parts.plateMaskBitmap.width,parts.plateMaskBitmap.height) { target ->
+                val retainedWallpaper=wallpaper(a)
+                if(NativeSurfaceLive.capture(canvas,parts.plateMaskBitmap.width,parts.plateMaskBitmap.height) { target ->
                     val layer=if(materialAlpha<255)target.saveLayerAlpha(RectF(materialBounds),materialAlpha)else target.save()
                     val rect=NativeSurfaceLive.sampleBounds(materialBounds)
                     val sample=if(rect!=null && a!=null)a.copy(x=rect.left,y=rect.top,iconW=rect.width(),iconH=rect.height())else a
-                    try {render(target,materialBounds,parts,sample,wallpaper(sample))}finally{target.restoreToCount(layer)}
+                    val image=wallpaper(sample)?.takeUnless {it.isRecycled} ?: retainedWallpaper?.takeUnless {it.isRecycled}
+                    try {render(target,materialBounds,parts,sample,image)}finally{target.restoreToCount(layer)}
+                }){
+                    // A cluster scene captures the plate as a live recipe;
+                    // its native GPU-only clock/calendar artwork stays in
+                    // the separate adornment layer, with no software redraw.
+                    if(gpuDynamic && bitmap!=null)DynamicIconForeground.draw(sourceIcon,canvas,bounds,nativeParts.bgColor,bitmap,reuse=true){target ->
+                        val prior=recording.get();recording.set(true)
+                        try {sourceIcon.draw(target)}finally{recording.set(prior)}
+                    }
+                    return true
                 }
                 @Suppress("DEPRECATION")
                 val binding=if(surfaceSource==null && owner!=null && a!=null && canvas.isHardwareAccelerated){
-                    val local=Matrix().also {canvas.getMatrix(it)}
-                    previewTransform.get()?.let {local.setConcat(it,Matrix(local))}
+                    val local=PreviewCoordinates.matrix(canvas,previewCanvas.get(),previewTransform.get())
                     val rect=RectF(bounds);local.mapRect(rect)
                     val preview=folderPreview.get()==true || owner.javaClass.name.contains("FolderIcon")
                     val mini=MiniIconRefresh.isMini(preview,rect.width(),rect.height(),bounds.width(),bounds.height())
@@ -761,27 +779,44 @@ object IconGlassHook {
                 if(!PrefsHelper.enabled || recording.get()==true)return
                 val canvas=param.args.firstOrNull() as? Canvas ?: return
                 val prior=previewTransform.get()
-                val matrix=Matrix().also {canvas.getMatrix(it)}
-                if(prior!=null)matrix.setConcat(prior,Matrix(matrix))
+                val matrix=PreviewCoordinates.matrix(canvas,previewCanvas.get(),prior)
                 param.setObjectExtra("priorPreviewTransform",prior)
+                param.setObjectExtra("priorPreviewCanvas",previewCanvas.get())
                 param.setObjectExtra("previewTransformSet",true)
                 param.setObjectExtra("priorFolderPreview",folderPreview.get())
                 folderPreview.set(true)
                 previewTransform.set(matrix)
+                previewCanvas.set(canvas)
                 try {
                     val drawable=param.thisObject as? Drawable ?: return
                     val owner=host(drawable) ?: return
                     bindPreviewContainer(drawable,owner)
                     val old=previews[drawable]
-                    if(old==null || old.revision!=revision){
+                    val scrolling=NativeIconAccess.call(owner,"isScrolling")==true
+                    val wasScrolling=previewPaging.put(drawable,scrolling)==true
+                    val clock=previewPageClocks.getOrPut(drawable){SampleFrameClock()}
+                    val now=System.nanoTime();val fps=minOf(PrefsHelper.liveFps.coerceIn(1,60),30)
+                    // OEM moves the cached page node outside its recording.
+                    // Its saved sampler coordinates otherwise stay at the old
+                    // page position throughout an internal folder swipe.
+                    val pageMoved=(scrolling && previewPageMatrices[drawable]!=matrix && clock.remainingNs(now,fps)==0L) || (wasScrolling && !scrolling)
+                    if(old==null || old.revision!=revision || pageMoved || TransitionCapture.captures(canvas)){
                         XposedHelpers.setBooleanField(drawable,"mInvalid",true)
                         previews[drawable]=PreviewStamp(revision,null,0,0)
+                        clock.record(now,fps)
+                        previewPageMatrices[drawable]=Matrix(matrix)
+                        if(pageMoved){
+                            android.os.Trace.beginSection("CherryPick.folderPageRecord")
+                            param.setObjectExtra("pageRecordTrace",true)
+                        }
                     }
                 }catch(t:Throwable){GlassLogger.e("MaterialEngine","Preview material refresh failed",t)}
             }
             override fun afterHookedMethod(param:MethodHookParam){
+                if(param.getObjectExtra("pageRecordTrace")==true)android.os.Trace.endSection()
                 if(param.getObjectExtra("previewTransformSet")==true){
                     previewTransform.set(param.getObjectExtra("priorPreviewTransform") as? Matrix)
+                    previewCanvas.set(param.getObjectExtra("priorPreviewCanvas") as? Canvas)
                     folderPreview.set(param.getObjectExtra("priorFolderPreview") as? Boolean)
                 }
             }
@@ -821,7 +856,13 @@ object IconGlassHook {
             // A multi-icon launch/return floats a snapshot of the whole
             // composed view, already with its plate and items. Extracting an
             // icon from it stretched the items onto a dark plate.
-            if(TransitionCapture.isViewCapture(original))return@hook
+            if(TransitionCapture.isViewCapture(original)){
+                // OEM setDrawable replaces a hardware Bitmap in this SAME
+                // BitmapDrawable with a software copy. Its scene must follow
+                // drawable identity, not the discarded Bitmap wrapper.
+                TransitionCapture.rememberDrawable(original)
+                return@hook
+            }
             val material=snapshot(original) ?: return@hook
             param.args[0]=material
             if(param.args.getOrNull(1) is Drawable)param.args[1]=ColorDrawable(Color.TRANSPARENT)

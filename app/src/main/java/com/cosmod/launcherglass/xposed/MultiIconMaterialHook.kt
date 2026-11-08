@@ -98,15 +98,18 @@ internal object MultiIconMaterialHook {
                 // App launch/return snapshot: the GPU image of this same view.
                 val canvas=param.args.firstOrNull() as? Canvas ?: return
                 if(TransitionCapture.drawHardware(view,canvas))param.result=null
+                else TransitionCapture.onWorkspaceDraw(view)
             }
         })
         for(method in listOf("onLayout","dispatchDraw"))ModuleHooks.hookAllMethods(type,method,object:XC_MethodHook(){
             private fun update(param:MethodHookParam){
                 if(!enabled())return
                 val view=param.thisObject as? View ?: return
+                if(method=="dispatchDraw" && hosts.containsKey(view))return
+                android.os.Trace.beginSection("CherryPick.bindCluster")
                 try {prepare(view);bindItems(view)}catch(t:Throwable){
                     if(failures.add(t.javaClass.name+":"+t.message))GlassLogger.e("MultiIcons","Native shortcut material unavailable",t)
-                }
+                }finally{android.os.Trace.endSection()}
             }
             override fun beforeHookedMethod(param:MethodHookParam){if(method=="dispatchDraw")update(param)}
             override fun afterHookedMethod(param:MethodHookParam){if(method=="onLayout")update(param)}

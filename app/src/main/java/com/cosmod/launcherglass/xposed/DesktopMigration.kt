@@ -25,6 +25,7 @@ internal object DesktopMigration {
     private val previewing=ThreadLocal<Int>()
     private val applying=ThreadLocal<Request>()
     @Volatile private var request:Request?=null
+    private lateinit var api:DesktopNativeApi
     private lateinit var helper:Class<*>
     private lateinit var calculate:Method
     private lateinit var apply:Method
@@ -32,30 +33,24 @@ internal object DesktopMigration {
     private lateinit var screens:Uri
 
     fun install(loader:ClassLoader) {
-        val launcher=XposedHelpers.findClass("com.android.launcher.Launcher",loader)
-        val layout=XposedHelpers.findClass("com.android.common.util.LauncherLayoutUtils",loader)
-        helper=XposedHelpers.findClass("com.android.launcher.togglebar.LayoutSettingsHelper",loader)
-        calculate=layout.getDeclaredMethod("c",Context::class.java,
-            Int::class.javaPrimitiveType,Int::class.javaPrimitiveType,Int::class.javaPrimitiveType,Int::class.javaPrimitiveType,
-            Boolean::class.javaPrimitiveType,Boolean::class.javaPrimitiveType,Boolean::class.javaPrimitiveType,Boolean::class.javaPrimitiveType,
-            ArrayList::class.java)
-        apply=helper.getMethod("applyLayoutSettings",launcher,Int::class.javaPrimitiveType,Int::class.javaPrimitiveType,Boolean::class.javaPrimitiveType)
-        XposedHelpers.findAndHookMethod(layout,"p",Int::class.javaPrimitiveType,Int::class.javaPrimitiveType,
-            ContentResolver::class.java,object:XC_MethodHook(){
+        // Resolve the complete contract before changing any native behavior.
+        api=DesktopNativeApi(loader)
+        helper=api.helper;calculate=api.calculate;apply=api.apply
+        XposedBridge.hookMethod(api.cleanup,object:XC_MethodHook(){
                 override fun beforeHookedMethod(param:MethodHookParam) {
                     val count=previewing.get()
                     if(count!=null)previewing.set(count+1)
                     if(count!=null || applying.get()!=null)param.result=intArrayOf()
                 }
             })
-        XposedHelpers.findAndHookMethod(helper,"setAddNewScreenQuantityWhenSwitchLayout",Int::class.javaPrimitiveType,
+        api.screenCountSetter?.let {setter -> XposedBridge.hookMethod(setter,
             object:XC_MethodHook(){
                 override fun beforeHookedMethod(param:MethodHookParam) {
                     if(previewing.get()!=null)param.result=null
                 }
             })
-        XposedHelpers.findAndHookMethod(layout,"B",Context::class.java,IntArray::class.java,IntArray::class.java,
-            Boolean::class.javaPrimitiveType,Boolean::class.javaPrimitiveType,BooleanArray::class.java,object:XC_MethodHook(){
+        }
+        XposedBridge.hookMethod(api.migrate,object:XC_MethodHook(){
                 override fun beforeHookedMethod(param:MethodHookParam) {
                     val task=request ?: return
                     if(param.args[0]!==task.activity.get())return
@@ -99,12 +94,10 @@ internal object DesktopMigration {
                     }
                 }
             })
-        val job=XposedHelpers.findClass("com.android.launcher.togglebar.LayoutSettingsHelper\$f",loader)
-        check(XposedBridge.hookAllMethods(job,"onPostExecute",object:XC_MethodHook(){
+        XposedBridge.hookMethod(api.completion,object:XC_MethodHook(){
             override fun afterHookedMethod(param:MethodHookParam) {
                 val task=request ?: return
-                val owner=job.declaredFields.single {WeakReference::class.java.isAssignableFrom(it.type)}
-                    .apply {isAccessible=true}.get(param.thisObject) as WeakReference<*>
+                val owner=api.owner.get(param.thisObject) as WeakReference<*>
                 val activity=task.activity.get()
                 if(activity==null){request=null;return}
                 if(owner.get()!==activity)return
@@ -114,13 +107,13 @@ internal object DesktopMigration {
                 GlassLogger.i("DesktopDesigner","Native migration completed: success=$success, grid=${task.columns}x${task.rows}")
                 if(!activity.isFinishing && !activity.isDestroyed)task.finished(success)
             }
-        }).isNotEmpty()) {"Native layout completion callback is unavailable"}
+        })
     }
 
     fun dimensions(context:Context)=
         Settings.System.getInt(context.contentResolver,"layout_cellcount_x",4) to
             Settings.System.getInt(context.contentResolver,"layout_cellcount_y",6)
-    fun busy()=request!=null || XposedHelpers.callStaticMethod(helper,"isInApplySwitchLayout")==true
+    fun busy()=request!=null || api.busy()
     fun loading(activity:Activity)=XposedHelpers.callMethod(activity,"isWorkspaceLoading")==true
     fun arrange(activity:Activity) {
         val state=XposedHelpers.getStaticObjectField(XposedHelpers.findClass("com.android.launcher3.LauncherState",helper.classLoader),"TOGGLE_BAR")
@@ -133,15 +126,13 @@ internal object DesktopMigration {
         val unplaced=ArrayList<Any>()
         previewing.set(0)
         val native=try {
-            (calculate.invoke(null,activity,original.first,original.second,columns,rows,false,false,false,false,unplaced) as List<*>).also {
+            api.calculate(activity,original,columns,rows,unplaced).also {
                 GlassLogger.i("DesktopDesigner","Grid preview ${columns}x${rows}: ${unplaced.size} unplaced pages; ${previewing.get()} cleanup calls suppressed")
             }
         }finally{previewing.remove()}
-        val pages=native.filterNotNull().filter { !XposedHelpers.getBooleanField(it,"c") }
-            .sortedBy {XposedHelpers.getIntField(it,"b")}.map {page ->
-                val icons=XposedHelpers.getObjectField(page,"d") as List<*>
-                val widgets=XposedHelpers.getObjectField(page,"e") as List<*>
-                (icons+widgets).filterNotNull().map {item ->
+        val pages=native.filterNotNull().filter { !api.isHotseat(it) }
+            .sortedBy {api.rank(it)}.map {page ->
+                api.items(page).filterNotNull().map {item ->
                     fun number(method:String)=XposedHelpers.callMethod(item,method) as Int
                     DesktopGrid.Cell(number("getCellX"),number("getCellY"),number("getSpanX"),number("getSpanY"))
                 }
@@ -153,9 +144,7 @@ internal object DesktopMigration {
         require(DesktopGrid.valid(columns,rows))
         // These native statics depend on Application initialization and the active launcher mode.
         items=XposedHelpers.getStaticObjectField(XposedHelpers.findClass("com.android.launcher3.LauncherSettings\$Favorites",helper.classLoader),"CONTENT_URI") as Uri
-        val mode=XposedHelpers.callStaticMethod(XposedHelpers.findClass("com.android.launcher.mode.LauncherModeManager",helper.classLoader),"getInstance")
-        val screenTable=XposedHelpers.callMethod(mode,"getScreenTableName") as String
-        screens=items.buildUpon().path(screenTable).build()
+        screens=api.screens(items)
         val task=Request(activity,columns,rows,finished)
         request=task
         try {apply.invoke(null,activity,columns,rows,false)}catch(t:Throwable){request=null;throw t}

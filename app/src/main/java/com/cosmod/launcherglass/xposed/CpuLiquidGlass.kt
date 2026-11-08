@@ -82,7 +82,7 @@ internal object CpuLiquidGlass {
             val c00=pixels[y*ww+x];val c10=pixels[y*ww+xx];val c01=pixels[yy*ww+x];val c11=pixels[yy*ww+xx]
             var glowR=0f;var glowG=0f;var glowB=0f
             val stepX=source.width()*.035f;val stepY=source.height()*.035f
-            for(oy in -1..1)for(ox in -1..1){
+            if(PrefsHelper.experimentalLiquid)for(oy in -1..1)for(ox in -1..1){
                 if(ox==0 && oy==0)continue
                 val bx=(px+ox*stepX).roundToInt().coerceIn(0,ww-1)
                 val by=(py+oy*stepY).roundToInt().coerceIn(0,wh-1)
@@ -91,7 +91,7 @@ internal object CpuLiquidGlass {
                 val bright=LiquidOptics.highlight(r,g,b)*(c ushr 24)/255f*.125f
                 glowR+=r*bright;glowG+=g*bright;glowB+=b*bright
             }
-            val veil=LiquidOptics.veil((i%width+.5f)/width,(i/width+.5f)/height)
+            val veil=if(PrefsHelper.experimentalLiquid)LiquidOptics.veil((i%width+.5f)/width,(i/width+.5f)/height)else 0f
             var rgb=0
             for(shift in 16 downTo 0 step 8){
                 val top=((c00 ushr shift) and 255)*(1f-fx)+((c10 ushr shift) and 255)*fx

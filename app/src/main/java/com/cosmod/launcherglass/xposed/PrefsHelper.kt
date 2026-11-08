@@ -12,6 +12,8 @@ import com.cosmod.launcherglass.util.LiveBlurEngine
 import com.cosmod.launcherglass.util.WallpaperHelper
 
 object PrefsHelper {
+    @Volatile var experimentalLiquid=false
+        private set
 
     @Volatile var enabled: Boolean = SettingsDefaults.boolean(SettingsProvider.KEY_ENABLED)
     @Volatile var gpuEffects: Boolean = true
@@ -168,6 +170,8 @@ object PrefsHelper {
             val newPhotoWidgetTint=bundle.getBoolean(SettingsProvider.KEY_PHOTO_WIDGET_TINT,false)
             val developer=bundle.getBoolean(SettingsProvider.KEY_DEVELOPER_MODE,false)
             val newGpuEffects=!developer || bundle.getBoolean(SettingsProvider.KEY_GPU_EFFECTS,true)
+            val newExperimentalLiquid=developer && bundle.getBoolean(SettingsProvider.KEY_EXPERIMENTAL_LIQUID,false)
+            val opticsChanged=newExperimentalLiquid!=experimentalLiquid
             val backendChanged=newGpuEffects!=gpuEffects
             val newColorDepth=if(developer && android.os.Build.VERSION.SDK_INT>=33 && bundle.getBoolean(SettingsProvider.KEY_COLOR_DEPTH_ENABLED,false))bundle.getInt(SettingsProvider.KEY_COLOR_DEPTH_BITS,8).coerceIn(8,24)else 24
             val newDepthStage=bundle.getInt(SettingsProvider.KEY_COLOR_DEPTH_STAGE,ColorDepthEffect.FINISHED_PLATE).coerceIn(0,3)
@@ -268,7 +272,7 @@ object PrefsHelper {
                 LiveBlurEngine.invalidate()
             }
             val folderEnabledChanged=newFolderBlurEnabled!=folderBlurEnabled
-            val materialChanged=backendChanged || newBgOpacity!=bgOpacity || newBlurEnabled!=blurEnabled || newBlurRadius!=blurRadius ||
+            val materialChanged=opticsChanged || backendChanged || newBgOpacity!=bgOpacity || newBlurEnabled!=blurEnabled || newBlurRadius!=blurRadius ||
                 newFolderBlurEnabled!=folderBlurEnabled || newFolderIconsBlurEnabled!=folderIconsBlurEnabled || newDrawerBlurEnabled!=drawerBlurEnabled ||
                 newIconStroke != iconStroke || newStrokeOpacity != strokeOpacity ||
                 newGlyphShadow != glyphShadow || newShadowOpacity != shadowOpacity ||
@@ -283,6 +287,7 @@ object PrefsHelper {
             iconPalette = newPalette
             enabled = newEnabled
             gpuEffects=newGpuEffects
+            experimentalLiquid=newExperimentalLiquid
             bgOpacity = newBgOpacity
             blurEnabled = newBlurEnabled
             colorDepthBits=newColorDepth
@@ -302,7 +307,7 @@ object PrefsHelper {
             blurStyle = newBlurStyle
             blurVibrancy=newBlurVibrancy
             blurQuality=newBlurQuality;liquidWidth=newLiquidWidth;liquidDistortion=newLiquidDistortion
-            if(blurStyleChanged || qualityChanged || vibrancyChanged || processingDepthChanged || backendChanged)WallpaperHelper.invalidate()
+            if(opticsChanged || blurStyleChanged || qualityChanged || vibrancyChanged || processingDepthChanged || backendChanged)WallpaperHelper.invalidate()
             liveFps = newLiveFps
             idlePause = newIdlePause
             iconStroke = newIconStroke
@@ -347,6 +352,7 @@ object PrefsHelper {
             }
             LiveBlurEngine.onPrefsChanged()
             NativeSurfaceLive.onSettingsChanged()
+            TransitionCapture.onSettingsChanged()
             FolderMaterialHook.onSettingsChanged()
             LiftedBackdrop.onSettingsChanged()
             MultiIconMaterialHook.onSettingsChanged()

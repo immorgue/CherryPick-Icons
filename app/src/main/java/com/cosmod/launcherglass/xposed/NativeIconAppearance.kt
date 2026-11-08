@@ -14,16 +14,16 @@ object NativeIconAppearance {
     fun read(context: Context, configuration: Configuration): Boolean? {
         if (!attempted) {
             attempted = true
-            configClass = XposedHelpers.findClassIfExists("com.android.launcher.theme.LauncherIconConfig", context.classLoader)
+            configClass = NativeLauncherIcons.type(context.classLoader)
             darkMethod = try {
-                configClass?.getDeclaredMethod("isDarkIconEnable", Configuration::class.java)?.apply { isAccessible = true }
+                configClass?.let {it.getDeclaredMethod(if(NativeLauncherIcons.compact(it))"r" else "isDarkIconEnable", Configuration::class.java)}?.apply { isAccessible = true }
             } catch (_: Throwable) { null }
         }
         return try {
             // Do not initialize native icon configuration before the launcher itself is ready.
             val type = configClass ?: return null
-            val instance = XposedHelpers.getStaticObjectField(type, "sInstance") ?: return null
-            XposedHelpers.getObjectField(instance, "mIconConfig") ?: return null
+            val instance = NativeLauncherIcons.instance(type) ?: return null
+            NativeLauncherIcons.config(instance) ?: return null
             darkMethod?.invoke(null, configuration) as? Boolean
         } catch (_: Throwable) { null }
     }

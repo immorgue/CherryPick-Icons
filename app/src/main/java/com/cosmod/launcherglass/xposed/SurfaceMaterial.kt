@@ -61,11 +61,14 @@ internal object SurfaceMaterial {
     private fun shape(bounds:Rect,radius:Float,path:Path?,native:android.graphics.drawable.Drawable?=null,nativeMask:Bitmap?=null,
                       pathFingerprint:Long?=null,identity:Any?=null,view:View?=null):Shape {
         val longest=maxOf(bounds.width(),bounds.height()).coerceAtLeast(1)
-        val scale=minOf(1f,384f/longest)
+        // A cluster's native corner is also the flight silhouette. Preserve
+        // its exact radius/aspect ratio instead of quantizing the small mask.
+        val exact=view?.javaClass?.name=="com.android.launcher3.viewcontainer.GridRecyclerView"
+        val scale=minOf(1f,(if(exact)1024f else 384f)/longest)
         val rawW=bounds.width()*scale;val rawH=bounds.height()*scale
         // About 1% quantization absorbs sub-pixel layout and drag jitter; the
         // canvas scale in draw() maps the mask back onto the exact bounds.
-        val step=(maxOf(rawW,rawH)/96f).roundToInt().coerceIn(1,4)
+        val step=if(exact)1 else (maxOf(rawW,rawH)/96f).roundToInt().coerceIn(1,4)
         val w=((rawW/step).roundToInt()*step).coerceAtLeast(1)
         val h=((rawH/step).roundToInt()*step).coerceAtLeast(1)
         val hasPath=path!=null && !path.isEmpty
@@ -144,11 +147,38 @@ internal object SurfaceMaterial {
         IconGlassHook.registerMaterialView(view)
         // The launcher may render a drag shadow to a software Canvas. A GPU
         // wallpaper cannot be sampled there; use the shared software snapshot.
-        val wallpaper=if(sourceWallpaper==null)null else try {WallpaperHelper.forCanvas(sourceWallpaper,canvas)}catch(_:Exception){return false}
-        if(wallpaper!=null && !canvas.isHardwareAccelerated && wallpaper.config==Bitmap.Config.HARDWARE)return false
         val shape=shape(bounds,radius,path,nativeShape,nativeMask,pathFingerprint,identity,view)
         val footprint=local ?: RectF(bounds)
         val metrics=view.resources.displayMetrics
+        if(TransitionCapture.captures(canvas) || NativeSurfaceLive.materialSource!=null){
+            val capturedBounds=Rect(bounds)
+            val resting=RectF(footprint)
+            val world=Matrix()
+            XposedHelpers.callMethod(view,"transformMatrixToGlobal",world);world.mapRect(resting)
+            val screenW=metrics.widthPixels;val screenH=metrics.heightPixels
+            val plateColor=style.plateColor ?: PrefsHelper.plateColor(SurfaceTone.base())
+            if(NativeSurfaceLive.capture(canvas,shape.mask.width,shape.mask.height){target ->
+                val retained=if(clear)null else ((if(style.folder)WallpaperHelper.getFolderWallpaper()else WallpaperHelper.getBlurredWallpaper())
+                    ?.takeUnless {it.isRecycled} ?: sourceWallpaper?.takeUnless {it.isRecycled})
+                val image=retained?.let {WallpaperHelper.forCanvas(it,target)}
+                val screen=NativeSurfaceLive.sampleBounds(capturedBounds) ?: resting
+                val source=image?.let {WallpaperFootprint.source(it,screenW,screenH,screen)}
+                val saved=if(alpha<255)target.saveLayerAlpha(RectF(capturedBounds),alpha)else target.save()
+                try {
+                    target.translate(capturedBounds.left.toFloat(),capturedBounds.top.toFloat())
+                    target.scale(capturedBounds.width().toFloat()/shape.mask.width,capturedBounds.height().toFloat()/shape.mask.height)
+                    val rect=Rect(0,0,shape.mask.width,shape.mask.height)
+                    IconMaterialRenderer.draw(target,rect,shape.mask,emptyGlyph,plateColor,style.opacity*255/100,!decorate,
+                        image,source,null,decorate,style){out,area,blurred ->
+                        if(!blurred)clearPlate(out,area,shape.mask,plateColor,style.opacity*255/100,decorate)
+                        if(decorate && PrefsHelper.iconStroke && PrefsHelper.strokeOpacity>0)
+                            out.drawBitmap(GlassGeometry.rim(shape.mask),null,area,Paint(Paint.FILTER_BITMAP_FLAG))
+                    }
+                }finally{target.restoreToCount(saved)}
+            })return true
+        }
+        val wallpaper=if(sourceWallpaper==null)null else try {WallpaperHelper.forCanvas(sourceWallpaper,canvas)}catch(_:Exception){return false}
+        if(wallpaper!=null && !canvas.isHardwareAccelerated && wallpaper.config==Bitmap.Config.HARDWARE)return false
         val source=if(wallpaper==null)null else {
             val world=Matrix()
             try {XposedHelpers.callMethod(view,"transformMatrixToGlobal",world)}catch(_:Throwable){return false}
@@ -164,7 +194,7 @@ internal object SurfaceMaterial {
             IconMaterialRenderer.draw(canvas,local,shape.mask,emptyGlyph,plateColor,
                 style.opacity*255/100,!decorate,wallpaper,source,
                 IconMaterialRenderer.Binding(view,identity,RectF(footprint),metrics.widthPixels,metrics.heightPixels,alpha=alpha,
-                    foreign=ForeignDraw.isForeign(view)),decorate,style) {target,rect,blurred ->
+                    foreign=ForeignDraw.isForeign(view) || TransitionCapture.renderingSnapshot),decorate,style) {target,rect,blurred ->
                 if(!blurred)clearPlate(target,rect,shape.mask,plateColor,style.opacity*255/100,decorate)
                 if(decorate && PrefsHelper.iconStroke && PrefsHelper.strokeOpacity>0)
                     target.drawBitmap(GlassGeometry.rim(shape.mask),null,rect,Paint(Paint.FILTER_BITMAP_FLAG))

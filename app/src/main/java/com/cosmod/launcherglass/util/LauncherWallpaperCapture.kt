@@ -210,7 +210,7 @@ object LauncherWallpaperCapture {
         val now = SystemClock.uptimeMillis()
         // Static ImageWallpaper also moves during ColorOS unlock. Capture that
         // short transition, without running a permanent static-wallpaper watch.
-        staticWallpaper=try { WallpaperManager.getInstance(context).wallpaperInfo == null } catch (_: Throwable) { true }
+        staticWallpaper=!WallpaperHelper.isLiveWallpaper(context)
         if(now>=staticMotionUntilMs && staticWallpaper)return
         val api=api(context) ?: return
         if (motionFactory != null) {
@@ -247,7 +247,8 @@ object LauncherWallpaperCapture {
                             if(lastFrameMs==0L)GlassLogger.i("WallpaperCapture","First motion frame received in ${time-watchStartedMs}ms")
                             lastFrameMs = time
                             try {
-                                val copy = frame.copy(Bitmap.Config.HARDWARE, false)
+                                android.os.Trace.beginSection("CherryPick.retainWallpaperFrame")
+                                val copy = try {HardwareBitmapLease.retain(frame)}finally{android.os.Trace.endSection()}
                                 if (copy == null) frameBusy.set(false)
                                 else WallpaperHelper.processLiveFrame(copy,{epoch==motionEpoch}) { signature ->
                                     main.post {
@@ -311,7 +312,7 @@ object LauncherWallpaperCapture {
                             if (!finished.get() && bitmap.get() == null) {
                                 val source = args?.firstOrNull { it is Bitmap } as? Bitmap
                                 if (source != null && !source.isRecycled) {
-                                    val copy = source.copy(Bitmap.Config.HARDWARE, false)
+                                    val copy = HardwareBitmapLease.retain(source)
                                     if (copy != null && !bitmap.compareAndSet(null, copy)) copy.recycle()
                                     ready.countDown()
                                 }

@@ -1,5 +1,11 @@
 # CherryPick Icons
 
+**0.2.54-dev** · [Совместимость / compatibility](COMPATIBILITY.md) · [Изменения / changes](PERFORMANCE-2026-11-08-254.md)
+
+Экспериментальная оптика Liquid из PR #2 включается отдельно в режиме разработчика, по умолчанию выключена. Редактор рабочего стола доступен независимо. Кнопка репорта создаёт ZIP с логами и APK установленного лаунчера.
+
+PR #2 Liquid optics have a separate developer switch, off by default. The desktop editor remains independent. Bug reports export a ZIP containing diagnostics and the installed launcher APK.
+
 [Русский](#русский) · [English](#english)
 
 ## Русский

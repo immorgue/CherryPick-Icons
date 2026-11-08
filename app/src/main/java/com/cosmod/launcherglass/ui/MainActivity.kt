@@ -1328,6 +1328,8 @@ class MainActivity : AppCompatActivity() {
         divider(developerOptions)
         add(developerOptions,switchRow(getString(R.string.ui_gpu_effects),SettingsProvider.KEY_GPU_EFFECTS))
         add(developerOptions,text(getString(R.string.ui_gpu_effects_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
+        add(developerOptions,switchRow(getString(R.string.ui_experimental_liquid),SettingsProvider.KEY_EXPERIMENTAL_LIQUID))
+        add(developerOptions,text(getString(R.string.ui_experimental_liquid_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
         divider(developerOptions)
         add(developerOptions,switchRow(getString(R.string.ui_color_depth),SettingsProvider.KEY_COLOR_DEPTH_ENABLED))
         add(developerOptions,text(getString(R.string.ui_color_depth_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
@@ -1358,29 +1360,19 @@ class MainActivity : AppCompatActivity() {
             text=getString(R.string.ui_logs);minHeight=dp(48)
             setOnClickListener { button ->
                 haptic(button);button.isEnabled=false
+                (button as? android.widget.TextView)?.setText(R.string.ui_report_creating)
                 executor.execute {
                     try {
-                        val logs=GlassLogger.readLogs(this@MainActivity)
-                        val directory=java.io.File(cacheDir,"diagnostics").apply {mkdirs()}
-                        val timestamp=java.text.SimpleDateFormat("yyyy-MM-dd_HH-mm-ss",java.util.Locale.US).format(java.util.Date())
-                        val file=java.io.File(directory,"CherryPick_logs_$timestamp.txt")
-                        val report=buildString {
-                            appendLine("CherryPick Icons ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
-                            appendLine("${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}, Android ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT})")
-                            appendLine(java.util.Date().toString())
-                            appendLine("\nSettings:")
-                            prefs.all.toSortedMap().forEach { (key,value) -> appendLine("$key=$value") }
-                            appendLine("\nLogs:");append(logs)
-                        }
-                        file.writeText(report,Charsets.UTF_8)
+                        val file=com.cosmod.launcherglass.util.DiagnosticReport.create(this@MainActivity,prefs)
                         val uri=androidx.core.content.FileProvider.getUriForFile(this@MainActivity,"${BuildConfig.APPLICATION_ID}.logs",file)
                         runOnUiThread {
                             button.isEnabled=true
+                            (button as? android.widget.TextView)?.setText(R.string.ui_logs)
                             if(!isFinishing && !isDestroyed) {
                                 val send=Intent(Intent.ACTION_SEND).apply {
-                                    type="text/plain"
+                                    type="application/zip"
                                     putExtra(Intent.EXTRA_STREAM,uri)
-                                    putExtra(Intent.EXTRA_SUBJECT,"CherryPick Icons ${BuildConfig.VERSION_NAME} logs")
+                                    putExtra(Intent.EXTRA_SUBJECT,"CherryPick Icons ${BuildConfig.VERSION_NAME} report")
                                     clipData=ClipData.newUri(contentResolver,file.name,uri)
                                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                 }
@@ -1390,6 +1382,7 @@ class MainActivity : AppCompatActivity() {
                     } catch(t:Exception) {
                         runOnUiThread {
                             button.isEnabled=true
+                            (button as? android.widget.TextView)?.setText(R.string.ui_logs)
                             if(!isFinishing)Toast.makeText(this@MainActivity,getString(R.string.ui_log_error,t.message ?: ""),Toast.LENGTH_LONG).show()
                         }
                     }

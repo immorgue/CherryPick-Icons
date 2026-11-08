@@ -17,3 +17,5 @@ Thumbs.db
 !.env.example
 *.log
 /reference/
+__pycache__/
+*.pyc

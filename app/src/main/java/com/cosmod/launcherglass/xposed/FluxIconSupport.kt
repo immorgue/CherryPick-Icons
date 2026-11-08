@@ -9,9 +9,9 @@ object FluxIconSupport {
     const val OTHER=2
 
     fun read(context:Context):Int = try {
-        val type=XposedHelpers.findClassIfExists("com.android.launcher.theme.LauncherIconConfig",context.classLoader)
-        val instance=type?.let {XposedHelpers.getStaticObjectField(it,"sInstance")}
-        val config=instance?.let {XposedHelpers.getObjectField(it,"mIconConfig")}
+        val type=NativeLauncherIcons.type(context.classLoader)
+        val instance=type?.let {NativeLauncherIcons.instance(it)}
+        val config=instance?.let {NativeLauncherIcons.config(it)}
         // This is the native isThemedIconEnabled predicate (theme == 3), read
         // directly so CherryPick's own themed-icon hook cannot falsify it.
         val theme=config?.let {XposedHelpers.callMethod(it,"getTheme") as? Int}

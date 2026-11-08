@@ -53,6 +53,14 @@ object WallpaperHelper {
 
     var appContext: Context? = null
 
+    @Volatile private var liveWallpaper: Boolean? = null
+    /** Wallpaper type changes on ACTION_WALLPAPER_CHANGED, not on every frame. */
+    fun isLiveWallpaper(context:Context):Boolean {
+        liveWallpaper?.let {return it}
+        return try {WallpaperManager.getInstance(context).wallpaperInfo!=null}
+            catch(_:Throwable){false}.also {liveWallpaper=it}
+    }
+
 
 
     /**
@@ -72,7 +80,15 @@ object WallpaperHelper {
         return if(own.settings.own)own.published?.takeUnless {it.isRecycled} ?: shared else shared
     }
     fun getFolderWallpaper(context:Context?=null):Bitmap?=scoped(folderOwn,context)
-    fun getDockWallpaper(context:Context?=null):Bitmap?=scoped(dockOwn,context)
+    @Volatile private var staticDockWallpaper:Bitmap?=null
+    fun getDockWallpaper(context:Context?=null):Bitmap? {
+        val ctx=context ?: appContext
+        val live=ctx?.let {isLiveWallpaper(it)} ?: true
+        if(!live)staticDockWallpaper?.takeUnless {it.isRecycled}?.let {return it}
+        val image=scoped(dockOwn,context)
+        if(!live && image!=null && (!dockOwn.settings.own || dockOwn.published===image))staticDockWallpaper=image
+        return image
+    }
     private fun publishFolder(candidate:Bitmap){
         for(own in listOf(folderOwn,dockOwn))own.published=synchronized(own.candidates){own.candidates.remove(candidate)}
     }
@@ -81,10 +97,19 @@ object WallpaperHelper {
         return candidate
     }
     private fun withOwn(own:OwnWallpaper,candidate:Bitmap,raw:Bitmap) {
+        // Static dock processing is independent of transient wallpaper captures
+        // during unlock. Keep the completed texture until settings/wallpaper
+        // invalidation; the native hotseat animates its retained layer.
+        if(own===dockOwn && appContext?.let { !isLiveWallpaper(it) }==true){
+            own.published?.takeUnless {it.isRecycled}?.let {stable ->
+                synchronized(own.candidates){own.candidates[candidate]=stable}
+                return
+            }
+        }
         val options=own.settings.processing
         val h=minOf(600+options.quality*12,raw.height)
         val w=(raw.width.toFloat()*h/raw.height).roundToInt().coerceAtLeast(1)
-        val radius=LiquidOptics.blurRadius(options.radius,h,options.liquid)
+        val radius=LiquidOptics.blurRadius(options.radius,h,options.liquid,PrefsHelper.experimentalLiquid)
         val gpuImage=if(PrefsHelper.gpuEffects)try {
             val input=if(android.os.Build.VERSION.SDK_INT<33)BackdropVibrancy.applyCpu(raw,options.vibrancy)else raw
             val gpu=try {
@@ -138,6 +163,7 @@ object WallpaperHelper {
     private var retryAfterMs = 0L
 
     private var launcherWallpaper: WeakReference<Bitmap>? = null
+    private var launcherWallpaperGeneration = 0
 
     @Volatile private var systemSnapshot: Bitmap? = null
 
@@ -276,7 +302,12 @@ object WallpaperHelper {
 
     @Synchronized
 
-    fun invalidate() {
+    fun invalidate(preserveStaticDock:Boolean=false) {
+
+        if(!preserveStaticDock){
+            dockOwn.published=null
+            staticDockWallpaper=null
+        }
 
         // Keep the last completed bitmap until its replacement is ready. Display
 
@@ -295,6 +326,8 @@ object WallpaperHelper {
     @Synchronized
 
     fun onSystemWallpaperChanged() {
+
+        liveWallpaper=null
 
         launcherWallpaper = null
 
@@ -380,9 +413,17 @@ object WallpaperHelper {
 
         if (bitmap.isRecycled) return
 
-        launcherWallpaper = WeakReference(bitmap)
+        // OEM resume/unlock can deliver the same retained bitmap repeatedly.
+        // Its content, not the callback count, determines a new blur revision.
+        if (launcherWallpaper?.get() === bitmap && launcherWallpaperGeneration == bitmap.generationId) return
 
-        invalidate()
+        launcherWallpaper = WeakReference(bitmap)
+        launcherWallpaperGeneration = bitmap.generationId
+
+        // Resume may deliver a new wrapper of the same static wallpaper.
+        // Its moving capture is useful for icons, but does not change the dock.
+        // Real wallpaper changes and settings use the full invalidation above.
+        invalidate(preserveStaticDock=appContext?.let { !isLiveWallpaper(it) }==true)
 
         mainHandler.post { LauncherWallpaperCapture.startMotionWatch() }
 
@@ -398,7 +439,8 @@ object WallpaperHelper {
 
             cachedBlurRadius != PrefsHelper.blurRadius.coerceIn(0, 50)) {
 
-            sourceRevision++
+            // Window readiness does not change the wallpaper. Incrementing
+            // here rejected the in-flight load on every rapid pause/resume.
 
             retryAfterMs = 0L
 
@@ -571,7 +613,7 @@ object WallpaperHelper {
 
             val targetW = ((rawBitmap.width.toFloat() / rawBitmap.height.toFloat()) * targetH).roundToInt().coerceAtLeast(1)
 
-            val effectRadius = LiquidOptics.blurRadius(radius,targetH,PrefsHelper.liquidGlass)
+            val effectRadius = LiquidOptics.blurRadius(radius,targetH,PrefsHelper.liquidGlass,PrefsHelper.experimentalLiquid)
 
             if(PrefsHelper.gpuEffects)try {
 
