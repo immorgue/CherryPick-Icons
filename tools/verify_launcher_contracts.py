@@ -25,6 +25,8 @@ def verify(d):
  for n in ['ShortcutContainer','GridRecyclerView']:check('multi_icons',p+'viewcontainer/'+n+';' in d,n)
  for name,kind in [('mRadius','F'),('mRect','Landroid/graphics/Rect;'),('attachedShortcutContainer',p+'viewcontainer/ShortcutContainer;')]:
   field('multi_icons',p+'viewcontainer/GridRecyclerView;',name,kind)
+ method('multi_icons',p+'anim/floatingdrawable/IconDrawableView;','onDraw','(Landroid/graphics/Canvas;)V')
+ field('multi_icons',p+'anim/floatingdrawable/IconDrawableView;','originalIconDrawable','Landroid/graphics/drawable/Drawable;')
  method('dock',p+'OplusHotseat;','onDraw','(Landroid/graphics/Canvas;)V')
  field('dock',p+'CellLayout;','mShortcutsAndWidgets','Lcom/android/launcher3/ShortcutAndWidgetContainer;')
  for n in ['setDockerBackground','setBackgroundAlphaInner']:method('dock',p+'OplusHotseat;',n)

@@ -29,6 +29,7 @@ object IconGlassHook {
         if(folderPreview.get()==true)PreviewCoordinates.matrix(canvas,previewCanvas.get(),previewTransform.get())else null
     private val previewSizeLogs=HashSet<String>()
     private val previewPageClocks=WeakHashMap<Drawable,SampleFrameClock>()
+    private val returnedPreviewOwners=WeakHashMap<View,Boolean>()
     private val previewPaging=WeakHashMap<Drawable,Boolean>()
     private val previewPageMatrices=WeakHashMap<Drawable,Matrix>()
     private fun bindPreviewItem(params:Any,owner:View?,depth:Int=0){
@@ -224,13 +225,25 @@ object IconGlassHook {
         if(view==null)return
         val refresh=Runnable {
             repaintStamps.remove(view)
+            IconMaterialRenderer.prepareReturn(view)
             if(view.javaClass.name.let {it.contains("GridRecyclerView") || it.contains("ShortcutContainer")}){
                 fun repair(child:View,depth:Int){
                     IconMaterialRenderer.restoreDiscardedSamples(child)
+                    IconMaterialRenderer.prepareReturn(child)
                     child.invalidate()
                     if(depth<8 && child is android.view.ViewGroup)for(i in 0 until child.childCount)repair(child.getChildAt(i),depth+1)
                 }
                 repair(view,0)
+            }
+            var ancestor=view.parent as? View
+            repeat(12) {
+                val parent=ancestor ?: return@repeat
+                if(parent.javaClass.name.contains("FolderIcon")){
+                    returnedPreviewOwners[parent]=true
+                    IconMaterialRenderer.prepareReturn(parent)
+                    parent.invalidate()
+                }
+                ancestor=parent.parent as? View
             }
             view.invalidate()
             // Snapshot teardown can evict samples belonging to other icons,
@@ -800,7 +813,7 @@ object IconGlassHook {
                     // Its saved sampler coordinates otherwise stay at the old
                     // page position throughout an internal folder swipe.
                     val pageMoved=(scrolling && previewPageMatrices[drawable]!=matrix && clock.remainingNs(now,fps)==0L) || (wasScrolling && !scrolling)
-                    if(old==null || old.revision!=revision || pageMoved || TransitionCapture.captures(canvas)){
+                    if(old==null || old.revision!=revision || pageMoved || returnedPreviewOwners.remove(owner)==true || TransitionCapture.captures(canvas)){
                         XposedHelpers.setBooleanField(drawable,"mInvalid",true)
                         previews[drawable]=PreviewStamp(revision,null,0,0)
                         clock.record(now,fps)

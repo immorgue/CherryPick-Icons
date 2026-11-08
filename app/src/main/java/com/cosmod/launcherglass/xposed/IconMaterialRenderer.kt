@@ -84,6 +84,12 @@ object IconMaterialRenderer {
     private var frameSerial=0L
     /** Called once per launcher pre-draw, before any restoration or recording. */
     @Synchronized fun beginFrame(){frameSerial++}
+    /** A returned view needs its final crop on the first visible frame, not a later FPS slot. */
+    @Synchronized fun prepareReturn(view:View) {
+        samplers[view]?.values?.forEach {sampler ->
+            sampler.source=null;sampler.worldValid=false
+        }
+    }
     /** Identity/value stamp for lift recordings: matrices by value, nodes by identity. */
     private class Stamp(val numbers:FloatArray,val refs:List<Any?>){
         override fun equals(other:Any?):Boolean {
@@ -260,7 +266,7 @@ object IconMaterialRenderer {
         val fps=MiniIconRefresh.fps(PrefsHelper.liveFps,sampler.mini,PrefsHelper.optimizeMiniIcons)
         if(sampler.source!=null && sampler.appliedStyle==style && sampler.finishKey==finishKey){
             val remaining=sampler.clock.remainingNs(nowNs,fps)
-            if(remaining>0L){scheduleSampleRefresh(view,remaining);return false}
+            if(remaining>0L && !NativeSurfaceLive.isSampling){scheduleSampleRefresh(view,remaining);return false}
         }
         val refracted=if(android.os.Build.VERSION.SDK_INT>=33 && style.liquid) {
             // createShaderEffect() snapshots the shader, so every sampler can
@@ -353,7 +359,7 @@ object IconMaterialRenderer {
             val now=System.nanoTime()
             val fps=MiniIconRefresh.fps(PrefsHelper.liveFps,binding?.mini==true,PrefsHelper.optimizeMiniIcons)
             val remaining=frame.clock.remainingNs(now,fps)
-            if(changed && (frame.bitmap==null || remaining==0L)){
+            if(changed && (frame.bitmap==null || remaining==0L || NativeSurfaceLive.isSampling)){
                 val bitmap=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888)
                 val software=wallpaper?.let {com.cosmod.launcherglass.util.WallpaperHelper.forCanvas(it,Canvas(bitmap))}
                 draw(Canvas(bitmap),Rect(0,0,width,height),mask,glyph,color,tintAlpha,hideGlyph,software,footprint,null,volume,style,buildOverlay)
@@ -462,7 +468,10 @@ object IconMaterialRenderer {
                     // there may be no later draw on which to repair a stale
                     // crop. Apply the current source immediately. This does
                     // not turn a baked drag bitmap into a live backdrop.
-                    if(changed && (!hardware || material.paint.shader==null || material.appliedStyle!=style || material.appliedHardware!=hardware || material.clock.remainingNs(nowNs,fps)==0L)){
+                    // The native flight producer already enforces its FPS.
+                    // A second clock here could submit a new buffer with the
+                    // preceding crop, causing visible steps even at 60 FPS.
+                    if(changed && (NativeSurfaceLive.isSampling || !hardware || material.paint.shader==null || material.appliedStyle!=style || material.appliedHardware!=hardware || material.clock.remainingNs(nowNs,fps)==0L)){
                     val refracted=if(style.liquid && !canvas.isHardwareAccelerated){
                         CpuLiquidGlass.shader(wallpaper,mask,width,height,source,material.rounding,style)
                     }else if(android.os.Build.VERSION.SDK_INT>=33 && style.liquid && canvas.isHardwareAccelerated){

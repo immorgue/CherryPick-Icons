@@ -55,7 +55,8 @@ object NativeSurfaceLive {
         var canvasWidth:Int=1,var canvasHeight:Int=1,var materialWidth:Int=210,var materialHeight:Int=210)
     private data class Frame(val capture: Capture, val started: Long,
         var wallpaper: Bitmap?, var closing:Boolean=false,var direction:Int=0,var last: Long = 0L, var redraws: Int = 0, var poseVersion:Long = -1L,
-        val clock:SampleFrameClock=SampleFrameClock(),val progress:SurfaceProgress=SurfaceProgress(started))
+        val clock:SampleFrameClock=SampleFrameClock(),val progress:SurfaceProgress=SurfaceProgress(started),
+        val motion:FlightDirection=FlightDirection(if(closing)-1 else 0))
     private val leases = WeakHashMap<Surface, Lease>()
     private val tokens = WeakHashMap<Surface, Any>()
     private val frames = WeakHashMap<Surface, Frame>()
@@ -87,7 +88,7 @@ object NativeSurfaceLive {
     fun onSettingsChanged(){
         if(!PrefsHelper.enabled || !PrefsHelper.blurEnabled){
             retire("module disabled") {true}
-            synchronized(lock){leases.clear();controls.clear();templates.clear()}
+            synchronized(lock){leases.clear();controls.clear();templates.clear();stagedPoses.clear()}
             if(submitterDelegate.isInitialized())submitter.post {pool.forEach {it.close()};pool.clear();warmed.set(false)}
         }
     }
@@ -99,7 +100,10 @@ object NativeSurfaceLive {
     fun onFlightStarted(opening:Boolean){
         returning=!opening
         synchronized(lock){
-            frames.values.filter {it.direction==0}.forEach {it.closing=!opening}
+            frames.values.forEach {
+                if(!opening){it.closing=true;it.direction=-1;it.motion.returning()}
+                else if(it.direction==0)it.closing=false
+            }
             refreshActive()
         }
         if(active)schedule()
@@ -150,15 +154,15 @@ object NativeSurfaceLive {
         matrix.mapRect(rect)
         return rect.takeIf {it.width()>1f && it.height()>1f && it.left.isFinite() && it.top.isFinite()}
     }
+    private data class StagedTransform(val lease:Lease,val update:SurfaceTransformUpdate)
+    private val stagedPoses=WeakHashMap<Any,MutableMap<SurfaceControl,StagedTransform>>()
     private fun observeTransform(param:XC_MethodHook.MethodHookParam,position:Boolean){
         val control=param.args.firstOrNull() as? SurfaceControl ?: return
         val lease=controls[control] ?: return
-        val previousPose=lease.pose.get()
-        val wasReady=lease.pose.get().let {it.positioned && it.transformed}
-        if(position){
+        val update=if(position){
             val x=(param.args.getOrNull(1) as? Number)?.toFloat() ?: return
             val y=(param.args.getOrNull(2) as? Number)?.toFloat() ?: return
-            lease.pose.updateAndGet {old -> if(old.positioned && old.x==x && old.y==y)old else old.copy(x=x,y=y,positioned=true,version=old.version+1)}
+            SurfaceTransformUpdate(position=x to y)
         }else{
             val values=FloatArray(9)
             val matrix=param.args.getOrNull(1) as? Matrix
@@ -169,29 +173,45 @@ object NativeSurfaceLive {
                 values[3]=(param.args[3] as? Number)?.toFloat() ?: return
                 values[4]=(param.args[4] as? Number)?.toFloat() ?: return
             }
-            lease.pose.updateAndGet {old -> if(old.transformed && old.xx==values[0] && old.xy==values[1] && old.yx==values[3] && old.yy==values[4])old else
-                old.copy(xx=values[0],xy=values[1],yx=values[3],yy=values[4],transformed=true,version=old.version+1)}
+            SurfaceTransformUpdate(matrix=listOf(values[0],values[1],values[3],values[4]))
         }
-        if(!position && previousPose.transformed){
-            val pose=lease.pose.get()
-            val direction=FlightBlurPolicy.direction(kotlin.math.abs(previousPose.xx*previousPose.yy-previousPose.xy*previousPose.yx),
-                kotlin.math.abs(pose.xx*pose.yy-pose.xy*pose.yx))
-            if(direction!=0)synchronized(lock){
-                // OEM reuses the opening Surface when HOME reverses an unfinished launch.
-                // Direction must follow that reversal, rather than latch the first trend.
-                for(frame in frames.values)if(frame.capture.lease===lease && frame.direction!=direction){
-                    frame.direction=direction;frame.closing=direction<0
-                    GlassLogger.limited("LiveSurface","native-direction",100){"Native direction: record=${frame.capture.recordId}, closing=${frame.closing}"}
-                    if(!frame.closing)releaseChild(control)
+        synchronized(lock){
+            val updates=stagedPoses.getOrPut(param.thisObject){HashMap()}
+            val prior=updates[control]?.takeIf {it.lease===lease}?.update ?: SurfaceTransformUpdate()
+            updates[control]=StagedTransform(lease,prior.then(update))
+        }
+    }
+    /** Publish matrix + translation together, only after the OEM transaction has applied. */
+    private fun publishTransforms(transaction:Any) {
+        synchronized(lock){
+            val updates=stagedPoses.remove(transaction) ?: return
+            for((control,staged) in updates){
+                val lease=controls[control] ?: continue
+                if(staged.lease!==lease)continue
+                val update=staged.update
+                val old=lease.pose.get()
+                val m=update.matrix;val p=update.position
+                val next=old.copy(xx=m?.get(0) ?: old.xx,xy=m?.get(1) ?: old.xy,
+                    yx=m?.get(2) ?: old.yx,yy=m?.get(3) ?: old.yy,
+                    x=p?.first ?: old.x,y=p?.second ?: old.y,
+                    positioned=old.positioned || p!=null,transformed=old.transformed || m!=null)
+                if(next==old)continue
+                val pose=next.copy(version=old.version+1)
+                lease.pose.set(pose)
+                if(!pose.transformed)continue
+                val area=kotlin.math.abs(pose.xx*pose.yy-pose.xy*pose.yx)
+                for(frame in frames.values)if(frame.capture.lease===lease){
+                    val direction=frame.motion.update(area)
+                    if(direction!=0 && direction!=frame.direction){
+                        frame.direction=direction;frame.closing=direction<0
+                        GlassLogger.limited("LiveSurface","native-direction",100){"Native direction: record=${frame.capture.recordId}, closing=${frame.closing}"}
+                        if(!frame.closing)releaseChild(control)
+                    }
                 }
-                refreshActive()
             }
-            if(active)schedule()
+            refreshActive()
         }
-        if(!wasReady && lease.pose.get().let {it.positioned && it.transformed}) {
-            synchronized(lock){refreshActive()}
-            schedule()
-        }
+        if(active)schedule()
     }
     private fun releaseChild(control:SurfaceControl){
         val child=children.remove(control) ?: return
@@ -286,7 +306,7 @@ object NativeSurfaceLive {
         override fun run() {
             val work=synchronized(lock) {
                 if (!PrefsHelper.enabled || !PrefsHelper.blurEnabled || PrefsHelper.blurMode != SettingsProvider.BLUR_MODE_LIVE) {
-                    frames.clear(); captures.clear(); tokens.clear();controls.clear()
+                    frames.clear(); captures.clear(); tokens.clear();controls.clear();stagedPoses.clear()
                     children.keys.toList().forEach {releaseChild(it)}
                     refreshActive(); return
                 }
@@ -399,6 +419,28 @@ object NativeSurfaceLive {
         for(method in listOf("setPosition","setMatrix"))ModuleHooks.hookAllMethods(SurfaceControl.Transaction::class.java,method,object:XC_MethodHook(){
             override fun afterHookedMethod(param:MethodHookParam){if(!param.hasThrowable())observeTransform(param,method=="setPosition")}
         })
+        ModuleHooks.hookAllMethods(SurfaceControl.Transaction::class.java,"apply",object:XC_MethodHook(){
+            override fun afterHookedMethod(param:MethodHookParam){
+                if(!param.hasThrowable())publishTransforms(param.thisObject)
+                else synchronized(lock){stagedPoses.remove(param.thisObject)}
+            }
+        })
+        ModuleHooks.hookAllMethods(SurfaceControl.Transaction::class.java,"merge",object:XC_MethodHook(){
+            override fun afterHookedMethod(param:MethodHookParam){
+                if(param.hasThrowable())return
+                val other=param.args.firstOrNull() ?: return
+                synchronized(lock){
+                    stagedPoses.remove(other)?.let {incoming ->
+                        val destination=stagedPoses.getOrPut(param.thisObject){HashMap()}
+                        for((control,staged) in incoming){
+                            if(staged.lease!==controls[control])continue
+                            val prior=destination[control]?.takeIf {it.lease===staged.lease}?.update ?: SurfaceTransformUpdate()
+                            destination[control]=StagedTransform(staged.lease,prior.then(staged.update))
+                        }
+                    }
+                }
+            }
+        })
         // Native record IDs distinguish a late completion callback from a new
         // animation using the same SurfaceControl or clicked View.
         if(renderer!=null)for (method in listOf("transferViewToSurface", "redrawViewToSurface")) {
@@ -472,12 +514,20 @@ object NativeSurfaceLive {
             override fun beforeHookedMethod(param: MethodHookParam) {
                 val id = try { XposedHelpers.callMethod(param.thisObject, "getRecordId") as? Int } catch (_: Throwable) { null } ?: return
                 synchronized(lock) {
-                    param.setObjectExtra("returnedSource",captures.values.firstOrNull {it.recordId==id}?.source)
+                    param.setObjectExtra("returnedCapture",captures.values.firstOrNull {it.recordId==id})
                 }
-                retire("showOriginalIcon") { it.recordId == id }
             }
             override fun afterHookedMethod(param:MethodHookParam) {
-                if(!param.hasThrowable())IconGlassHook.onNativeIconReturned(param.getObjectExtra("returnedSource") as? View)
+                if(param.hasThrowable())return
+                val capture=param.getObjectExtra("returnedCapture") as? Capture ?: return
+                // Let the native loader restore visibility before retiring our
+                // child. A worker-side callback posts visibility to main, so
+                // our retirement must queue behind it on the same Looper.
+                val finish=Runnable {
+                    retire("showOriginalIcon") {it===capture}
+                    IconGlassHook.onNativeIconReturned(capture.source)
+                }
+                if(Looper.myLooper()==Looper.getMainLooper())finish.run()else main.post(finish)
             }
         })
     }

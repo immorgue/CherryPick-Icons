@@ -87,6 +87,21 @@ internal object TransitionCapture {
     }
     fun install(loader:ClassLoader){
         val utils=XposedHelpers.findClassIfExists("com.oplus.basecommon.util.BitmapUtils",loader) ?: return
+        val floating=XposedHelpers.findClassIfExists("com.android.launcher3.anim.floatingdrawable.IconDrawableView",loader)
+        if(floating!=null)ModuleHooks.hookAllMethods(floating,"onDraw",object:XC_MethodHook(){
+            override fun beforeHookedMethod(param:MethodHookParam){
+                if(!PrefsHelper.enabled || !PrefsHelper.blurEnabled)return
+                val original=NativeIconAccess.field(param.thisObject,"originalIconDrawable") as? BitmapDrawable ?: return
+                val scene=drawableScenes[original] ?: scenes[original.bitmap] ?: return
+                if(!scene.guardCorners)return
+                val canvas=param.args.firstOrNull() as? Canvas ?: return
+                // This is already the complete composed cluster. Stock
+                // IconDrawableView additionally extrudes bitmap edge strips
+                // behind it, producing a second square/flat plate. Keep the
+                // stock drawable bounds and animation, draw the scene once.
+                if(drawLive(original,canvas))param.result=null
+            }
+        })
         // A large closed folder is also a composed snapshot, but is not a
         // ShortcutContainer/GridRecyclerView. Capture its page materials via
         // the inherited View.draw entry without changing its native corners.
