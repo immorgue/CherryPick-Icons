@@ -60,6 +60,12 @@ internal object DockMaterial {
         var presence=DockPresence()
         var animator:ValueAnimator?=null
         var lastRowAlpha=1f
+        // Last wallpaper/layout stamps seen by the frame listeners.
+        var stamp=Long.MIN_VALUE
+        var layout=-1L
+        // False until the layer actually holds a drawn plate. An empty
+        // display list must be retried, not left empty forever.
+        var plateReady=false
     }
     private val docks=WeakHashMap<View,Dock>()
     private val iconMethods=HashMap<Class<*>,Method?>()
@@ -67,8 +73,61 @@ internal object DockMaterial {
     private var weight=Float.NaN
     private val failures=HashSet<String>()
     private var logged=false
+    // Event-driven gate: the composite backdrop and the hotseat signature are
+    // rebuilt only when the wallpaper, the dock layout or the settings change.
+    private var layoutRevision=0L
+    private var lastStamp=Long.MIN_VALUE
+    private var lastLayout=-1L
+    fun noteLayout(){layoutRevision++}
 
     fun enabled()=PrefsHelper.enabled && PrefsHelper.blurEnabled && PrefsHelper.dockEnabled
+
+    /**
+     * Called once per pre-draw from the shared frame listener. Returns after a
+     * single volatile read unless the wallpaper, the dock layout or the
+     * settings changed, so a stationary launcher does no dock work per frame.
+     */
+    fun onFrame(){
+        if(!enabled() || docks.isEmpty())return
+        val context=WallpaperHelper.appContext ?: return
+        // Live frames have their own publication cadence. Until the composite
+        // has a smaller live update path, retain its existing refresh behaviour;
+        // a source/layout-only stamp must never freeze video under dock icons.
+        if(!PrefsHelper.dockEventDriven || WallpaperHelper.isLiveWallpaper(context)){
+            prepareIconWallpaper(WallpaperHelper.getBlurredWallpaper(context))
+            for(dock in docks.values){
+                val layer=dock.layer ?: continue
+                if(!layer.isAttachedToWindow)continue
+                layer.active=enabled();layer.sync();layer.invalidate()
+            }
+            return
+        }
+        // Static wallpaper changes only on content/layout/settings events.
+        val stamp=WallpaperHelper.stamp()
+        if(stamp==lastStamp && layoutRevision==lastLayout)return
+        // Wait for publication rather than consuming a new stamp with old pixels.
+        if(!WallpaperHelper.sourceReady())return
+        // A launch/return animation already owns the frame budget. The plate is
+        // cheap to refresh; the full-screen icon composite waits for the first
+        // settled frame instead of being rebuilt mid-transition.
+        if(LiveBlurEngine.isAppLaunchInProgress || NativeSurfaceLive.active){
+            for(dock in docks.values){
+                val layer=dock.layer ?: continue
+                if(!layer.isAttachedToWindow)continue
+                layer.active=enabled();layer.sync();layer.invalidate()
+            }
+            return
+        }
+        lastStamp=stamp;lastLayout=layoutRevision
+        prepareIconWallpaper(WallpaperHelper.getBlurredWallpaper(context))
+        // The plate lives in its own full-screen layer. Refresh it once here
+        // instead of invalidating it on every hotseat draw.
+        for(dock in docks.values){
+            val layer=dock.layer ?: continue
+            if(!layer.isAttachedToWindow)continue
+            layer.active=enabled();layer.sync();layer.invalidate()
+        }
+    }
 
     /** Independent pixels only: never reference hotseat/icon RenderNodes. */
     fun prepareIconWallpaper(wallpaper:Bitmap?) {
@@ -185,6 +244,7 @@ internal object DockMaterial {
                 val dock=docks.getOrPut(view){Dock()}
                 if(!enabled())return
                 try {
+                    noteLayout()
                     observe(view,dock)
                     val next=geometry(view)
                     updatePresence(view,dock,next!=null)
@@ -243,6 +303,7 @@ internal object DockMaterial {
         for(view in docks.keys.toList()){
             docks[view]?.apply {
                 animator?.cancel();animator=null;presence=DockPresence()
+                lastStamp=Long.MIN_VALUE;layoutRevision++
                 rect.setEmpty();target.setEmpty();renderer.reset();iconRenderer.reset();signature=null
                 iconKey=null;iconSource=null
                 layer?.apply {active=enabled();retainWhenHidden=false;sync();invalidate()}
@@ -264,6 +325,7 @@ internal object DockMaterial {
     }
     private fun updatePresence(owner:ViewGroup,dock:Dock,present:Boolean) {
         if(!dock.presence.observe(present))return
+        dock.plateReady=false
         dock.animator?.cancel()
         dock.layer?.retainWhenHidden=!present && dock.presence.drawable
         val animator=ValueAnimator.ofFloat(dock.presence.fraction,dock.presence.target)
@@ -292,6 +354,11 @@ internal object DockMaterial {
         val listener=ViewTreeObserver.OnPreDrawListener {
             val v=weak.get()
             if(v!=null && enabled())try {
+                // Cheap exit: nothing the dock draws changed this frame.
+                val stamp=WallpaperHelper.stamp()
+                if(stamp==dock.stamp && layoutRevision==dock.layout && dock.animator==null &&
+                    !LiveBlurEngine.hasRecentMotion)return@OnPreDrawListener true
+                dock.stamp=stamp;dock.layout=layoutRevision
                 val live=WallpaperHelper.isLiveWallpaper(v.context)
                 val values=if(live){
                     val matrix=Matrix();XposedHelpers.callMethod(v,"transformMatrixToGlobal",matrix)
@@ -311,7 +378,13 @@ internal object DockMaterial {
     private fun draw(hotseat:ViewGroup,canvas:Canvas,dock:Dock):Boolean {
         val layer=dock.layer
         if(layer!=null && layer.isAttachedToWindow){
-            layer.active=enabled();layer.sync();layer.invalidate()
+            // sync() invalidates only when the pose or the opacity changed.
+            layer.active=enabled();layer.sync()
+            // The layer owns the plate. Until it has drawn one, keep asking for
+            // a frame; an empty display list would otherwise stay empty until
+            // an unrelated invalidation arrived.
+            if(!dock.plateReady)layer.invalidate()
+            if(!PrefsHelper.dockEventDriven)layer.invalidate()
             return true
         }
         if(!dock.attaching){
@@ -319,7 +392,7 @@ internal object DockMaterial {
             val weak=WeakReference(hotseat)
             hotseat.post {
                 try {weak.get()?.takeIf {it.isAttachedToWindow}?.let {owner ->
-                    dock.layer=DockLayer.attach(owner){view,target -> enabled() && drawPlate(view,target,dock)}
+                    dock.layer=DockLayer.attach(owner,{dock.target}){view,target -> enabled() && drawPlate(view,target,dock)}
                     owner.invalidate()
                 }}catch(t:Throwable){fail(t)}finally{dock.attaching=false}
             }
@@ -330,20 +403,26 @@ internal object DockMaterial {
         // A hidden horizontal row must not expose the native plate during unlock/launch.
         val next=geometry(hotseat)
         updatePresence(hotseat,dock,next!=null)
-        if(next==null && (!dock.presence.drawable || dock.target.isEmpty))
+        if(next==null && (!dock.presence.drawable || dock.target.isEmpty)){
+            // Nothing to show: the layer content is up to date with "empty".
+            dock.plateReady=true
             return rowAlpha(hotseat)==0f && NativeIconAccess.call(hotseat,"hasVerticalHotseat")!=true
+        }
         // Native spring translations already animate the row; a second animator lags behind it.
         if(next!=null){dock.target.set(next);dock.lastRowAlpha=rowAlpha(hotseat)}
         dock.rect.set(dock.target)
         val rect=Rect(dock.rect)
         val radius=radius(rect);val path=path(hotseat,rect,radius,dock)
         val saved=canvas.save()
+        val plateAlpha=(if(next!=null)rowAlpha(hotseat)else dock.lastRowAlpha)*dock.presence.fraction
         val drawn=try {
             val scale=.94f+.06f*dock.presence.fraction
             canvas.scale(scale,scale,rect.exactCenterX(),rect.exactCenterY())
-            dock.renderer.draw(canvas,hotseat,rect,path,radius,
-                (if(next!=null)rowAlpha(hotseat)else dock.lastRowAlpha)*dock.presence.fraction)
+            dock.renderer.draw(canvas,hotseat,rect,path,radius,plateAlpha)
         }finally{canvas.restoreToCount(saved)}
+        // A plate recorded while the row is still transparent is invisible:
+        // keep asking for frames until it is actually painted.
+        dock.plateReady=drawn && plateAlpha>0.01f
         if(drawn && !logged){logged=true;GlassLogger.i("Dock","Direct dock: bounds=$rect, radius=$radius, smooth=${path!=null}")}
         return drawn
     }

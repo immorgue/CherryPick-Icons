@@ -10,7 +10,15 @@ import de.robv.android.xposed.XposedHelpers
 /** Dock-specific, direct-resolution path rendering; no nested sampler RenderNode. */
 internal class DockRenderer {
     private val plate=RenderNode("CherryPick.dockPlate").apply {setUseCompositingLayer(true,null)}
-    private var key:List<Any?>?=null
+    // Primitive cache key: comparing it must not allocate on every frame.
+    private var keyWallpaper:Bitmap?=null
+    private var keyGeneration=0
+    private val keyRect=Rect()
+    private var keyRadius=Float.NaN
+    private var keySource:RectF?=null
+    private var keyStyle:GlassStyle?=null
+    private var keyPrefs=0
+    private var keyRevision=Long.MIN_VALUE
     private var lens:LiquidGlassShader?=null
     private var lastWallpaper:Bitmap?=null
     private val sampleClock=SampleFrameClock()
@@ -25,7 +33,10 @@ internal class DockRenderer {
     private var staticScreenWidth=0
     private var staticScreenHeight=0
     private val solid:Shader=LinearGradient(0f,0f,1f,0f,Color.WHITE,Color.WHITE,Shader.TileMode.CLAMP)
-    fun reset(){lastWallpaper=null;staticWallpaper=null;staticSource=null;sampledWallpaper=null;sampledSource=null;sampledStyle=null;key=null;plate.discardDisplayList()}
+    // A live wallpaper changes every frame; the plate may follow it at 30 Hz
+    // without the recorder rebuilding a full plate on each display frame.
+    private val plateClock=SampleFrameClock()
+    fun reset(){lastWallpaper=null;staticWallpaper=null;staticSource=null;sampledWallpaper=null;sampledSource=null;sampledStyle=null;keyWallpaper=null;keyGeneration=0;keyRect.setEmpty();keyRadius=Float.NaN;keySource=null;keyStyle=null;keyPrefs=0;keyRevision=Long.MIN_VALUE;plate.discardDisplayList()}
     fun draw(canvas:Canvas, view:View, rect:Rect, path:Path?, radius:Float, alpha:Float):Boolean {
         val style=DockSettings.style().copy(extendedLens=true)
         val w=rect.width();val h=rect.height()
@@ -72,10 +83,18 @@ internal class DockRenderer {
         }
         val shape=path ?: Path().apply {addRoundRect(RectF(rect),radius,radius,Path.Direction.CW)}
         if(canvas.isHardwareAccelerated){
-            val next=listOf(wallpaper,wallpaper?.generationId,Rect(rect),source,style,radius,
-                PrefsHelper.gpuEffects,PrefsHelper.gradientOpacity,PrefsHelper.iconStroke,PrefsHelper.strokeOpacity,
-                SurfaceMaterial.geometryRevision)
-            if(key!=next || !plate.hasDisplayList()){
+            val prefsKey=PrefsHelper.gpuEffects.hashCode()*31+PrefsHelper.gradientOpacity*7+
+                PrefsHelper.iconStroke.hashCode()*13+PrefsHelper.strokeOpacity*17
+            val generation=wallpaper?.generationId ?: 0
+            val structureChanged=keyRect!=rect || keyRadius!=radius || keyStyle!=style || keyPrefs!=prefsKey ||
+                keyRevision!=SurfaceMaterial.geometryRevision
+            val changed=keyWallpaper!==wallpaper || keyGeneration!=generation || keySource!=source || structureChanged
+            val liveWallpaper=WallpaperHelper.isLiveWallpaper(view.context)
+            val nowNs=System.nanoTime()
+            // Geometry/settings must never wait for a wallpaper FPS slot.
+            // Static content changes only on invalidation; apply that event now.
+            val due=structureChanged || !liveWallpaper || plateClock.remainingNs(nowNs,30)==0L
+            if((changed && due) || !plate.hasDisplayList()){
                 android.os.Trace.beginSection("CherryPick.dockRecord")
                 plate.setPosition(0,0,w,h)
                 val recording=plate.beginRecording(w,h)
@@ -83,7 +102,10 @@ internal class DockRenderer {
                     recording.translate(-rect.left.toFloat(),-rect.top.toFloat())
                     drawPlate(recording,rect,shape,radius,1f,wallpaper,source,style)
                 }finally{plate.endRecording();android.os.Trace.endSection()}
-                key=next
+                keyWallpaper=wallpaper;keyGeneration=generation;keyRect.set(rect);keyRadius=radius
+                keySource=source?.let(::RectF);keyStyle=style;keyPrefs=prefsKey
+                keyRevision=SurfaceMaterial.geometryRevision
+                plateClock.record(nowNs,if(liveWallpaper)30 else 1)
             }
             plate.alpha=alpha.coerceIn(0f,1f)
             val saved=canvas.save()

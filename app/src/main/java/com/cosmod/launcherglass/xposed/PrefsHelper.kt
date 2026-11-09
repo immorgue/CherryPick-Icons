@@ -63,6 +63,10 @@ object PrefsHelper {
     @Volatile var liquidDistortion=SettingsDefaults.integer(SettingsProvider.KEY_LIQUID_DISTORTION)
     val liquidGlass:Boolean get()=blurStyle==SettingsProvider.BLUR_STYLE_LIQUID && android.os.Build.VERSION.SDK_INT>=33
     @Volatile var liveFps: Int = SettingsDefaults.integer(SettingsProvider.KEY_LIVE_FPS)
+    /** Event-driven dock refresh and frame-aligned material sampling (developer comparison switch). */
+    @Volatile var dockEventDriven: Boolean = true
+    @Volatile var compactDockEffects=false
+    @Volatile var reuseStaticWallpaper=false
     @Volatile var idlePause: Boolean = SettingsDefaults.boolean(SettingsProvider.KEY_IDLE_PAUSE)
     @Volatile var iconStroke: Boolean = SettingsDefaults.boolean(SettingsProvider.KEY_ICON_STROKE)
     @Volatile var strokeOpacity: Int = SettingsDefaults.integer(SettingsProvider.KEY_STROKE_OPACITY)
@@ -174,6 +178,9 @@ object PrefsHelper {
             val newGpuEffects=!developer || bundle.getBoolean(SettingsProvider.KEY_GPU_EFFECTS,true)
             val newExperimentalLiquid=developer && bundle.getBoolean(SettingsProvider.KEY_EXPERIMENTAL_LIQUID,false)
             val newLimitClosingBlur=!developer || bundle.getBoolean(SettingsProvider.KEY_LIMIT_CLOSING_BLUR,true)
+            val newDockEventDriven=!developer || bundle.getBoolean(SettingsProvider.KEY_DOCK_EVENT_DRIVEN,true)
+            val newCompactDockEffects=developer && bundle.getBoolean(SettingsProvider.KEY_COMPACT_DOCK_EFFECTS,false)
+            val newReuseStaticWallpaper=developer && bundle.getBoolean(SettingsProvider.KEY_REUSE_STATIC_WALLPAPER,false)
             val opticsChanged=newExperimentalLiquid!=experimentalLiquid
             val backendChanged=newGpuEffects!=gpuEffects
             val newColorDepth=if(developer && android.os.Build.VERSION.SDK_INT>=33 && bundle.getBoolean(SettingsProvider.KEY_COLOR_DEPTH_ENABLED,false))bundle.getInt(SettingsProvider.KEY_COLOR_DEPTH_BITS,8).coerceIn(8,24)else 24
@@ -198,6 +205,7 @@ object PrefsHelper {
             val newDockAutoLength=bundle.getBoolean(SettingsProvider.KEY_DOCK_AUTO_LENGTH,SettingsDefaults.boolean(SettingsProvider.KEY_DOCK_AUTO_LENGTH))
             val dockChanged=newDockEnabled!=dockEnabled || newDockSide!=dockSidePadding || newDockVertical!=dockVerticalPadding || newDockRadius!=dockRadius ||
                 newDockAutoLength!=dockAutoLength
+            val dockEventDrivenChanged=newDockEventDriven!=dockEventDriven || newCompactDockEffects!=compactDockEffects
             val newPhotoWidgetWidth=bundle.getInt(SettingsProvider.KEY_PHOTO_WIDGET_LIQUID_WIDTH,SettingsDefaults.integer(SettingsProvider.KEY_PHOTO_WIDGET_LIQUID_WIDTH)).coerceIn(0,100)
             val newPhotoWidgetDistortion=bundle.getInt(SettingsProvider.KEY_PHOTO_WIDGET_LIQUID_DISTORTION,50).coerceIn(0,300)
             val widgetChanged=newPhotoWidgetBlur!=photoWidgetBlur || newPhotoWidgetOpacity!=photoWidgetOpacity || newPhotoWidgetTint!=photoWidgetTint ||
@@ -292,6 +300,9 @@ object PrefsHelper {
             gpuEffects=newGpuEffects
             experimentalLiquid=newExperimentalLiquid
             limitClosingBlur=newLimitClosingBlur
+            dockEventDriven=newDockEventDriven
+            compactDockEffects=newCompactDockEffects
+            reuseStaticWallpaper=newReuseStaticWallpaper
             bgOpacity = newBgOpacity
             blurEnabled = newBlurEnabled
             colorDepthBits=newColorDepth
@@ -361,7 +372,7 @@ object PrefsHelper {
             LiftedBackdrop.onSettingsChanged()
             MultiIconMaterialHook.onSettingsChanged()
             PhotoWidgetMaterial.onSettingsChanged()
-            if(dockChanged || dockSettingsChanged || materialChanged || masterChanged)DockMaterial.onSettingsChanged()
+            if(dockChanged || dockSettingsChanged || dockEventDrivenChanged || materialChanged || masterChanged)DockMaterial.onSettingsChanged()
             if(!enabled){
                 IconGlassHook.onModuleDisabled()
                 com.cosmod.launcherglass.util.LauncherWallpaperCapture.onModuleDisabled()

@@ -161,12 +161,23 @@ object WallpaperHelper {
 
     private var sourceRevision = 0L
 
+    /**
+     * Monotonic stamp of the wallpaper content. Surfaces that cache a
+     * wallpaper composite compare it instead of rebuilding every frame.
+     */
+    @Volatile private var wallpaperStamp = 0L
+    fun stamp(): Long = wallpaperStamp
+    @Synchronized fun sourceReady():Boolean = blurredWallpaper?.isRecycled==false && cachedRevision==sourceRevision
+
     private var cachedRevision = -1L
 
     private var retryAfterMs = 0L
 
     private var launcherWallpaper: WeakReference<Bitmap>? = null
     private var launcherWallpaperGeneration = 0
+    private var launcherWallpaperWidth = 0
+    private var launcherWallpaperHeight = 0
+    private var launcherStaticWallpaperId = -1
 
     @Volatile private var systemSnapshot: Bitmap? = null
 
@@ -318,6 +329,8 @@ object WallpaperHelper {
 
         sourceRevision++
 
+        wallpaperStamp++
+
         retryAfterMs = 0L
 
         appContext?.let { requestLoad(it) }
@@ -333,6 +346,7 @@ object WallpaperHelper {
         liveWallpaper=null
 
         launcherWallpaper = null
+        launcherStaticWallpaperId = -1
 
         systemSnapshot = null
 
@@ -420,8 +434,25 @@ object WallpaperHelper {
         // Its content, not the callback count, determines a new blur revision.
         if (launcherWallpaper?.get() === bitmap && launcherWallpaperGeneration == bitmap.generationId) return
 
+        // Resume after an app hands back the same wallpaper as a new wrapper.
+        // Re-blurring identical content is a full-screen burst in the middle of
+        // the return animation, so only a real content change invalidates.
+        val staticId=if(PrefsHelper.reuseStaticWallpaper)try {
+            appContext?.takeIf {!isLiveWallpaper(it) && !hasSystemWallpaperEffect(it)}?.let {
+                WallpaperManager.getInstance(it).getWallpaperId(WallpaperManager.FLAG_SYSTEM)
+            } ?: -1
+        }catch(_:Throwable){-1}else -1
+        val sameContent = if(PrefsHelper.reuseStaticWallpaper)
+            staticId>=0 && staticId==launcherStaticWallpaperId && launcherWallpaper?.get()!=null
+        else launcherWallpaperGeneration == bitmap.generationId &&
+            launcherWallpaperWidth == bitmap.width && launcherWallpaperHeight == bitmap.height &&
+            launcherWallpaper?.get() != null
         launcherWallpaper = WeakReference(bitmap)
         launcherWallpaperGeneration = bitmap.generationId
+        launcherWallpaperWidth = bitmap.width
+        launcherWallpaperHeight = bitmap.height
+        launcherStaticWallpaperId = staticId
+        if (sameContent) return
 
         // Resume may deliver a new wrapper of the same static wallpaper.
         // Its moving capture is useful for icons, but does not change the dock.
@@ -512,6 +543,7 @@ object WallpaperHelper {
 
                         cachedRevision = revision
 
+                        wallpaperStamp++
                         published = true
 
                     } else {

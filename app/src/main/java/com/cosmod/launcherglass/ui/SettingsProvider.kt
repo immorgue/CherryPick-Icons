@@ -63,6 +63,9 @@ class SettingsProvider : ContentProvider() {
                 bundle.putBoolean(KEY_GPU_EFFECTS,prefs.getBoolean(KEY_GPU_EFFECTS,true))
                 bundle.putBoolean(KEY_EXPERIMENTAL_LIQUID,prefs.getBoolean(KEY_EXPERIMENTAL_LIQUID,false))
                 bundle.putBoolean(KEY_LIMIT_CLOSING_BLUR,prefs.getBoolean(KEY_LIMIT_CLOSING_BLUR,true))
+                bundle.putBoolean(KEY_DOCK_EVENT_DRIVEN,prefs.getBoolean(KEY_DOCK_EVENT_DRIVEN,true))
+                bundle.putBoolean(KEY_COMPACT_DOCK_EFFECTS,prefs.getBoolean(KEY_COMPACT_DOCK_EFFECTS,false))
+                bundle.putBoolean(KEY_REUSE_STATIC_WALLPAPER,prefs.getBoolean(KEY_REUSE_STATIC_WALLPAPER,false))
                 for(scope in ScopedSettingsKeys.all){
                     bundle.putBoolean(scope.own,prefs.getBoolean(scope.own,false))
                     for(base in scope.integers){
@@ -146,6 +149,9 @@ class SettingsProvider : ContentProvider() {
                     if(b.containsKey(KEY_GPU_EFFECTS))editor.putBoolean(KEY_GPU_EFFECTS,b.getBoolean(KEY_GPU_EFFECTS))
                     if(b.containsKey(KEY_EXPERIMENTAL_LIQUID))editor.putBoolean(KEY_EXPERIMENTAL_LIQUID,b.getBoolean(KEY_EXPERIMENTAL_LIQUID))
                     if(b.containsKey(KEY_LIMIT_CLOSING_BLUR))editor.putBoolean(KEY_LIMIT_CLOSING_BLUR,b.getBoolean(KEY_LIMIT_CLOSING_BLUR))
+                    if(b.containsKey(KEY_DOCK_EVENT_DRIVEN))editor.putBoolean(KEY_DOCK_EVENT_DRIVEN,b.getBoolean(KEY_DOCK_EVENT_DRIVEN))
+                    if(b.containsKey(KEY_COMPACT_DOCK_EFFECTS))editor.putBoolean(KEY_COMPACT_DOCK_EFFECTS,b.getBoolean(KEY_COMPACT_DOCK_EFFECTS))
+                    if(b.containsKey(KEY_REUSE_STATIC_WALLPAPER))editor.putBoolean(KEY_REUSE_STATIC_WALLPAPER,b.getBoolean(KEY_REUSE_STATIC_WALLPAPER))
                     for(scope in ScopedSettingsKeys.all){
                         if(b.containsKey(scope.own))editor.putBoolean(scope.own,b.getBoolean(scope.own))
                         for(base in scope.integers){val key=scope.key(base);if(b.containsKey(key))editor.putInt(key,b.getInt(key))}
@@ -269,6 +275,10 @@ class SettingsProvider : ContentProvider() {
         const val KEY_GPU_EFFECTS = "gpu_effects"
         const val KEY_EXPERIMENTAL_LIQUID = "experimental_liquid_optics"
         const val KEY_LIMIT_CLOSING_BLUR = "limit_closing_blur_fps"
+        /** Developer: event-driven dock refresh and frame-aligned material sampling. */
+        const val KEY_DOCK_EVENT_DRIVEN = "dock_event_driven"
+        const val KEY_COMPACT_DOCK_EFFECTS = "experimental_compact_dock_effects"
+        const val KEY_REUSE_STATIC_WALLPAPER = "experimental_reuse_static_wallpaper"
         const val KEY_BLUR_TONE_ENABLED = "blur_tone_enabled"
         const val KEY_PHOTO_WIDGET_BLUR = "photo_widget_blur"
         const val KEY_COLOR_DEPTH_ENABLED = "blur_color_depth_enabled"

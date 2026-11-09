@@ -66,6 +66,7 @@ object IconGlassHook {
     private val liveRoots=WeakHashMap<View,ViewTreeObserver.OnPreDrawListener>()
     // Passive counters only: never create a timer or a frame for diagnostics.
     private var idleSince=0L
+    private var lastRecoverMs=0L
     private var idlePreDraws=0
     private var idleInvalidations=0
     private var idleRestorations=0
@@ -98,13 +99,18 @@ object IconGlassHook {
             val current=weak.get()
             var recovered=0
             if(current!=null && PrefsHelper.enabled && PrefsHelper.blurEnabled) {
-                DockMaterial.prepareIconWallpaper(WallpaperHelper.getBlurredWallpaper(appContext))
+                DockMaterial.onFrame()
                 ParentBackdrop.beginFrame()
                 IconMaterialRenderer.beginFrame()
                 // OEM trim/snapshot teardown also discards nested nodes in
                 // static mode, sometimes before the resume callback arrives.
                 // Restore those lists without changing the crop or FPS clock.
-                recovered=recoverDiscardedIcons(current)
+                // The scan walks every registered icon, so it cannot run at the
+                // display refresh rate. Motion needs a fast cadence, a settled
+                // screen only a periodic sweep.
+                val nowMs=android.os.SystemClock.uptimeMillis()
+                val interval=if(!PrefsHelper.dockEventDriven)0L else if(LiveBlurEngine.hasRecentMotion)120L else 500L
+                if(nowMs-lastRecoverMs>=interval){lastRecoverMs=nowMs;recovered=recoverDiscardedIcons(current)}
                 // Lifted backdrops follow this frame's final DragView transform.
                 LiftedBackdrop.prepare()
                 IconMaterialRenderer.updateLifted(current)
@@ -677,6 +683,7 @@ object IconGlassHook {
             "LiftedBackdrop" to {LiftedBackdrop.install(loader)},
             "MultiIcons" to {MultiIconMaterialHook.install(loader)},
             "Dock" to {DockMaterial.install(loader)},
+            "FrameJank" to {FrameJank.install(loader)},
             "Transition" to {TransitionCapture.install(loader)},
             "ForeignDraw" to {ForeignDraw.install(loader)},
             "PhotoWidget" to {PhotoWidgetMaterial.install(loader)}

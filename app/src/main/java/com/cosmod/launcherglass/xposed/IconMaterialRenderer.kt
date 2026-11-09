@@ -161,7 +161,10 @@ object IconMaterialRenderer {
         val reference=WeakReference(root)
         val refresh=Runnable {finishSampleRefresh(reference)}
         pendingFrames[root]=refresh
-        mainHandler.postDelayed(refresh,((remainingNs+999_999L)/1_000_000L).coerceAtLeast(1L))
+        // While the workspace moves, the next frame has to carry the new crop.
+        // A timer would add a whole display frame of visible lag.
+        if(PrefsHelper.dockEventDriven && com.cosmod.launcherglass.util.LiveBlurEngine.hasRecentMotion) root.postOnAnimation(refresh)
+        else mainHandler.postDelayed(refresh,((remainingNs+999_999L)/1_000_000L).coerceAtLeast(1L))
     }
     private val outputPaint = Paint(Paint.FILTER_BITMAP_FLAG)
     private var draws = 0
@@ -251,10 +254,11 @@ object IconMaterialRenderer {
         for(sampler in entries.values)if(!sampler.node.hasDisplayList() || sampler.plateNode?.hasDisplayList()==false)return true
         return false
     }
-    private fun samplerEffect(sampler:Sampler,wallpaper:Bitmap,source:RectF,nowNs:Long=System.nanoTime(),view:View?=null,parent:ParentBackdrop.Sample?=null):Boolean {
+    private fun samplerEffect(sampler:Sampler,wallpaper:Bitmap,rawSource:RectF,nowNs:Long=System.nanoTime(),view:View?=null,parent:ParentBackdrop.Sample?=null):Boolean {
         val style=sampler.style
         val filter=style.filter
         val finishKey=MaterialFinish.key()
+        val source=rawSource
         if(sampler.wallpaper===wallpaper && sampler.source==source && sampler.filter===filter && sampler.appliedStyle==style && sampler.finishKey==finishKey && sampler.backdropRevision==(parent?.revision ?: 0L))return true
         // These nodes belong to visible workspace views, not to the opening
         // surface snapshot. Follow the OEM view transform even while launching:

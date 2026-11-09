@@ -86,6 +86,12 @@
     <string name="ui_report_creating">Creating ZIP report…</string>
     <string name="ui_limit_closing_blur">Closing icon blur: 30 FPS limit</string>
     <string name="ui_limit_closing_blur_hint">Limits blur updates while an icon or multi-icon folder flies back to the desktop. Turn off to use the global blur FPS setting. The icon motion keeps the launcher’s native frame rate. Outside developer mode the 30 FPS limit applies.</string>
+    <string name="ui_dock_event_driven">Dock and blur: event-driven refresh</string>
+    <string name="ui_compact_dock_effects">Dock: compact effects buffer (experimental)</string>
+    <string name="ui_compact_dock_effects_hint">Processes dock effects in the lower screen region instead of a full-screen buffer, with padding for motion and blur. Compare app closing smoothness; turn off if the dock clips during animation. Developer mode only.</string>
+    <string name="ui_reuse_static_wallpaper">Reuse static wallpaper (experimental)</string>
+    <string name="ui_reuse_static_wallpaper_hint">Checks the system wallpaper ID on app return and reuses the processed static background. Wallpaper and processing settings changes still invalidate the cache. Not applied to live wallpapers or system wallpaper effects. Developer mode only.</string>
+    <string name="ui_dock_event_driven_hint">Refreshes the dock plate and the icon blur only when something actually changed, and lands deferred blur samples on the next frame instead of a timer. Turn off to compare with the previous per-frame behaviour. Outside developer mode this stays on.</string>
     <string name="ui_support_project">Support the project</string>
     <string name="ui_support_project_button">Support\nthe project</string>
     <string name="ui_author_profile">by @immorgue — Telegram profile</string>
