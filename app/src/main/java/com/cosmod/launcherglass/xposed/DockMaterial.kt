@@ -79,13 +79,13 @@ internal object DockMaterial {
                 var x=0f;var y=0f;var node:View?=hotseat
                 while(node!=null){
                     val parent=node.parent as? View
-                    x+=node.left-(parent?.scrollX ?: 0);y+=node.top-(parent?.scrollY ?: 0)
+                    x+=node.left;y+=node.top
                     node=parent
                 }
                 val radius=radius(rect)
                 val live=WallpaperHelper.isLiveWallpaper(hotseat.context)
                 val key=listOf(if(live)wallpaper else null,wallpaper.width,wallpaper.height,
-                    WallpaperHelper.getDockWallpaper(hotseat.context),Rect(rect),radius,x,y,scale,offset,
+                    WallpaperHelper.getDockWallpaper(hotseat.context),Rect(rect),radius,x,y,scale,if(live)offset else 0f,
                     DockSettings.style(),PrefsHelper.gradientOpacity,PrefsHelper.iconStroke,PrefsHelper.strokeOpacity,SurfaceMaterial.geometryRevision)
                 if(dock.iconKey==key && dock.iconWallpaper?.isRecycled==false){dock.iconSource=wallpaper;continue}
                 android.os.Trace.beginSection("CherryPick.dockIconBackdrop")
@@ -101,7 +101,10 @@ internal object DockMaterial {
                 val image=try {
                     XposedHelpers.callStaticMethod(HardwareRenderer::class.java,"createHardwareBitmap",recording,wallpaper.width,wallpaper.height) as? Bitmap
                 }finally{recording.discardDisplayList()}
-                if(image!=null){dock.iconWallpaper=image;dock.iconSource=wallpaper;dock.iconKey=key}
+                if(image!=null){
+                    if(!live)BackdropCoordinates.register(image,offset)
+                    dock.iconWallpaper=image;dock.iconSource=wallpaper;dock.iconKey=key
+                }
                 }finally{android.os.Trace.endSection()}
             }catch(t:Throwable){fail(t)}
         }
@@ -230,7 +233,8 @@ internal object DockMaterial {
         if(Looper.myLooper()!==Looper.getMainLooper()){android.os.Handler(Looper.getMainLooper()).post {onSettingsChanged()};return}
         for(view in docks.keys.toList()){
             docks[view]?.apply {
-                rect.setEmpty();target.setEmpty();renderer.reset();signature=null
+                rect.setEmpty();target.setEmpty();renderer.reset();iconRenderer.reset();signature=null
+                iconKey=null;iconSource=null
                 layer?.apply {active=enabled();sync();invalidate()}
                 if(!enabled()){
                     listener?.let {if(observing?.isAlive==true)observing?.removeOnPreDrawListener(it)}

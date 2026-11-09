@@ -889,7 +889,7 @@ object IconMaterialRenderer {
 internal object WallpaperFootprint {
     fun source(bitmap:Bitmap,screenW:Int,screenH:Int,rect:RectF):RectF {
         val scale=maxOf(screenW.toFloat()/bitmap.width,screenH.toFloat()/bitmap.height)
-        val offset=(bitmap.width-screenW/scale).coerceAtLeast(0f)*com.cosmod.launcherglass.util.LiveBlurEngine.wallpaperScrollRatio
+        val offset=BackdropCoordinates.offset(bitmap) ?: ((bitmap.width-screenW/scale).coerceAtLeast(0f)*com.cosmod.launcherglass.util.LiveBlurEngine.wallpaperScrollRatio)
         // Preserve the complete footprint while the View crosses the viewport.
         // Cropping the source and mapping it back onto the full View stretches
         // the remaining pixels. BitmapShader.CLAMP handles off-texture samples.

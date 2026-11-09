@@ -407,12 +407,7 @@ object IconGlassHook {
     }
     private fun sourceRect(bitmap:Bitmap,a:Anchor?,bounds:Rect):RectF {
         if(a==null)return RectF(0f,0f,bitmap.width.toFloat(),bitmap.height.toFloat())
-        val scale=maxOf(a.screenW.toFloat()/bitmap.width,a.screenH.toFloat()/bitmap.height)
-        val visibleWidth=a.screenW/scale
-        val offset=(bitmap.width-visibleWidth).coerceAtLeast(0f)*LiveBlurEngine.wallpaperScrollRatio
-        val x=offset+a.x/scale
-        val y=a.y/scale
-        return RectF(x,y,x+a.iconW/scale,y+a.iconH/scale)
+        return WallpaperFootprint.source(bitmap,a.screenW,a.screenH,RectF(a.x,a.y,a.x+a.iconW,a.y+a.iconH))
     }
     private fun render(canvas:Canvas,bounds:Rect,parts:ProcessedIcon,a:Anchor?,wallpaper:Bitmap?,binding:IconMaterialRenderer.Binding?=null) {
         // The native surface can be screen-wide. Reuse the desktop material
