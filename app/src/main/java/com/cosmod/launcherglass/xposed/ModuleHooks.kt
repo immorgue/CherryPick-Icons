@@ -18,6 +18,9 @@ internal object ModuleHooks {
         private set
     fun hookMethod(method:Method,callback:XC_MethodHook)=hookMember(method,callback)
     @Synchronized fun hookMember(method:Member,callback:XC_MethodHook){
+        // Abstract launcher APIs have no implementation to intercept. Concrete
+        // OEM controllers are registered independently by the callers.
+        if(method is Method && java.lang.reflect.Modifier.isAbstract(method.modifiers))return
         val entry=Entry(method,callback)
         if(active)update(entry,true)
         entries.add(entry)

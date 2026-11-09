@@ -13,7 +13,9 @@ import java.lang.ref.WeakReference
 internal object MultiIconMaterialHook {
     private fun enabled()=PrefsHelper.enabled && PrefsHelper.blurEnabled
     internal data class Contour(val bounds:Rect,val radius:Float,val spanX:Int,val spanY:Int) {
-        fun path(view:View)=Path().takeIf {NativeFolderPath.create(view,it,RectF(bounds),radius,spanX,spanY)}
+        fun path(view:View)=Path().takeIf {NativeFolderPath.create(view,it,RectF(bounds),radius,spanX,spanY)}?.also {
+            NativeFolderPath.intersectFill(it,grids[view]?.native,bounds)
+        }
     }
     internal fun contour(view:View):Contour? {
         if(!view.javaClass.name.endsWith(".GridRecyclerView"))return null
@@ -49,6 +51,7 @@ internal object MultiIconMaterialHook {
             if(previous!=rect || radius!=nativeRadius || spans!=sx*100+sy || geometry!=SurfaceMaterial.geometryRevision){
                 clip.reset()
                 if(!NativeFolderPath.create(view,clip,RectF(rect),nativeRadius,sx,sy)){native.draw(canvas);return}
+                NativeFolderPath.intersectFill(clip,native,rect)
                 previous.set(rect);radius=nativeRadius;spans=sx*100+sy;geometry=SurfaceMaterial.geometryRevision
                 // The OEM contour is a function of size, radius and spans only.
                 fingerprint=SurfaceMaterial.descriptor("grid",sx,sy)

@@ -67,6 +67,7 @@ object PrefsHelper {
     @Volatile var dockEventDriven: Boolean = true
     @Volatile var compactDockEffects=false
     @Volatile var reuseStaticWallpaper=false
+    @Volatile var sceneDragBackdrop=false
     @Volatile var idlePause: Boolean = SettingsDefaults.boolean(SettingsProvider.KEY_IDLE_PAUSE)
     @Volatile var iconStroke: Boolean = SettingsDefaults.boolean(SettingsProvider.KEY_ICON_STROKE)
     @Volatile var strokeOpacity: Int = SettingsDefaults.integer(SettingsProvider.KEY_STROKE_OPACITY)
@@ -303,6 +304,7 @@ object PrefsHelper {
             dockEventDriven=newDockEventDriven
             compactDockEffects=newCompactDockEffects
             reuseStaticWallpaper=newReuseStaticWallpaper
+            sceneDragBackdrop=developer && bundle.getBoolean(SettingsProvider.KEY_SCENE_DRAG_BACKDROP,false)
             bgOpacity = newBgOpacity
             blurEnabled = newBlurEnabled
             colorDepthBits=newColorDepth

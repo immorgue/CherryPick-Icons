@@ -51,6 +51,14 @@ public class ParentBackdropCheck {
    record.invoke(singleton,background,folderIdentity,new RectF(0,0,200,200),mask,35f,appearance,false);parent.getMethod("beginFrame").invoke(singleton);
    Object folderSample=resolve.invoke(singleton,content,icon,wallpaper);check(folderSample!=null,"Sibling folder background unavailable: "+name);Bitmap folderPixels=render((Shader)folderSample.getClass().getMethod("getShader").invoke(folderSample));check(Color.red(folderPixels.getPixel(100,100))>245,"Folder child ignored sibling plate");folderPixels.recycle();
    check(resolve.invoke(singleton,folder,icon,wallpaper)!=null,"Inline miniature cannot see FolderIcon background");
-  }System.out.println("PASS: frosted/liquid parent visible under ordinary child, rounded contour preserved, transforms follow owner, self-sampling excluded");System.exit(0);
+  }
+  Class<?> contours=cls("xposed.NativeFolderPath");Object contourObject=obj(contours);
+  Method fill=contours.getMethod("fill",Drawable.class,Rect.class);
+  check(fill.invoke(contourObject,new ColorDrawable(Color.RED),new Rect(0,0,200,200))==null,"Rectangular paint must not override the native rounded clip");
+  GradientDrawable rounded=new GradientDrawable();rounded.setColor(Color.RED);rounded.setCornerRadius(24);rounded.setBounds(7,9,50,60);
+  Path filled=(Path)fill.invoke(contourObject,rounded,new Rect(10,20,210,220));check(filled!=null&&!filled.isEmpty(),"Rounded native outline missing");
+  check(rounded.getBounds().equals(new Rect(7,9,50,60)),"Native drawable bounds were mutated");
+  System.out.println("PASS: rectangular paint rejected as folder contour; rounded native outline retained; drawable bounds restored");
+  System.out.println("PASS: frosted/liquid parent visible under ordinary child, rounded contour preserved, transforms follow owner, self-sampling excluded");System.exit(0);
  }
 }

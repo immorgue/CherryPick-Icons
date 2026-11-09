@@ -54,12 +54,12 @@ internal object ParentBackdrop {
         if(old!=null && old.bounds==bounds && old.mask===mask && old.radius==radius && old.style==style && old.decorate==decorate)return
         entries[identity]=Plate(WeakReference(identity),WeakReference(view),RectF(bounds),mask,radius,style,decorate,++sequence)
     }
-    fun resolve(view:View,identity:Drawable,wallpaper:Bitmap):Sample? {
+    @JvmOverloads fun resolve(view:View,identity:Drawable,wallpaper:Bitmap,includeHidden:Boolean=false):Sample? {
         if(failed || !PrefsHelper.enabled || !PrefsHelper.blurEnabled)return null
         var owner:View?=view
         repeat(16) {
             val current=owner ?: return null
-            val plate=plates[current]?.values?.filter {it.owner.get()?.let {v -> v.visibility==View.VISIBLE && v.alpha>0f}==true}?.maxByOrNull {it.order}
+            val plate=plates[current]?.values?.filter {it.owner.get()?.let {v -> includeHidden || (v.visibility==View.VISIBLE && v.alpha>0f)}==true}?.maxByOrNull {it.order}
             if(plate!=null && plate.identity.get()!==identity) {
                 return try {
                     val source=plate.owner.get() ?: return null

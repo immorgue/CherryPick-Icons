@@ -1,0 +1,134 @@
+[
+  {
+    "file": "LauncherCOLOR17GLOBAL.apk",
+    "sha256": "22fcfa154961d7494bf641874a6e9c92b90373cb595ae7b68061312f742e0388",
+    "families": {
+      "live_flight": true,
+      "surface_handoff": true,
+      "folder_paging": true,
+      "multi_icons": true,
+      "dock": true,
+      "dock_visibility": true,
+      "folder_backdrops": true,
+      "folder_geometry": true,
+      "snapshots": true,
+      "desktop_editor": true,
+      "desktop_geometry": true,
+      "icon_size": true,
+      "icon_theme": true
+    },
+    "errors": [],
+    "desktop_api": "17.3",
+    "surface": "renderer"
+  },
+  {
+    "file": "System Launcher_16.6.13RUI16CHINA.apk",
+    "sha256": "6cc1fa1ba0eec6871ec95ebdd210703af25c29146c493cb4992a16682e2f6b60",
+    "families": {
+      "live_flight": true,
+      "surface_handoff": true,
+      "folder_paging": true,
+      "multi_icons": true,
+      "dock": true,
+      "dock_visibility": true,
+      "folder_backdrops": true,
+      "folder_geometry": true,
+      "snapshots": true,
+      "desktop_editor": true,
+      "desktop_geometry": true,
+      "icon_size": true,
+      "icon_theme": true
+    },
+    "errors": [],
+    "desktop_api": "16 named",
+    "surface": "legacy"
+  },
+  {
+    "file": "System Launcher_16.6.20OXYGEN16.apk",
+    "sha256": "328d469b19c6c5f82633b2947fcebde86411ac5b2c8f8626b83ef9e1c208ec46",
+    "families": {
+      "live_flight": true,
+      "surface_handoff": true,
+      "folder_paging": true,
+      "multi_icons": true,
+      "dock": true,
+      "dock_visibility": true,
+      "folder_backdrops": true,
+      "folder_geometry": true,
+      "snapshots": true,
+      "desktop_editor": true,
+      "desktop_geometry": true,
+      "icon_size": true,
+      "icon_theme": true
+    },
+    "errors": [],
+    "desktop_api": "16 named",
+    "surface": "legacy"
+  },
+  {
+    "file": "System Launcher_17.3.9COLOR17CHINA.apk",
+    "sha256": "e7adcf4059007da7afe3b3a28801869dda82a14ea7961f8a6b762e94e92917b9",
+    "families": {
+      "live_flight": true,
+      "surface_handoff": true,
+      "folder_paging": true,
+      "multi_icons": true,
+      "dock": true,
+      "dock_visibility": true,
+      "folder_backdrops": true,
+      "folder_geometry": true,
+      "snapshots": true,
+      "desktop_editor": true,
+      "desktop_geometry": true,
+      "icon_size": true,
+      "icon_theme": true
+    },
+    "errors": [],
+    "desktop_api": "17.3",
+    "surface": "renderer"
+  },
+  {
+    "file": "System Launcher_17.5.4OXYGEN17.apk",
+    "sha256": "07f0252c4a001144585fd51156d74da9ed84316a524d0f0d217b763c2acfc0e2",
+    "families": {
+      "live_flight": true,
+      "surface_handoff": true,
+      "folder_paging": true,
+      "multi_icons": true,
+      "dock": true,
+      "dock_visibility": true,
+      "folder_backdrops": true,
+      "folder_geometry": true,
+      "snapshots": true,
+      "desktop_editor": true,
+      "desktop_geometry": true,
+      "icon_size": true,
+      "icon_theme": true
+    },
+    "errors": [],
+    "desktop_api": "17.5 compact",
+    "surface": "renderer"
+  },
+  {
+    "file": "System_Launcher-17.5.4(170050004)LATEST17CHINA.apk",
+    "sha256": "07f0252c4a001144585fd51156d74da9ed84316a524d0f0d217b763c2acfc0e2",
+    "families": {
+      "live_flight": true,
+      "surface_handoff": true,
+      "folder_paging": true,
+      "multi_icons": true,
+      "dock": true,
+      "dock_visibility": true,
+      "folder_backdrops": true,
+      "folder_geometry": true,
+      "snapshots": true,
+      "desktop_editor": true,
+      "desktop_geometry": true,
+      "icon_size": true,
+      "icon_theme": true
+    },
+    "errors": [],
+    "desktop_api": "17.5 compact",
+    "surface": "renderer"
+  }
+]

@@ -33,6 +33,17 @@ class SettingsProvider : ContentProvider() {
     override fun call(method: String, arg: String?, extras: Bundle?): Bundle {
         val bundle = Bundle()
         when (method) {
+            METHOD_WALLPAPER_CHANGED -> {
+                enforceCaller(allowLauncher=true)
+                val identity=extras?.getString("identity") ?: return bundle
+                val label=extras.getString("label") ?: identity
+                val current=try {ThemeCatalog.load(context!!).firstOrNull {it.current && it.source=="oplus"}}catch(_:Throwable){null}
+                val restored=WallpaperProfiles.switchTo(context!!,prefs,
+                    current?.profileKey ?: identity,
+                    current?.let {"Theme #${it.id}"} ?: label)
+                bundle.putBoolean("restored",restored)
+                context!!.contentResolver.notifyChange(CONTENT_URI,null)
+            }
             METHOD_OPEN_DESKTOP -> {
                 enforceCaller(allowLauncher=false)
                 bundle.putBoolean("pending",desktopRequest(false))
@@ -66,6 +77,7 @@ class SettingsProvider : ContentProvider() {
                 bundle.putBoolean(KEY_DOCK_EVENT_DRIVEN,prefs.getBoolean(KEY_DOCK_EVENT_DRIVEN,true))
                 bundle.putBoolean(KEY_COMPACT_DOCK_EFFECTS,prefs.getBoolean(KEY_COMPACT_DOCK_EFFECTS,false))
                 bundle.putBoolean(KEY_REUSE_STATIC_WALLPAPER,prefs.getBoolean(KEY_REUSE_STATIC_WALLPAPER,false))
+                bundle.putBoolean(KEY_SCENE_DRAG_BACKDROP,prefs.getBoolean(KEY_SCENE_DRAG_BACKDROP,false))
                 for(scope in ScopedSettingsKeys.all){
                     bundle.putBoolean(scope.own,prefs.getBoolean(scope.own,false))
                     for(base in scope.integers){
@@ -152,6 +164,7 @@ class SettingsProvider : ContentProvider() {
                     if(b.containsKey(KEY_DOCK_EVENT_DRIVEN))editor.putBoolean(KEY_DOCK_EVENT_DRIVEN,b.getBoolean(KEY_DOCK_EVENT_DRIVEN))
                     if(b.containsKey(KEY_COMPACT_DOCK_EFFECTS))editor.putBoolean(KEY_COMPACT_DOCK_EFFECTS,b.getBoolean(KEY_COMPACT_DOCK_EFFECTS))
                     if(b.containsKey(KEY_REUSE_STATIC_WALLPAPER))editor.putBoolean(KEY_REUSE_STATIC_WALLPAPER,b.getBoolean(KEY_REUSE_STATIC_WALLPAPER))
+                    if(b.containsKey(KEY_SCENE_DRAG_BACKDROP))editor.putBoolean(KEY_SCENE_DRAG_BACKDROP,b.getBoolean(KEY_SCENE_DRAG_BACKDROP))
                     for(scope in ScopedSettingsKeys.all){
                         if(b.containsKey(scope.own))editor.putBoolean(scope.own,b.getBoolean(scope.own))
                         for(base in scope.integers){val key=scope.key(base);if(b.containsKey(key))editor.putInt(key,b.getInt(key))}
@@ -250,6 +263,8 @@ class SettingsProvider : ContentProvider() {
         const val METHOD_OPEN_DESKTOP = "openDesktopDesigner"
         const val METHOD_CONSUME_DESKTOP = "consumeDesktopDesigner"
         const val METHOD_SET = "set"
+        const val METHOD_WALLPAPER_CHANGED="wallpaperChanged"
+        const val KEY_SCENE_DRAG_BACKDROP="experimental_scene_drag_backdrop"
 
         const val KEY_LIGHT_HUE = "color_light_hue"
         const val KEY_LIGHT_SATURATION = "color_light_saturation"

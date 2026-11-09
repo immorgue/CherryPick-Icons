@@ -60,7 +60,7 @@ object IconMaterialRenderer {
      * [foreign]: an OEM decoration (edit-mode select dot) records this element
      * again into its own node; [local] is then relative to that node.
      */
-    data class Binding(val view:View,val drawable:Drawable,val local:RectF,val screenW:Int,val screenH:Int,val mini:Boolean=false,val alpha:Int=255,val lift:Boolean=true,val foreign:Boolean=false)
+    data class Binding(val view:View,val drawable:Drawable,val local:RectF,val screenW:Int,val screenH:Int,val mini:Boolean=false,val alpha:Int=255,val lift:Boolean=true,val foreign:Boolean=false,val origin:View?=DragPreviewMaterial.sourceContext())
     private class Sampler(val node:RenderNode,var material:Material,var local:RectF,var screenW:Int,var screenH:Int,var style:GlassStyle){
         val world=Matrix()
         var worldValid=false
@@ -77,6 +77,7 @@ object IconMaterialRenderer {
         var finishKey=-1
         var backdropRevision=0L
         var lift:Lift?=null
+        var origin:WeakReference<View>?=null
         // Frame serials (see beginFrame) of creation and of the latest own draw.
         var created=0L
         var bound=0L
@@ -304,10 +305,11 @@ object IconMaterialRenderer {
         var folderImage:Bitmap?=null
         for((drawable,sampler) in entries){
             restored=restoreSample(sampler) || restored
+            val scope=sampler.origin?.get() ?: view
             val image=if(sampler.style.folder){
                 folderImage ?: (com.cosmod.launcherglass.util.WallpaperHelper.getFolderWallpaper(view.context) ?: wallpaper).also {folderImage=it}
-            }else DockMaterial.iconWallpaper(view,wallpaper)
-            val parent=ParentBackdrop.resolve(view,drawable,image)
+            }else DockMaterial.iconWallpaper(scope,wallpaper)
+            val parent=ParentBackdrop.resolve(scope,drawable,image,includeHidden=sampler.origin?.get()!=null)
             if(sampler.worldValid && sampler.world==world && sampler.scroll==scroll && sampler.wallpaper===image && sampler.appliedStyle==sampler.style && sampler.finishKey==MaterialFinish.key() && sampler.backdropRevision==(parent?.revision ?: 0L))continue
             val rect=RectF(sampler.local);world.mapRect(rect)
             if(samplerEffect(sampler,image,WallpaperFootprint.source(image,sampler.screenW,sampler.screenH,rect),nowNs,view,parent)){
@@ -455,6 +457,9 @@ object IconMaterialRenderer {
                         sampler.source=null;sampler.worldValid=false
                     }
                     sampler.style=style;sampler.plateNode=depthNode;sampler.mini=binding.mini;sampler.bound=frameSerial
+                    if(sampler.origin?.get()!==binding.origin){
+                        sampler.origin=binding.origin?.let {WeakReference(it)};sampler.worldValid=false
+                    }
                     ensureContents(sampler)
                     val rect=RectF(binding.local)
                     val world=Matrix()
@@ -465,9 +470,10 @@ object IconMaterialRenderer {
                         // An own draw can change the crop after pre-draw. Do not
                         // let the next pre-draw trust an older world stamp.
                         sampler.worldValid=false
-                        val image=DockMaterial.iconWallpaper(binding.view,wallpaper)
+                        val scope=binding.origin ?: binding.view
+                        val image=DockMaterial.iconWallpaper(scope,wallpaper)
                         samplerEffect(sampler,image,WallpaperFootprint.source(image,binding.screenW,binding.screenH,rect),view=binding.view,
-                            parent=ParentBackdrop.resolve(binding.view,binding.drawable,image))
+                            parent=ParentBackdrop.resolve(scope,binding.drawable,image,includeHidden=binding.origin!=null))
                     }
                     plate.drawRenderNode(liftNode(sampler,binding) ?: sampler.node)
                 }else{

@@ -49,6 +49,18 @@ def verify(d):
   field('folder_backdrops',p+'folder/OplusFolder;',n,'Landroid/widget/ImageView;')
  method('folder_backdrops',p+'folder/OplusFolder;','onFinishInflate','()V',declared=True)
  method('folder_backdrops',p+'folder/FolderRoundImageView;','onDraw','(Landroid/graphics/Canvas;)V',declared=True)
+ # Fill and optical stroke can have different corner radii. Never substitute
+ # GradientDrawableWrapper.mStrokePath for the normal folder fill contour.
+ field('folder_geometry',p+'folder/big/SmoothRoundDrawable;','mPath','Landroid/graphics/Path;')
+ method('folder_geometry',p+'folder/OplusPreviewBackground;','getNormalDrawable','(Landroid/content/Context;)Landroid/graphics/drawable/Drawable;')
+ smooth=p+'util/SmoothRoundedManager;'
+ if any(m['name']=='createIconFolderClipPath' for m in d.get(smooth,{}).get('methods',[])):
+  method('folder_geometry',smooth,'createIconFolderClipPath','(Landroid/graphics/Path;Landroid/graphics/RectF;FFII)V')
+ else:
+  method('folder_geometry','Lcom/android/common/util/IconUtils;','isIconRadiusRound','()Z')
+  method('folder_geometry','Lcom/android/common/util/IconUtils;','isMiddle','(II)Z')
+ if p+'drawable/GlassDrawable;' in d:
+  field('folder_geometry',p+'drawable/GlassDrawable;','backgroundDrawable','Landroid/graphics/drawable/Drawable;')
  for n,k in [('mBgDrawable','Landroid/graphics/drawable/Drawable;'),
              ('mBgView',p+'folder/FolderRoundImageView;'),('mRadius','F')]:
   field('folder_backdrops',p+'folder/OplusPreviewBackground;',n,k)

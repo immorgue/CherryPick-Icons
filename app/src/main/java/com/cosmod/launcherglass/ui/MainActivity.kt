@@ -56,7 +56,13 @@ class MainActivity : AppCompatActivity() {
     private val gates = mutableListOf<Gate>()
     private val resets = mutableListOf<Pair<View, List<String>>>()
     private var currentScroll: androidx.core.widget.NestedScrollView? = null
-    private var settingsPage = false
+    private var navigation=SettingsNavigation()
+    private lateinit var screenHost:FrameLayout
+    private var activeShell:View?=null
+    private var visibleScreen=SettingsScreen.HOME
+    private val scrollOffsets=mutableMapOf<SettingsScreen,Int>()
+    private var bottomPill:FloatingNavigationPill?=null
+    private var moduleRestart:View?=null
     private var folderExpanded=true
     private var dockExpanded=false
     private var blurExpanded = true
@@ -107,7 +113,7 @@ class MainActivity : AppCompatActivity() {
         prefs = getSharedPreferences(SettingsProvider.PREFS_NAME, MODE_PRIVATE)
         prefs.registerOnSharedPreferenceChangeListener(supportListener)
         SettingsDefaults.initialize(this, prefs)
-        settingsPage = savedInstanceState?.getBoolean("settingsPage") ?: false
+        navigation=SettingsNavigation(savedInstanceState?.getIntArray("navigation"))
         blurExpanded = savedInstanceState?.getBoolean("blurExpanded") ?: true
         designExpanded = savedInstanceState?.getBoolean("designExpanded") ?: false
         root = column().apply { setBackgroundColor(color(M.attr.colorSurface)) }
@@ -119,10 +125,12 @@ class MainActivity : AppCompatActivity() {
         }
         page = FrameLayout(this)
         root.addView(page, LinearLayout.LayoutParams(-1, -1))
+        screenHost=FrameLayout(this)
+        page.addView(screenHost,FrameLayout.LayoutParams(-1,-1))
         showPage(false)
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (settingsPage) { settingsPage = false; showPage() }
+                if (navigation.back()) { showPage(backwards=true) }
                 else { isEnabled = false; onBackPressedDispatcher.onBackPressed() }
             }
         })
@@ -141,7 +149,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
     override fun onSaveInstanceState(outState: Bundle) {
-        outState.putBoolean("settingsPage", settingsPage)
+        outState.putIntArray("navigation",navigation.save())
         outState.putBoolean("blurExpanded", blurExpanded)
         outState.putBoolean("designExpanded", designExpanded)
         super.onSaveInstanceState(outState)
@@ -283,8 +291,9 @@ class MainActivity : AppCompatActivity() {
             }
             when(value) { is Boolean -> putBoolean(key, value); is Int -> putInt(key, value) } }.apply()
         contentResolver.notifyChange(SettingsProvider.CONTENT_URI, null)
+        if(key==WallpaperProfiles.ENABLED && value==true)WallpaperProfiles.saveCurrent(this,prefs)
         updateGates();updateStatus()
-        if(ScopedSettingsKeys.isOwnKey(key) || key==SettingsProvider.KEY_DEVELOPER_MODE)refreshControls()
+        if(ScopedSettingsKeys.isOwnKey(key) || key==SettingsProvider.KEY_DEVELOPER_MODE || key==WallpaperProfiles.ENABLED)refreshControls()
         if(md3!=md3Requested())rebuildPage()
     }
     /** Rebuilds the page after the interface style changes, keeping the scroll position. */
@@ -350,37 +359,41 @@ class MainActivity : AppCompatActivity() {
         val value = android.util.TypedValue()
         if (theme.resolveAttribute(android.R.attr.selectableItemBackground, value, true)) view.setBackgroundResource(value.resourceId)
     }
-    private fun md3Header(): View = MaterialToolbar(this).apply {
-        title = if (settingsPage) getString(R.string.ui_settings) else "CherryPick Icons"
-        setTitleTextAppearance(context, M.style.TextAppearance_Material3_TitleLarge)
+    private fun screenTitle()=when(navigation.current) {
+        SettingsScreen.HOME -> "CherryPick Icons"
+        SettingsScreen.MODULE -> getString(R.string.ui_nav_module)
+        SettingsScreen.APP -> getString(R.string.ui_settings)
+        SettingsScreen.COLORS -> getString(R.string.ui_nav_colors)
+        SettingsScreen.BLUR -> getString(R.string.ui_background_blur)
+        SettingsScreen.ICONS -> getString(R.string.ui_icon_design)
+        SettingsScreen.FOLDERS -> getString(R.string.ui_nav_folders)
+        SettingsScreen.DOCK -> getString(R.string.ui_nav_dock)
+        SettingsScreen.WIDGETS -> getString(R.string.ui_widgets)
+        SettingsScreen.DESKTOP -> getString(R.string.ui_desktop_title)
+        SettingsScreen.WALLPAPERS -> getString(R.string.ui_nav_wallpapers)
+        SettingsScreen.BEHAVIOR -> getString(R.string.ui_nav_behavior)
+        SettingsScreen.DEVELOPER -> getString(R.string.ui_developer_mode)
+    }
+    private fun navigate(screen:SettingsScreen){
+        if(!navigation.open(screen))return
+        when(screen){
+            SettingsScreen.BLUR -> blurExpanded=true
+            SettingsScreen.ICONS -> designExpanded=true
+            SettingsScreen.FOLDERS -> folderExpanded=true
+            SettingsScreen.DOCK -> dockExpanded=true
+            else -> Unit
+        }
+        showPage()
+    }
+    private fun goBack(){if(navigation.back())showPage(backwards=true)}
+    private fun md3Header():View=MaterialToolbar(this).apply {
+        title=screenTitle();minimumHeight=dp(64)
+        setTitleTextAppearance(context,M.style.TextAppearance_Material3_TitleLarge)
         setTitleTextColor(onSurface)
-        minimumHeight = dp(64)
-        if (settingsPage) {
-            setNavigationIcon(R.drawable.ic_arrow_back)
-            navigationIcon?.mutate()?.setTint(onSurface)
-            navigationContentDescription = getString(R.string.ui_back)
-            setNavigationOnClickListener { haptic(it); settingsPage = false; showPage() }
-        }
-        if (settingsPage) menu.add(0, 3, 0, getString(R.string.ui_support_project)).apply {
-            setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
-            // Same filled tertiary button as the classic interface instead of plain menu text.
-            actionView = FrameLayout(this@MainActivity).apply {
-                setPadding(0, 0, dp(4), 0)
-                addView(supportButton(), FrameLayout.LayoutParams(-2, -2, Gravity.CENTER_VERTICAL))
-            }
-        }
-        val item = if (settingsPage) menu.add(0, 1, 0, getString(R.string.ui_language)).setIcon(R.drawable.ic_language)
-            else menu.add(0, 2, 0, getString(R.string.ui_settings)).setIcon(R.drawable.ic_settings)
-        item.setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
-        item.icon?.mutate()?.setTint(secondaryText)
-        setOnMenuItemClickListener { menuItem ->
-            haptic(this)
-            when (menuItem.itemId) {
-                1 -> showLanguageDialog(this)
-                3 -> openSupport()
-                else -> { settingsPage = true; showPage() }
-            }
-            true
+        if(navigation.canGoBack){
+            setNavigationIcon(R.drawable.ic_arrow_back);navigationIcon?.mutate()?.setTint(onSurface)
+            navigationContentDescription=getString(R.string.ui_back)
+            setNavigationOnClickListener {haptic(it);goBack()}
         }
     }
     private fun md3RestartButton(scroll: androidx.core.widget.NestedScrollView): View = ExtendedFloatingActionButton(this).apply {
@@ -427,46 +440,148 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun showPage(animate: Boolean = true) {
-        cancelHolds.toList().forEach { it() };cancelHolds.clear()
-        gates.clear(); resets.clear();refreshers.clear();toggleViews.clear();switches.clear();md3Resets.clear();statusText = null; statusDot = null
-        md3 = md3Requested()
-        if (md3) Md3Guard.install(applicationContext)
-        page.removeAllViews()
-        val shell = column()
-        if (md3) add(shell, md3Header()) else {
-            val header = row().apply { setPadding(dp(20), dp(12), dp(20), dp(12)) }
-            if (settingsPage) header.addView(iconButton(R.drawable.ic_arrow_back,getString(R.string.ui_back)) { settingsPage=false;showPage() })
-            header.addView(text("CherryPick Icons",21f,bold=true).apply {
-                gravity=Gravity.START;maxLines=1;setPadding(if(settingsPage)dp(12) else 0,0,dp(12),0)
-            },LinearLayout.LayoutParams(0,-2,1f))
-            if(settingsPage) header.addView(iconButton(R.drawable.ic_language,getString(R.string.ui_language)) { view -> showLanguageDialog(view) })
-            if (!settingsPage) header.addView(iconButton(R.drawable.ic_settings,getString(R.string.ui_settings)) { settingsPage=true;showPage() })
-            add(shell, header)
+    private fun showPage(animate:Boolean=true,backwards:Boolean=false) {
+        currentScroll?.let {scrollOffsets[visibleScreen]=it.scrollY}
+        cancelHolds.toList().forEach {it()};cancelHolds.clear()
+        gates.clear();resets.clear();refreshers.clear();toggleViews.clear();switches.clear();md3Resets.clear()
+        statusText=null;statusDot=null;lsposedText=null;statusHint=null;fluxWarning=null
+        md3=md3Requested();if(md3)Md3Guard.install(applicationContext)
+        val old=activeShell
+        old?.animate()?.cancel()
+        for(i in screenHost.childCount-1 downTo 0){val child=screenHost.getChildAt(i);if(child!==old)screenHost.removeView(child)}
+        val shell=column()
+        add(shell,md3Header())
+        val scroll=androidx.core.widget.NestedScrollView(this).apply {isFillViewport=true;clipToPadding=false}
+        currentScroll=scroll
+        val body=column().apply {setPadding(dp(20),dp(12),dp(20),dp(if(navigation.current.tab==1)184 else 112))}
+        scroll.addView(body,ViewGroup.LayoutParams(-1,-2))
+        shell.addView(scroll,LinearLayout.LayoutParams(-1,0,1f))
+        when(navigation.current){
+            SettingsScreen.HOME -> buildOverview(body)
+            SettingsScreen.MODULE -> buildModuleCategories(body)
+            SettingsScreen.APP -> buildSettings(body)
+            SettingsScreen.COLORS -> coloringSection(body)
+            SettingsScreen.BLUR -> buildBlurSettings(body)
+            SettingsScreen.ICONS -> buildIconSettings(body)
+            SettingsScreen.FOLDERS -> folderSection(body)
+            SettingsScreen.DOCK -> dockSection(body)
+            SettingsScreen.WIDGETS -> buildWidgetSettings(body)
+            SettingsScreen.DESKTOP -> desktopDesignerSection(body)
+            SettingsScreen.WALLPAPERS -> buildWallpaperSettings(body)
+            SettingsScreen.BEHAVIOR -> buildBehaviorSettings(body)
+            SettingsScreen.DEVELOPER -> buildDeveloperSettings(body)
         }
-        val scroll = androidx.core.widget.NestedScrollView(this).apply { isFillViewport = true; clipToPadding = false }
-        currentScroll = scroll
-        val body = column().apply { setPadding(dp(20), dp(12), dp(20), dp(24)) }
-        scroll.addView(body, ViewGroup.LayoutParams(-1,-2))
-        shell.addView(scroll, LinearLayout.LayoutParams(-1,0,1f))
-        if (settingsPage) buildSettings(body) else buildHome(body)
-        page.addView(shell, FrameLayout.LayoutParams(-1,-1))
-        if (!settingsPage) {
-            // A floating button protects only its own bounds; content continues
-            // behind it instead of reserving a full-width bottom strip.
-            body.setPadding(dp(20),dp(12),dp(20),dp(108))
-            if (md3) page.addView(md3RestartButton(scroll),FrameLayout.LayoutParams(-2,-2,Gravity.BOTTOM or Gravity.END).apply {
-                marginEnd=dp(16);bottomMargin=dp(16)
-            })
-            else page.addView(restartButton(),FrameLayout.LayoutParams(dp(64),dp(64),Gravity.BOTTOM or Gravity.START).apply {
-                marginStart=dp(24);bottomMargin=dp(20)
-            })
-        }
-        updateGates(); updateStatus()
-        if (animate) { shell.alpha = 0f; shell.translationY = dp(8).toFloat(); shell.animate().alpha(1f).translationY(0f).setDuration(220).setInterpolator(CherryMotion).start() }
+        screenHost.addView(shell,FrameLayout.LayoutParams(-1,-1));activeShell=shell
+        visibleScreen=navigation.current
+        val y=scrollOffsets[visibleScreen] ?: 0
+        scroll.post {scroll.scrollTo(0,y)}
+        updateGates();updateStatus();updateNavigationPill()
+        if(animate && old!=null && ValueAnimator.areAnimatorsEnabled()){
+            val distance=dp(24).toFloat()*if(backwards)-1 else 1
+            shell.alpha=0f;shell.translationX=distance
+            old.importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+            old.animate().alpha(0f).translationX(-distance*.5f).setDuration(180).withEndAction {screenHost.removeView(old)}.start()
+            shell.animate().alpha(1f).translationX(0f).setDuration(280).setInterpolator(CherryMotion).start()
+        }else if(old!=null)screenHost.removeView(old)
     }
-
-    private fun buildHome(body: LinearLayout) {
+    private fun updateNavigationPill(){
+        val tabs=listOf(SettingsScreen.HOME,SettingsScreen.MODULE,SettingsScreen.APP)
+        if(bottomPill==null){
+            val pill=FloatingNavigationPill(this,
+                listOf(R.string.ui_nav_home,R.string.ui_nav_module,R.string.ui_settings).map(::getString),
+                listOf(R.drawable.ic_nav_home,R.drawable.ic_nav_module,R.drawable.ic_settings)
+            ){index -> navigate(tabs[index])}
+            val width=minOf(resources.displayMetrics.widthPixels-dp(32),dp(384))
+            page.addView(pill,FrameLayout.LayoutParams(width,dp(68),Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {bottomMargin=dp(12)})
+            bottomPill=pill
+        }
+        bottomPill?.select(navigation.current.tab)
+        moduleRestart?.let {page.removeView(it)}
+        moduleRestart=if(navigation.current.tab==1)restartButton().also {button ->
+            page.addView(button,FrameLayout.LayoutParams(dp(56),dp(56),Gravity.BOTTOM or Gravity.START).apply {
+                bottomMargin=dp(92);marginStart=dp(20)
+            })
+        }else null
+    }
+    private fun category(body:LinearLayout,title:Int,description:Int,screen:SettingsScreen){
+        val labels=column().apply {setPadding(dp(20),dp(16),dp(12),dp(16))}
+        add(labels,text(getString(title),18f,bold=true))
+        add(labels,text(getString(description),13f,true),top=6)
+        val line=row()
+        line.addView(labels,LinearLayout.LayoutParams(0,-2,1f))
+        line.addView(text("›",28f,true).apply {gravity=Gravity.CENTER;importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO},LinearLayout.LayoutParams(dp(40),-1))
+        add(body,card(line).apply {isClickable=true;isFocusable=true;contentDescription=getString(title)+". "+getString(description);setOnClickListener {haptic(it);navigate(screen)}},bottom=12)
+    }
+    private fun buildModuleCategories(body:LinearLayout){
+        add(body,text(getString(R.string.ui_nav_appearance),13f,true),bottom=12)
+        category(body,R.string.ui_nav_colors,R.string.ui_nav_colors_hint,SettingsScreen.COLORS)
+        category(body,R.string.ui_background_blur,R.string.ui_nav_blur_hint,SettingsScreen.BLUR)
+        category(body,R.string.ui_icon_design,R.string.ui_nav_icons_hint,SettingsScreen.ICONS)
+        add(body,text(getString(R.string.ui_nav_workspace),13f,true),top=16,bottom=12)
+        category(body,R.string.ui_nav_folders,R.string.ui_nav_folders_hint,SettingsScreen.FOLDERS)
+        category(body,R.string.ui_nav_dock,R.string.ui_nav_dock_hint,SettingsScreen.DOCK)
+        category(body,R.string.ui_widgets,R.string.ui_nav_widgets_hint,SettingsScreen.WIDGETS)
+        category(body,R.string.ui_desktop_title,R.string.ui_nav_desktop_hint,SettingsScreen.DESKTOP)
+        category(body,R.string.ui_nav_wallpapers,R.string.ui_nav_wallpapers_hint,SettingsScreen.WALLPAPERS)
+        add(body,text(getString(R.string.ui_nav_operation),13f,true),top=16,bottom=12)
+        category(body,R.string.ui_nav_behavior,R.string.ui_nav_behavior_hint,SettingsScreen.BEHAVIOR)
+    }
+    private fun buildWallpaperSettings(body:LinearLayout){
+        val loading=text(getString(R.string.ui_theme_loading),14f,true)
+        add(body,loading,bottom=12)
+        val carousel=WallpaperCarousel(this,{theme ->
+            executor.execute {
+                val copied=WallpaperProfiles.copyFrom(this,prefs,theme.profileKey)
+                if(copied)contentResolver.notifyChange(SettingsProvider.CONTENT_URI,null)
+                runOnUiThread {if(!isDestroyed){
+                    refreshControls()
+                    Toast.makeText(this,if(copied)R.string.ui_theme_copied else R.string.ui_theme_no_profile,Toast.LENGTH_LONG).show()
+                }}
+            }
+        },{theme,button ->
+            button.isEnabled=false
+            executor.execute {
+                val opened=try {ThemeCatalog.preview(this,theme)}catch(_:Throwable){false}
+                runOnUiThread {
+                    button.isEnabled=true
+                    if(!opened && !isDestroyed)Toast.makeText(this,R.string.ui_theme_open_failed,Toast.LENGTH_LONG).show()
+                }
+            }
+        })
+        add(body,carousel,bottom=16)
+        executor.execute {
+            val themes=try {ThemeCatalog.load(this)}catch(t:Throwable){android.util.Log.w("ColorOSGlass","Theme catalogue load failed",t);emptyList()}
+            runOnUiThread {if(!isDestroyed && navigation.current==SettingsScreen.WALLPAPERS){
+                loading.text=getString(when {
+                    themes.isEmpty() ->R.string.ui_theme_unavailable
+                    themes.first().source=="android" ->R.string.ui_theme_android_hint
+                    else ->R.string.ui_theme_system_apply_hint
+                })
+                carousel.show(themes)
+            }}
+        }
+        add(body,card(switchRow(getString(R.string.ui_wallpaper_profiles),WallpaperProfiles.ENABLED,
+            getString(R.string.ui_wallpaper_profiles_hint))),bottom=16)
+        val status=text("",14f,true)
+        val update={status.text=getString(R.string.ui_wallpaper_current,
+            WallpaperProfiles.currentLabel(this) ?: getString(R.string.ui_wallpaper_unknown),WallpaperProfiles.count(this))}
+        update();refreshers.add(update)
+        add(body,status,bottom=16)
+        add(body,com.google.android.material.button.MaterialButton(this).apply {
+            text=getString(R.string.ui_wallpaper_save);isAllCaps=false
+            setOnClickListener {haptic(it);WallpaperProfiles.saveCurrent(this@MainActivity,prefs);update()}
+        },bottom=12)
+        add(body,com.google.android.material.button.MaterialButton(this).apply {
+            text=getString(R.string.ui_wallpaper_choose);isAllCaps=false
+            setOnClickListener {
+                haptic(it)
+                try {startActivity(Intent(Intent.ACTION_SET_WALLPAPER))}
+                catch(_:Exception){Toast.makeText(this@MainActivity,R.string.ui_wallpaper_picker_unavailable,Toast.LENGTH_LONG).show()}
+            }
+        },bottom=12)
+        add(body,text(getString(R.string.ui_wallpaper_sources_hint),13f,true))
+    }
+    private fun buildOverview(body:LinearLayout){
         val status = row().apply { setPadding(dp(20),dp(20),dp(20),dp(20)) }
         val dot = View(this).apply { background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(primary) } }
         status.addView(dot, LinearLayout.LayoutParams(dp(10),dp(10)).apply { rightMargin = dp(12) }); statusDot = dot
@@ -491,7 +606,39 @@ class MainActivity : AppCompatActivity() {
         fluxWarning=warningCard
         add(body,warningCard,bottom=16)
         updateFluxWarning()
-        coloringSection(body)
+        add(body,com.google.android.material.button.MaterialButton(this).apply {
+            text=getString(R.string.ui_restart_launcher);isAllCaps=false;setIconResource(R.drawable.ic_restart)
+            setOnClickListener {haptic(it);restart(it)}
+        },bottom=12)
+        add(body,supportButton(),bottom=12)
+        val about=column().apply { setPadding(dp(20),dp(20),dp(20),dp(12)) }
+        add(about,text("v${BuildConfig.VERSION_NAME}",12f,true))
+        add(about,text("by @immorgue",14f).apply {
+            setTextColor(primary);minHeight=dp(48);gravity=Gravity.CENTER_VERTICAL
+            contentDescription=getString(R.string.ui_author_profile)
+            setOnClickListener {
+                haptic(it)
+                try { startActivity(Intent(Intent.ACTION_VIEW,Uri.parse("https://t.me/naten_e_mire"))) }
+                catch(_:Exception) { Toast.makeText(context,getString(R.string.ui_telegram_error),Toast.LENGTH_SHORT).show() }
+            }
+        })
+        add(about,text(getString(R.string.ui_credits_title),16f,bold=true),top=12)
+        for((label,url) in listOf(
+            "PixelLauncherEnhanced — Mahmud0808" to "https://github.com/Mahmud0808/PixelLauncherEnhanced",
+            "@anime_killer2009" to "https://t.me/anime_killer2009",
+            "Kostubet Topics" to "https://t.me/KostubetTopics")) {
+            add(about,text(label,14f).apply {
+                setTextColor(primary);minHeight=dp(48);gravity=Gravity.CENTER_VERTICAL
+                setOnClickListener {
+                    haptic(it)
+                    try {startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(url)))}
+                    catch(_:Exception){Toast.makeText(context,getString(R.string.ui_link_error),Toast.LENGTH_SHORT).show()}
+                }
+            })
+        }
+        add(body,card(about),top=24)
+    }
+    private fun buildBlurSettings(body:LinearLayout){
         section(body, getString(R.string.ui_background_blur), "", SettingsProvider.KEY_BLUR_ENABLED, blurExpanded,
             { blurExpanded = it }, ::master, ::blur) { content ->
             blurStyleSelector(content)
@@ -518,6 +665,8 @@ class MainActivity : AppCompatActivity() {
             add(locations,locationDetails)
             add(content,card(locations,true),top=8,bottom=4)
         }
+    }
+    private fun buildIconSettings(body:LinearLayout){
         section(body, getString(R.string.ui_icon_design), getString(R.string.ui_icon_design_hint), SettingsProvider.KEY_DESIGN_ENABLED, designExpanded,
             { designExpanded = it }, ::master, ::design) { content ->
             effectGroup(content, getString(R.string.ui_icon_contour), SettingsProvider.KEY_ICON_STROKE,
@@ -528,8 +677,8 @@ class MainActivity : AppCompatActivity() {
             effectGroup(content, getString(R.string.ui_icon_depth), SettingsProvider.KEY_VOLUME_ENABLED,
                 getString(R.string.ui_depth_strength), SettingsProvider.KEY_GRADIENT_OPACITY)
         }
-        folderSection(body)
-        dockSection(body)
+    }
+    private fun buildWidgetSettings(body:LinearLayout){
         add(body,text(getString(R.string.ui_widgets),22f,bold=true),top=24,bottom=8)
         effectGroup(body,getString(R.string.ui_photo_widget_blur),SettingsProvider.KEY_PHOTO_WIDGET_BLUR,
             getString(R.string.ui_photo_widget_opacity),SettingsProvider.KEY_PHOTO_WIDGET_OPACITY,min=0,max=100,
@@ -546,10 +695,43 @@ class MainActivity : AppCompatActivity() {
             refreshers.add {liquid.visibility=if(number(SettingsProvider.KEY_BLUR_STYLE)==1)View.VISIBLE else View.GONE}
             add(details,liquid)
         }
-        desktopDesignerSection(body)
-        settingsTransferSection(body)
     }
-
+    private fun buildBehaviorSettings(body:LinearLayout){
+        add(body,text(getString(R.string.ui_blur_update),14f,true),bottom=24)
+        val modes = column().apply { setPadding(dp(20),dp(20),dp(20),dp(12)) }
+        val modeHeader = row()
+        modeHeader.addView(text(getString(R.string.ui_blur_mode),18f,bold=true),LinearLayout.LayoutParams(0,-2,1f))
+        modeHeader.addView(reset(SettingsProvider.KEY_BLUR_MODE))
+        add(modes,modeHeader,bottom=12)
+        val radioGroup = RadioGroup(this)
+        val selected = number(SettingsProvider.KEY_BLUR_MODE)
+        val modeIds=mutableMapOf<Int,Int>()
+        for ((mode,label,description) in listOf(
+            Triple(SettingsProvider.BLUR_MODE_LIVE,getString(R.string.ui_live_blur),getString(R.string.ui_live_blur_description)),
+            Triple(SettingsProvider.BLUR_MODE_WALLPAPER,getString(R.string.ui_static_blur),getString(R.string.ui_static_blur_description)))) {
+            val item = com.google.android.material.radiobutton.MaterialRadioButton(this).apply {
+                id=View.generateViewId(); text=label; textSize=16f; minHeight=dp(48); tag=mode
+                isChecked=selected==mode
+            }
+            radioGroup.addView(item)
+            modeIds[mode]=item.id
+            // Native radio grouping owns selection and accessibility state.
+            val subtitle = text(description,12f,true).apply { setPadding(dp(40),0,0,dp(12)) }
+            radioGroup.addView(subtitle)
+        }
+        radioGroup.setOnCheckedChangeListener { group,id ->
+            val button=group.findViewById<View>(id)
+            val mode=button?.tag as? Int
+            if(mode != null && !updatingUi) { haptic(button); save(SettingsProvider.KEY_BLUR_MODE,mode) }
+        }
+        refreshers.add { modeIds[number(SettingsProvider.KEY_BLUR_MODE)]?.let { radioGroup.check(it) } }
+        add(modes,radioGroup)
+        val modeCard=card(modes);gate(modeCard,::blur);add(body,modeCard,bottom=12)
+        val idle=card(switchRow(getString(R.string.ui_energy_saving),SettingsProvider.KEY_IDLE_PAUSE,
+            getString(R.string.ui_energy_saving_description)))
+        gate(idle) { blur() && number(SettingsProvider.KEY_BLUR_MODE)==SettingsProvider.BLUR_MODE_LIVE }
+        add(body,idle,bottom=24)
+    }
     private fun desktopDesignerSection(body:LinearLayout) {
         val content=column().apply {setPadding(dp(20),dp(20),dp(20),dp(12))}
         add(content,text(getString(R.string.ui_desktop_title),19f,bold=true))
@@ -1271,49 +1453,11 @@ class MainActivity : AppCompatActivity() {
         catch(_:Exception){Toast.makeText(this,getString(R.string.ui_link_error),Toast.LENGTH_SHORT).show()}
     }
 
-    private fun buildSettings(body: LinearLayout) {
-        if(!md3){
-            // Support action sits next to the large title (MD3: in the top app bar).
-            val title=row()
-            title.addView(text(getString(R.string.ui_settings),30f,bold=true),LinearLayout.LayoutParams(0,-2,1f))
-            val support=supportButton().apply {maxWidth=resources.displayMetrics.widthPixels/2}
-            title.addView(support,LinearLayout.LayoutParams(-2,-2).apply {marginStart=dp(12)})
-            add(body,title,top=8,bottom=8)
-        }
-        add(body,text(getString(R.string.ui_blur_update),14f,true),bottom=24)
-        val modes = column().apply { setPadding(dp(20),dp(20),dp(20),dp(12)) }
-        val modeHeader = row()
-        modeHeader.addView(text(getString(R.string.ui_blur_mode),18f,bold=true),LinearLayout.LayoutParams(0,-2,1f))
-        modeHeader.addView(reset(SettingsProvider.KEY_BLUR_MODE))
-        add(modes,modeHeader,bottom=12)
-        val radioGroup = RadioGroup(this)
-        val selected = number(SettingsProvider.KEY_BLUR_MODE)
-        val modeIds=mutableMapOf<Int,Int>()
-        for ((mode,label,description) in listOf(
-            Triple(SettingsProvider.BLUR_MODE_LIVE,getString(R.string.ui_live_blur),getString(R.string.ui_live_blur_description)),
-            Triple(SettingsProvider.BLUR_MODE_WALLPAPER,getString(R.string.ui_static_blur),getString(R.string.ui_static_blur_description)))) {
-            val item = com.google.android.material.radiobutton.MaterialRadioButton(this).apply {
-                id=View.generateViewId(); text=label; textSize=16f; minHeight=dp(48); tag=mode
-                isChecked=selected==mode
-            }
-            radioGroup.addView(item)
-            modeIds[mode]=item.id
-            // Native radio grouping owns selection and accessibility state.
-            val subtitle = text(description,12f,true).apply { setPadding(dp(40),0,0,dp(12)) }
-            radioGroup.addView(subtitle)
-        }
-        radioGroup.setOnCheckedChangeListener { group,id ->
-            val button=group.findViewById<View>(id)
-            val mode=button?.tag as? Int
-            if(mode != null && !updatingUi) { haptic(button); save(SettingsProvider.KEY_BLUR_MODE,mode) }
-        }
-        refreshers.add { modeIds[number(SettingsProvider.KEY_BLUR_MODE)]?.let { radioGroup.check(it) } }
-        add(modes,radioGroup)
-        val modeCard=card(modes);gate(modeCard,::blur);add(body,modeCard,bottom=12)
-        val idle=card(switchRow(getString(R.string.ui_energy_saving),SettingsProvider.KEY_IDLE_PAUSE,
-            getString(R.string.ui_energy_saving_description)))
-        gate(idle) { blur() && number(SettingsProvider.KEY_BLUR_MODE)==SettingsProvider.BLUR_MODE_LIVE }
-        add(body,idle,bottom=24)
+    private fun buildSettings(body:LinearLayout){
+        add(body,com.google.android.material.button.MaterialButton(this).apply {
+            text=getString(R.string.ui_language);isAllCaps=false;setOnClickListener {showLanguageDialog(it)}
+        },bottom=12)
+        category(body,R.string.ui_developer_mode,R.string.ui_nav_developer_hint,SettingsScreen.DEVELOPER)
         val bootRestart=column()
         add(bootRestart,switchRow(getString(R.string.ui_boot_restart),SettingsProvider.KEY_BOOT_RESTART))
         add(bootRestart,text(getString(R.string.ui_boot_restart_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(12))})
@@ -1322,49 +1466,7 @@ class MainActivity : AppCompatActivity() {
         gate(bootToast){bool(SettingsProvider.KEY_BOOT_RESTART)}
         add(bootRestart,bootToast)
         add(body,card(bootRestart),bottom=12)
-        val developer=column()
-        add(developer,switchRow(getString(R.string.ui_developer_mode),SettingsProvider.KEY_DEVELOPER_MODE))
-        val developerOptions=column()
-        divider(developerOptions)
-        add(developerOptions,switchRow(getString(R.string.ui_gpu_effects),SettingsProvider.KEY_GPU_EFFECTS))
-        add(developerOptions,text(getString(R.string.ui_gpu_effects_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
-        add(developerOptions,switchRow(getString(R.string.ui_experimental_liquid),SettingsProvider.KEY_EXPERIMENTAL_LIQUID))
-        add(developerOptions,text(getString(R.string.ui_experimental_liquid_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
-        divider(developerOptions)
-        add(developerOptions,switchRow(getString(R.string.ui_color_depth),SettingsProvider.KEY_COLOR_DEPTH_ENABLED))
-        add(developerOptions,text(getString(R.string.ui_color_depth_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
-        val colorDepth=slider(getString(R.string.ui_color_depth_bits),SettingsProvider.KEY_COLOR_DEPTH_BITS,8,24," bit")
-        gate(colorDepth){bool(SettingsProvider.KEY_DEVELOPER_MODE) && bool(SettingsProvider.KEY_COLOR_DEPTH_ENABLED)}
-        add(developerOptions,colorDepth)
-        colorDepthStages(developerOptions)
-        divider(developerOptions)
-        add(developerOptions,switchRow(getString(R.string.ui_haze_test),SettingsProvider.KEY_HAZE_ENABLED))
-        add(developerOptions,text(getString(R.string.ui_haze_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
-        divider(developerOptions)
-        add(developerOptions,switchRow(getString(R.string.ui_disable_edge_optimization),SettingsProvider.KEY_DISABLE_EDGE_OPTIMIZATION))
-        add(developerOptions,text(getString(R.string.ui_disable_edge_optimization_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
-        divider(developerOptions)
-        add(developerOptions,switchRow(getString(R.string.ui_optimize_mini_icons),SettingsProvider.KEY_OPTIMIZE_MINI_ICONS))
-        add(developerOptions,text(getString(R.string.ui_optimize_mini_icons_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
-        divider(developerOptions)
-        add(developerOptions,switchRow(getString(R.string.ui_limit_closing_blur),SettingsProvider.KEY_LIMIT_CLOSING_BLUR))
-        add(developerOptions,text(getString(R.string.ui_limit_closing_blur_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
-        add(developerOptions,switchRow(getString(R.string.ui_dock_event_driven),SettingsProvider.KEY_DOCK_EVENT_DRIVEN))
-        add(developerOptions,text(getString(R.string.ui_dock_event_driven_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
-        add(developerOptions,switchRow(getString(R.string.ui_compact_dock_effects),SettingsProvider.KEY_COMPACT_DOCK_EFFECTS))
-        add(developerOptions,text(getString(R.string.ui_compact_dock_effects_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
-        add(developerOptions,switchRow(getString(R.string.ui_reuse_static_wallpaper),SettingsProvider.KEY_REUSE_STATIC_WALLPAPER))
-        add(developerOptions,text(getString(R.string.ui_reuse_static_wallpaper_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
-        divider(developerOptions)
-        artworkIcons(developerOptions)
-        divider(developerOptions)
-        add(developerOptions,switchRow(getString(R.string.ui_md3_interface),SettingsProvider.KEY_MD3_UI))
-        add(developerOptions,text(getString(R.string.ui_md3_interface_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
-        developerOptions.visibility=if(bool(SettingsProvider.KEY_DEVELOPER_MODE))View.VISIBLE else View.GONE
-        refreshers.add {developerOptions.visibility=if(bool(SettingsProvider.KEY_DEVELOPER_MODE))View.VISIBLE else View.GONE}
-        gate(developerOptions){bool(SettingsProvider.KEY_DEVELOPER_MODE)}
-        add(developer,developerOptions)
-        add(body,card(developer),bottom=12)
+        settingsTransferSection(body)
         val logs=com.google.android.material.button.MaterialButton(this,null,M.attr.materialButtonOutlinedStyle).apply {
             text=getString(R.string.ui_logs);minHeight=dp(48)
             setOnClickListener { button ->
@@ -1399,32 +1501,53 @@ class MainActivity : AppCompatActivity() {
             }
         }
         add(body,logs)
-        val about=column().apply { setPadding(dp(20),dp(20),dp(20),dp(12)) }
-        add(about,text("v${BuildConfig.VERSION_NAME}",12f,true))
-        add(about,text("by @immorgue",14f).apply {
-            setTextColor(primary);minHeight=dp(48);gravity=Gravity.CENTER_VERTICAL
-            contentDescription=getString(R.string.ui_author_profile)
-            setOnClickListener {
-                haptic(it)
-                try { startActivity(Intent(Intent.ACTION_VIEW,Uri.parse("https://t.me/naten_e_mire"))) }
-                catch(_:Exception) { Toast.makeText(context,getString(R.string.ui_telegram_error),Toast.LENGTH_SHORT).show() }
-            }
-        })
-        add(about,text(getString(R.string.ui_credits_title),16f,bold=true),top=12)
-        for((label,url) in listOf(
-            "PixelLauncherEnhanced — Mahmud0808" to "https://github.com/Mahmud0808/PixelLauncherEnhanced",
-            "@anime_killer2009" to "https://t.me/anime_killer2009",
-            "Kostubet Topics" to "https://t.me/KostubetTopics")) {
-            add(about,text(label,14f).apply {
-                setTextColor(primary);minHeight=dp(48);gravity=Gravity.CENTER_VERTICAL
-                setOnClickListener {
-                    haptic(it)
-                    try {startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(url)))}
-                    catch(_:Exception){Toast.makeText(context,getString(R.string.ui_link_error),Toast.LENGTH_SHORT).show()}
-                }
-            })
-        }
-        add(body,card(about),top=24)
+    }
+    private fun buildDeveloperSettings(body:LinearLayout){
+        val developer=column()
+        add(developer,switchRow(getString(R.string.ui_developer_mode),SettingsProvider.KEY_DEVELOPER_MODE))
+        val developerOptions=column()
+        divider(developerOptions)
+        add(developerOptions,switchRow(getString(R.string.ui_gpu_effects),SettingsProvider.KEY_GPU_EFFECTS))
+        add(developerOptions,text(getString(R.string.ui_gpu_effects_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
+        add(developerOptions,switchRow(getString(R.string.ui_experimental_liquid),SettingsProvider.KEY_EXPERIMENTAL_LIQUID))
+        add(developerOptions,text(getString(R.string.ui_experimental_liquid_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
+        divider(developerOptions)
+        add(developerOptions,switchRow(getString(R.string.ui_color_depth),SettingsProvider.KEY_COLOR_DEPTH_ENABLED))
+        add(developerOptions,text(getString(R.string.ui_color_depth_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
+        val colorDepth=slider(getString(R.string.ui_color_depth_bits),SettingsProvider.KEY_COLOR_DEPTH_BITS,8,24," bit")
+        gate(colorDepth){bool(SettingsProvider.KEY_DEVELOPER_MODE) && bool(SettingsProvider.KEY_COLOR_DEPTH_ENABLED)}
+        add(developerOptions,colorDepth)
+        colorDepthStages(developerOptions)
+        divider(developerOptions)
+        add(developerOptions,switchRow(getString(R.string.ui_haze_test),SettingsProvider.KEY_HAZE_ENABLED))
+        add(developerOptions,text(getString(R.string.ui_haze_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
+        divider(developerOptions)
+        add(developerOptions,switchRow(getString(R.string.ui_disable_edge_optimization),SettingsProvider.KEY_DISABLE_EDGE_OPTIMIZATION))
+        add(developerOptions,text(getString(R.string.ui_disable_edge_optimization_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
+        divider(developerOptions)
+        add(developerOptions,switchRow(getString(R.string.ui_optimize_mini_icons),SettingsProvider.KEY_OPTIMIZE_MINI_ICONS))
+        add(developerOptions,text(getString(R.string.ui_optimize_mini_icons_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
+        divider(developerOptions)
+        add(developerOptions,switchRow(getString(R.string.ui_limit_closing_blur),SettingsProvider.KEY_LIMIT_CLOSING_BLUR))
+        add(developerOptions,text(getString(R.string.ui_limit_closing_blur_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
+        add(developerOptions,switchRow(getString(R.string.ui_dock_event_driven),SettingsProvider.KEY_DOCK_EVENT_DRIVEN))
+        add(developerOptions,text(getString(R.string.ui_dock_event_driven_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
+        add(developerOptions,switchRow(getString(R.string.ui_compact_dock_effects),SettingsProvider.KEY_COMPACT_DOCK_EFFECTS))
+        add(developerOptions,text(getString(R.string.ui_compact_dock_effects_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
+        add(developerOptions,switchRow(getString(R.string.ui_reuse_static_wallpaper),SettingsProvider.KEY_REUSE_STATIC_WALLPAPER))
+        add(developerOptions,text(getString(R.string.ui_reuse_static_wallpaper_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
+        add(developerOptions,switchRow(getString(R.string.ui_scene_drag_backdrop),SettingsProvider.KEY_SCENE_DRAG_BACKDROP))
+        add(developerOptions,text(getString(R.string.ui_scene_drag_backdrop_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
+        divider(developerOptions)
+        artworkIcons(developerOptions)
+        divider(developerOptions)
+        add(developerOptions,switchRow(getString(R.string.ui_md3_interface),SettingsProvider.KEY_MD3_UI))
+        add(developerOptions,text(getString(R.string.ui_md3_interface_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
+        developerOptions.visibility=if(bool(SettingsProvider.KEY_DEVELOPER_MODE))View.VISIBLE else View.GONE
+        refreshers.add {developerOptions.visibility=if(bool(SettingsProvider.KEY_DEVELOPER_MODE))View.VISIBLE else View.GONE}
+        gate(developerOptions){bool(SettingsProvider.KEY_DEVELOPER_MODE)}
+        add(developer,developerOptions)
+        add(body,card(developer),bottom=12)
     }
     private fun updateFluxWarning() {
         fluxWarning?.visibility=if(::prefs.isInitialized && prefs.getInt(SettingsProvider.KEY_NATIVE_FLUX_SUPPORT,0)==2)View.VISIBLE else View.GONE

@@ -181,6 +181,7 @@ internal object LiftedBackdrop {
         "${Settings.Global.getInt(context.contentResolver,Settings.Global.BOOT_COUNT,-1)}:${BuildConfig.VERSION_CODE}"
 
     fun allowed()=installed && prepared && !broken && !lockedOut && Build.VERSION.SDK_INT>=33 &&
+        PrefsHelper.sceneDragBackdrop &&
         PrefsHelper.enabled && PrefsHelper.blurEnabled && PrefsHelper.gpuEffects &&
         ModuleHooks.isActive && !ColorDepthEffect.finalPlate
 

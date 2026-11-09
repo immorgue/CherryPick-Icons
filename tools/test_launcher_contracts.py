@@ -12,6 +12,13 @@ def changed(classes,owner,kind,name):
     else:
         record[kind]=[m for m in record[kind] if m['name']!=name]
     result[owner]=record
+    # A virtual method may also be implemented by an OEM base class. Removing
+    # only the override leaves a valid contract, so remove its inherited copies.
+    parent=record.get('parent')
+    if kind=='methods' and parent in classes:
+        inherited_change=changed(classes,parent,kind,name)
+        for ancestor,value in inherited_change.items():
+            if value is not classes[ancestor]:result[ancestor]=value
     return result
 
 def main():
@@ -27,12 +34,16 @@ def main():
         p='Lcom/android/launcher3/'
         ns=p+'anim/iconsurfacemanager/'+('surface/' if p+'anim/iconsurfacemanager/surface/IconSurfaceRenderer;' in classes else '')
         cases=[
+            ('folder_geometry',p+'folder/big/SmoothRoundDrawable;','fields','mPath'),
+            ('folder_geometry',p+'folder/OplusPreviewBackground;','methods','getNormalDrawable'),
             ('folder_backdrops',p+'folder/OplusFolder;','fields','mContentBackground'),
             ('folder_backdrops',p+'folder/OplusFolder;','fields','mContentAnimationBackground'),
             ('folder_backdrops',p+'folder/FolderRoundImageView;','methods','onDraw'),
             ('dock_visibility',p+'OplusHotseat;','methods','onLayout'),
             ('surface_handoff',ns+'IconSurfaceRecord;','methods','showOriginalIcon'),
         ]
+        if p+'drawable/GlassDrawable;' in classes:
+            cases.append(('folder_geometry',p+'drawable/GlassDrawable;','fields','backgroundDrawable'))
         for group,owner,kind,name in cases:
             result=verify(changed(classes,owner,kind,name))
             assert result['families'][group] is False,(item['file'],owner,name)

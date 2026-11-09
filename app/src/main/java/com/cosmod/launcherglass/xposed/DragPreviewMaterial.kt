@@ -35,7 +35,7 @@ internal object DragPreviewMaterial {
      * blur each per frame.
      */
     private class Element(val matrix:Matrix,val clip:RectF?,val alpha:Float,val bounds:Rect,
-                          val icon:Drawable?,val iconAlpha:Int,val mini:Boolean,val surface:Surface?,val nested:Boolean=false)
+                          val icon:Drawable?,val iconAlpha:Int,val mini:Boolean,val surface:Surface?,val nested:Boolean=false,val origin:View?=null)
     private class Capture(val source:View){
         var canvas:Canvas?=null
         var width=0
@@ -43,6 +43,8 @@ internal object DragPreviewMaterial {
         val elements=ArrayList<Element>()
     }
     private val active=ThreadLocal<Capture?>()
+    private val replayOrigin=ThreadLocal<View?>()
+    fun sourceContext():View?=replayOrigin.get()
     // Main thread only: preview drawable -> materials it must draw live.
     private val previews=WeakHashMap<Drawable,Capture>()
     private val punch=Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {xfermode=PorterDuffXfermode(PorterDuff.Mode.DST_OUT)}
@@ -141,7 +143,7 @@ internal object DragPreviewMaterial {
         val capture=active.get() ?: return false
         if(capture.canvas!==canvas || bounds.isEmpty)return false
         val nested=owner!=null && owner!==capture.source && descends(owner,capture.source)
-        capture.elements.add(Element(matrix(canvas),clip(canvas),chain(owner,capture.source),Rect(bounds),icon,alpha.coerceIn(0,255),mini,null,nested))
+        capture.elements.add(Element(matrix(canvas),clip(canvas),chain(owner,capture.source),Rect(bounds),icon,alpha.coerceIn(0,255),mini,null,nested,owner))
         // Native layers recorded earlier stay hidden under the live plate,
         // exactly as they are hidden under the resting icon.
         punch.alpha=alpha.coerceIn(0,255)
@@ -153,7 +155,7 @@ internal object DragPreviewMaterial {
     fun captureSurface(canvas:Canvas,owner:View,surface:Surface):Boolean {
         val capture=active.get() ?: return false
         if(capture.canvas!==canvas || surface.bounds.isEmpty)return false
-        capture.elements.add(Element(matrix(canvas),clip(canvas),chain(owner,capture.source),Rect(surface.bounds),null,255,false,surface))
+        capture.elements.add(Element(matrix(canvas),clip(canvas),chain(owner,capture.source),Rect(surface.bounds),null,255,false,surface,origin=owner))
         punch.alpha=surface.alpha.coerceIn(0,255)
         try {
             val bounds=surface.bounds
@@ -190,6 +192,8 @@ internal object DragPreviewMaterial {
         val outer=drawable.alpha.coerceIn(0,255)/255f
         for(element in capture.elements){
             val save=canvas.save()
+            val previousOrigin=replayOrigin.get()
+            replayOrigin.set(element.origin ?: capture.source)
             try {
                 canvas.translate(bounds.left.toFloat(),bounds.top.toFloat())
                 canvas.scale(sx,sy)
@@ -213,7 +217,7 @@ internal object DragPreviewMaterial {
                 }
             }catch(t:Throwable){
                 if(failures.add(t.javaClass.name+":"+t.message))GlassLogger.e("DragPreview","Live drag material failed",t)
-            }finally{canvas.restoreToCount(save)}
+            }finally{replayOrigin.set(previousOrigin);canvas.restoreToCount(save)}
         }
     }
 

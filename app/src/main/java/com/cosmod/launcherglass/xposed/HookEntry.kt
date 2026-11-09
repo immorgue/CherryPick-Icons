@@ -61,6 +61,7 @@ class HookEntry : IXposedHookLoadPackage {
                 try {Oxygen16IconSupport.configure(appCtx)}
                 catch(t:Throwable){GlassLogger.e("Compat","Split Flux setup failed; generic icon hooks kept",t)}
                 PrefsHelper.init(appCtx)
+                WallpaperProfileClient.sync(appCtx)
                 try {
                     val filter = android.content.IntentFilter(android.content.Intent.ACTION_WALLPAPER_CHANGED).apply {
                         addAction(android.content.Intent.ACTION_SCREEN_OFF)
@@ -69,6 +70,7 @@ class HookEntry : IXposedHookLoadPackage {
                     }
                     appCtx.registerReceiver(object : android.content.BroadcastReceiver() {
                         override fun onReceive(c: Context?, i: android.content.Intent?) {
+                            if(i?.action==android.content.Intent.ACTION_WALLPAPER_CHANGED)WallpaperProfileClient.sync(appCtx)
                             if(!PrefsHelper.enabled)return
                             when(i?.action) {
                                 android.content.Intent.ACTION_SCREEN_OFF -> {

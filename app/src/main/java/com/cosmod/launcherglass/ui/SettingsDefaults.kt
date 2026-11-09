@@ -92,6 +92,8 @@ object SettingsDefaults {
         editor.remove("color_theme").putInt("color_profiles_revision", 1).apply()
     }
     private val booleans = mapOf(
+        WallpaperProfiles.ENABLED to false,
+        SettingsProvider.KEY_SCENE_DRAG_BACKDROP to false,
         SettingsProvider.KEY_BOOT_RESTART to true,
         SettingsProvider.KEY_BOOT_RESTART_TOAST to true,
         SettingsProvider.KEY_DEVELOPER_MODE to false,
@@ -168,7 +170,7 @@ object SettingsDefaults {
         SettingsProvider.KEY_GRADIENT_OPACITY to 50
     ) + com.cosmod.launcherglass.util.DesktopSizing.defaults
     /** Only portable module preferences. Device reports, language and migration keys stay local. */
-    fun portable(): Map<String, Any> = (booleans - SettingsProvider.KEY_BOOT_RESTART - SettingsProvider.KEY_BOOT_RESTART_TOAST - SettingsProvider.KEY_MD3_UI) + integers +
+    fun portable(): Map<String, Any> = (booleans - WallpaperProfiles.ENABLED - SettingsProvider.KEY_BOOT_RESTART - SettingsProvider.KEY_BOOT_RESTART_TOAST - SettingsProvider.KEY_MD3_UI) + integers +
         ScopedSettingsKeys.all.flatMap { scope -> listOf(scope.own to false) +
             scope.booleans.map { scope.key(it) to boolean(it) } + scope.integers.map { scope.key(it) to integer(it) } }
     fun boolean(key: String): Boolean = if(ScopedSettingsKeys.isOwnKey(key))false else booleans[key] ?: ScopedSettingsKeys.baseOf(key)?.let(::boolean) ?: booleans.getValue(key)

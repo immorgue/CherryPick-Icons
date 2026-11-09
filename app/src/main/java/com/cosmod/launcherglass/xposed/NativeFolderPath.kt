@@ -2,6 +2,9 @@ package com.cosmod.launcherglass.xposed
 
 import android.graphics.Path
 import android.graphics.RectF
+import android.graphics.Rect
+import android.graphics.Outline
+import android.graphics.drawable.Drawable
 import android.view.View
 import com.cosmod.launcherglass.util.GlassLogger
 import de.robv.android.xposed.XposedHelpers
@@ -9,6 +12,35 @@ import de.robv.android.xposed.XposedHelpers
 /** The native 17.x contour API, or the same OplusPath calls used by 16.x. */
 internal object NativeFolderPath {
     private val logged=HashSet<String>()
+    /** Fill geometry, not the separate optical border (which can use radius * .675). */
+    fun fill(drawable:Drawable?,bounds:Rect):Path? {
+        drawable ?: return null
+        val old=Rect(drawable.bounds)
+        return try {
+            drawable.bounds=bounds
+            val name=drawable.javaClass.name
+            when {
+                name.endsWith(".SmoothRoundDrawable") ->
+                    (XposedHelpers.getObjectField(drawable,"mPath") as? Path)?.takeUnless {it.isEmpty}
+                        ?.let {Path(it).apply {offset(bounds.left.toFloat(),bounds.top.toFloat())}}
+                name.endsWith(".GlassDrawable") -> fill(XposedHelpers.getObjectField(drawable,"backgroundDrawable") as? Drawable,bounds)
+                name.endsWith(".GradientDrawableWrapper") -> fill(XposedHelpers.getObjectField(drawable,"mBaseDrawable") as? Drawable,bounds)
+                else -> {
+                    val outline=Outline();drawable.getOutline(outline);val rect=Rect()
+                    // ColorDrawable advertises an opaque rectangular outline;
+                    // it is merely the paint under the owner's rounded clip.
+                    // Treating that as a folder contour removes every corner.
+                    if(outline.getRect(rect) && !rect.isEmpty && outline.radius>0f)
+                        Path().apply {addRoundRect(RectF(rect),outline.radius,outline.radius,Path.Direction.CCW)}else null
+                }
+            }
+        }catch(_:Throwable){null}finally{drawable.bounds=old}
+    }
+    fun intersectFill(path:Path,drawable:Drawable?,bounds:Rect){
+        val fill=fill(drawable,bounds) ?: return
+        val result=Path()
+        if(result.op(path,fill,Path.Op.INTERSECT) && !result.isEmpty)path.set(result)
+    }
     fun create(view:View,path:Path,bounds:RectF,radius:Float,sx:Int,sy:Int):Boolean = try {
         path.reset()
         val loader=view.context.classLoader
