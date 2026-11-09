@@ -21,7 +21,7 @@ public class ParentBackdropCheck {
   int sw=context.getResources().getDisplayMetrics().widthPixels,sh=context.getResources().getDisplayMetrics().heightPixels;
   Bitmap wallpaper=Bitmap.createBitmap(sw,sh,Bitmap.Config.ARGB_8888);wallpaper.eraseColor(Color.BLUE);
   Class<?> helper=cls("util.WallpaperHelper");field(helper,"blurredWallpaper",wallpaper);field(helper,"cachedBlurRadius",0);field(helper,"sourceRevision",0L);field(helper,"cachedRevision",0L);
-  FrameLayout owner=new FrameLayout(context);View child=new View(context);owner.addView(child,new FrameLayout.LayoutParams(200,200));owner.layout(0,0,200,200);child.layout(0,0,200,200);
+  FrameLayout owner=(FrameLayout)Class.forName("com.android.launcher3.viewcontainer.GridRecyclerView").getConstructor(Context.class).newInstance(context);View child=new View(context);owner.addView(child,new FrameLayout.LayoutParams(200,200));owner.layout(0,0,200,200);child.layout(0,0,200,200);
   Bitmap mask=Bitmap.createBitmap(200,200,Bitmap.Config.ARGB_8888);Canvas maskCanvas=new Canvas(mask);Paint white=new Paint(Paint.ANTI_ALIAS_FLAG);white.setColor(Color.WHITE);maskCanvas.drawRoundRect(new RectF(0,0,200,200),35,35,white);
   Class<?> style=cls("xposed.GlassStyle");Constructor<?> constructor=style.getConstructor(boolean.class,int.class,int.class,int.class,int.class,ColorMatrixColorFilter.class,boolean.class,Integer.class,boolean.class);
   Class<?> parent=cls("xposed.ParentBackdrop");Object singleton=obj(parent);Method record=parent.getMethod("record",View.class,Drawable.class,RectF.class,Bitmap.class,float.class,style,boolean.class);Method resolve=parent.getMethod("resolve",View.class,Drawable.class,Bitmap.class);
@@ -54,7 +54,3 @@ public class ParentBackdropCheck {
   }System.out.println("PASS: frosted/liquid parent visible under ordinary child, rounded contour preserved, transforms follow owner, self-sampling excluded");System.exit(0);
  }
 }
-
-
-
-

@@ -11,6 +11,10 @@ import android.graphics.Bitmap
 import android.graphics.Paint
 import android.graphics.RenderNode
 import android.graphics.HardwareRenderer
+import android.animation.ValueAnimator
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.view.animation.PathInterpolator
 import android.view.ViewTreeObserver
 import com.cosmod.launcherglass.util.WallpaperHelper
 import com.cosmod.launcherglass.util.LiveBlurEngine
@@ -53,6 +57,9 @@ internal object DockMaterial {
         var layer:DockLayer?=null
         var attaching=false
         var suppressNative=false
+        var presence=DockPresence()
+        var animator:ValueAnimator?=null
+        var lastRowAlpha=1f
     }
     private val docks=WeakHashMap<View,Dock>()
     private val iconMethods=HashMap<Class<*>,Method?>()
@@ -175,10 +182,12 @@ internal object DockMaterial {
         ModuleHooks.hookAllMethods(type,"onLayout",object:XC_MethodHook(){
             override fun afterHookedMethod(param:MethodHookParam){
                 val view=param.thisObject as? ViewGroup ?: return
-                val dock=docks[view] ?: return
+                val dock=docks.getOrPut(view){Dock()}
                 if(!enabled())return
                 try {
-                    val next=geometry(view) ?: return
+                    observe(view,dock)
+                    val next=geometry(view)
+                    updatePresence(view,dock,next!=null)
                     if(next!=dock.target)view.invalidate()
                 }catch(t:Throwable){fail(t)}
             }
@@ -233,9 +242,10 @@ internal object DockMaterial {
         if(Looper.myLooper()!==Looper.getMainLooper()){android.os.Handler(Looper.getMainLooper()).post {onSettingsChanged()};return}
         for(view in docks.keys.toList()){
             docks[view]?.apply {
+                animator?.cancel();animator=null;presence=DockPresence()
                 rect.setEmpty();target.setEmpty();renderer.reset();iconRenderer.reset();signature=null
                 iconKey=null;iconSource=null
-                layer?.apply {active=enabled();sync();invalidate()}
+                layer?.apply {active=enabled();retainWhenHidden=false;sync();invalidate()}
                 if(!enabled()){
                     listener?.let {if(observing?.isAlive==true)observing?.removeOnPreDrawListener(it)}
                     listener=null;observing=null
@@ -252,6 +262,28 @@ internal object DockMaterial {
         for(i in 0 until row.childCount){val c=row.getChildAt(i);if(c.visibility==View.VISIBLE)alpha=maxOf(alpha,c.alpha)}
         return (alpha*row.alpha).coerceIn(0f,1f)
     }
+    private fun updatePresence(owner:ViewGroup,dock:Dock,present:Boolean) {
+        if(!dock.presence.observe(present))return
+        dock.animator?.cancel()
+        dock.layer?.retainWhenHidden=!present && dock.presence.drawable
+        val animator=ValueAnimator.ofFloat(dock.presence.fraction,dock.presence.target)
+        dock.animator=animator
+        animator.duration=180L
+        animator.interpolator=PathInterpolator(.2f,0f,0f,1f)
+        animator.addUpdateListener {
+            if(dock.animator!==it)return@addUpdateListener
+            dock.presence.update(it.animatedValue as Float)
+            dock.layer?.apply {
+                retainWhenHidden=!dock.presence.hasItems && dock.presence.drawable
+                sync();invalidate()
+            }
+            owner.invalidate()
+        }
+        animator.addListener(object:AnimatorListenerAdapter(){
+            override fun onAnimationEnd(animation:Animator){if(dock.animator===animation)dock.animator=null}
+        })
+        animator.start()
+    }
     private fun observe(view:ViewGroup,dock:Dock){
         val observer=view.viewTreeObserver
         if(dock.observing===observer && observer.isAlive)return
@@ -266,8 +298,10 @@ internal object DockMaterial {
                     FloatArray(9).also {matrix.getValues(it)}.toList()
                 }else emptyList()
                 val wall=if(!IconMaterialRenderer.clearGlass(DockSettings.style()))WallpaperHelper.getDockWallpaper(v.context) else null
+                val geometry=geometry(v)
+                updatePresence(v,dock,geometry!=null)
                 val signature=listOf(values,System.identityHashCode(wall),wall?.generationId,
-                    if(live)LiveBlurEngine.wallpaperScrollRatio else 0f,rowAlpha(v),DockSettings.style(),geometry(v))
+                    if(live)LiveBlurEngine.wallpaperScrollRatio else 0f,rowAlpha(v),DockSettings.style(),geometry)
                 if(signature!=dock.signature){dock.signature=signature;v.invalidate()}
             }catch(_:Throwable){}
             true
@@ -294,12 +328,22 @@ internal object DockMaterial {
     }
     private fun drawPlate(hotseat:ViewGroup,canvas:Canvas,dock:Dock):Boolean {
         // A hidden horizontal row must not expose the native plate during unlock/launch.
-        val next=geometry(hotseat) ?: return rowAlpha(hotseat)==0f && NativeIconAccess.call(hotseat,"hasVerticalHotseat")!=true
+        val next=geometry(hotseat)
+        updatePresence(hotseat,dock,next!=null)
+        if(next==null && (!dock.presence.drawable || dock.target.isEmpty))
+            return rowAlpha(hotseat)==0f && NativeIconAccess.call(hotseat,"hasVerticalHotseat")!=true
         // Native spring translations already animate the row; a second animator lags behind it.
-        dock.target.set(next);dock.rect.set(next)
+        if(next!=null){dock.target.set(next);dock.lastRowAlpha=rowAlpha(hotseat)}
+        dock.rect.set(dock.target)
         val rect=Rect(dock.rect)
         val radius=radius(rect);val path=path(hotseat,rect,radius,dock)
-        val drawn=dock.renderer.draw(canvas,hotseat,rect,path,radius,rowAlpha(hotseat))
+        val saved=canvas.save()
+        val drawn=try {
+            val scale=.94f+.06f*dock.presence.fraction
+            canvas.scale(scale,scale,rect.exactCenterX(),rect.exactCenterY())
+            dock.renderer.draw(canvas,hotseat,rect,path,radius,
+                (if(next!=null)rowAlpha(hotseat)else dock.lastRowAlpha)*dock.presence.fraction)
+        }finally{canvas.restoreToCount(saved)}
         if(drawn && !logged){logged=true;GlassLogger.i("Dock","Direct dock: bounds=$rect, radius=$radius, smooth=${path!=null}")}
         return drawn
     }

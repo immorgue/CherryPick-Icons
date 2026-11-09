@@ -45,6 +45,10 @@ internal object ParentBackdrop {
                 }else parent=current.parent as? View
             }
         }
+        if(scope===view && view.javaClass.name.let {
+                !it.endsWith(".GridRecyclerView") && !it.endsWith(".ShortcutContainer") &&
+                    !it.endsWith(".FolderIcon") && !it.endsWith(".FolderRoundImageView") &&
+                    !it.endsWith(".OplusFolder") && !it.endsWith(".Folder")})return
         val entries=plates.getOrPut(scope){WeakHashMap()}
         val old=entries[identity]
         if(old!=null && old.bounds==bounds && old.mask===mask && old.radius==radius && old.style==style && old.decorate==decorate)return

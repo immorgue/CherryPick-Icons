@@ -22,6 +22,8 @@ internal class DockLayer private constructor(owner:ViewGroup,root:ViewGroup,
     private var observer:ViewTreeObserver?=null
     private val listener=ViewTreeObserver.OnPreDrawListener {sync();true}
     var active=true
+    var retainWhenHidden=false
+    private var retainedOpacity=1f
     init {
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO
         isClickable=false;isFocusable=false
@@ -34,7 +36,7 @@ internal class DockLayer private constructor(owner:ViewGroup,root:ViewGroup,
             if(parent!=null)post {(parent as? ViewGroup)?.removeView(this)}
             return
         }
-        visibility=if(active && owner.isShown)VISIBLE else INVISIBLE
+        visibility=if(active && (owner.isShown || retainWhenHidden))VISIBLE else INVISIBLE
         if(visibility!=VISIBLE)return
         val world=Matrix();val parentWorld=Matrix();val inverse=Matrix()
         XposedHelpers.callMethod(owner,"transformMatrixToGlobal",world)
@@ -44,7 +46,7 @@ internal class DockLayer private constructor(owner:ViewGroup,root:ViewGroup,
         XposedHelpers.callMethod(this,"transformMatrixToGlobal",parentWorld)
         if(!parentWorld.invert(inverse))return
         val next=Matrix().apply {setConcat(inverse,world)}
-        if(next!=pose){pose.set(next);invalidate()}
+        if(!retainWhenHidden && next!=pose){pose.set(next);invalidate()}
         var opacity=1f
         val chain=ArrayList<RenderEffect>()
         var current:View?=owner
@@ -53,7 +55,8 @@ internal class DockLayer private constructor(owner:ViewGroup,root:ViewGroup,
             effects[current]?.let {chain.add(it)}
             current=current.parent as? View
         }
-        alpha=opacity.coerceIn(0f,1f)
+        if(!retainWhenHidden)retainedOpacity=opacity.coerceIn(0f,1f)
+        alpha=if(retainWhenHidden)retainedOpacity else opacity.coerceIn(0f,1f)
         if(chain!=effectKey){
             var combined:RenderEffect?=null
             for(effect in chain)combined=combined?.let {RenderEffect.createChainEffect(effect,it)} ?: effect
