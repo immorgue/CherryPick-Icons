@@ -3,6 +3,7 @@ package com.cosmod.launcherglass.xposed
 import android.graphics.PixelFormat
 import android.view.Surface
 import android.view.SurfaceControl
+import android.view.View
 import de.robv.android.xposed.XposedHelpers
 
 /** Small material buffer, inheriting ALL motion/clipping from the OEM parent. */
@@ -18,6 +19,18 @@ internal class NativeMaterialSurface private constructor(
             XposedHelpers.callMethod(tx,"hide",control)
             XposedHelpers.callMethod(tx,"reparent",control,null)
             tx.apply();shown=false
+        }finally{tx.close()}
+    }
+    /** Merge removal with the workspace buffer that replaces this material. */
+    fun detachOnDraw(root:View) {
+        val impl=XposedHelpers.callMethod(root,"getViewRootImpl") ?: error("No workspace ViewRoot")
+        val tx=SurfaceControl.Transaction()
+        try {
+            XposedHelpers.callMethod(tx,"hide",control)
+            XposedHelpers.callMethod(tx,"reparent",control,null)
+            val result=XposedHelpers.callMethod(impl,"applyTransactionOnDraw",tx)
+            check(result!=false){"Workspace rejected draw transaction"}
+            shown=false
         }finally{tx.close()}
     }
     fun attach(parent:SurfaceControl){

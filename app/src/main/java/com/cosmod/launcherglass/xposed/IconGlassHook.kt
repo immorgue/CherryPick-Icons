@@ -98,6 +98,7 @@ object IconGlassHook {
             val current=weak.get()
             var recovered=0
             if(current!=null && PrefsHelper.enabled && PrefsHelper.blurEnabled) {
+                DockMaterial.prepareIconWallpaper(WallpaperHelper.getBlurredWallpaper(appContext))
                 IconMaterialRenderer.beginFrame()
                 // OEM trim/snapshot teardown also discards nested nodes in
                 // static mode, sometimes before the resume callback arrives.
@@ -109,7 +110,7 @@ object IconGlassHook {
             }
             if(current!=null && PrefsHelper.enabled && PrefsHelper.blurEnabled &&
                 PrefsHelper.blurMode==com.cosmod.launcherglass.ui.SettingsProvider.BLUR_MODE_LIVE &&
-                !LiveBlurEngine.isAppLaunchInProgress && LiveBlurEngine.isResumed) {
+                current.isShown) {
                 // Animation/scroll transforms are final now; sample the same
                 // position that this frame will present, not the previous tick.
                 android.os.Trace.beginSection("CherryPick.sampleBeforeDraw")
@@ -225,12 +226,17 @@ object IconGlassHook {
         if(view==null)return
         val refresh=Runnable {
             repaintStamps.remove(view)
-            IconMaterialRenderer.prepareReturn(view)
+            val wallpaper=WallpaperHelper.getBlurredWallpaper(appContext)
+            fun prepare(child:View) {
+                IconMaterialRenderer.restoreDiscardedSamples(child)
+                IconMaterialRenderer.prepareReturn(child)
+                IconMaterialRenderer.updateSamplers(child,wallpaper)
+                child.invalidate()
+            }
+            prepare(view)
             if(view.javaClass.name.let {it.contains("GridRecyclerView") || it.contains("ShortcutContainer")}){
                 fun repair(child:View,depth:Int){
-                    IconMaterialRenderer.restoreDiscardedSamples(child)
-                    IconMaterialRenderer.prepareReturn(child)
-                    child.invalidate()
+                    prepare(child)
                     if(depth<8 && child is android.view.ViewGroup)for(i in 0 until child.childCount)repair(child.getChildAt(i),depth+1)
                 }
                 repair(view,0)
@@ -240,15 +246,14 @@ object IconGlassHook {
                 val parent=ancestor ?: return@repeat
                 if(parent.javaClass.name.contains("FolderIcon")){
                     returnedPreviewOwners[parent]=true
-                    IconMaterialRenderer.prepareReturn(parent)
-                    parent.invalidate()
+                    prepare(parent)
                 }
                 ancestor=parent.parent as? View
             }
             view.invalidate()
-            // Snapshot teardown can evict samples belonging to other icons,
-            // including previews on the adjacent workspace page.
-            invalidateActiveIcons(onlyChangedDrawerSamples=true)
+            // Repair other visible owners once, with the final transforms in
+            // pre-draw, rather than traversing/rebuilding every icon here too.
+            requestLiveFrame()
         }
         if(Looper.myLooper()==Looper.getMainLooper())refresh.run()else view.post(refresh)
     }
@@ -425,7 +430,9 @@ object IconGlassHook {
             try {render(canvas,Rect(0,0,width,height),parts,a,wallpaper,binding)}finally{canvas.restoreToCount(save)}
             return
         }
-        val compatible=wallpaper?.takeUnless {it.isRecycled}?.let {WallpaperHelper.forCanvas(it,canvas)}
+        val compatible=wallpaper?.takeUnless {it.isRecycled}?.let {
+            WallpaperHelper.forCanvas(DockMaterial.iconWallpaper(binding?.view ?: NativeSurfaceLive.materialSource,it),canvas)
+        }
         val plateMask=parts.plateMaskBitmap
         // Native surface capture enlarges a 210px icon to e.g. 1200px.
         // Material geometry scales, but the sampled wallpaper footprint must

@@ -155,7 +155,7 @@ object LiveBlurEngine {
         lastMotionTimeMs = SystemClock.uptimeMillis()
         com.cosmod.launcherglass.xposed.NativeSurfaceLive.onFlightStarted(opening=false)
         transitionRefreshUntilMs = maxOf(transitionRefreshUntilMs, lastMotionTimeMs + 600L)
-        if (wasSuspended) IconGlassHook.invalidateActiveIcons(onlyChangedDrawerSamples=true)
+        if (wasSuspended) IconGlassHook.requestLiveFrame()
         startTickerIfNeeded()
     }
 
@@ -190,7 +190,7 @@ object LiveBlurEngine {
     fun onTransitionFinished() = onMainThread {
         if (isAppLaunchInProgress || !isResumed) return@onMainThread
         onTransitionStarted(600L)
-        IconGlassHook.invalidateActiveIcons()
+        IconGlassHook.requestLiveFrame()
     }
 
     private val tickerRunnable = object : Runnable {
@@ -350,7 +350,7 @@ object LiveBlurEngine {
         transitionRefreshUntilMs = maxOf(transitionRefreshUntilMs, lastMotionTimeMs + 600L)
         startTickerIfNeeded()
         LauncherWallpaperCapture.startMotionWatch()
-        IconGlassHook.invalidateActiveIcons(onlyChangedDrawerSamples=true)
+        IconGlassHook.requestLiveFrame()
     }
 
     fun getLiveBlurBitmap(context: Context?, hostView: View?): Bitmap? {

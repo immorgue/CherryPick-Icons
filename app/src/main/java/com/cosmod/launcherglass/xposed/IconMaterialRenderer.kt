@@ -144,8 +144,7 @@ object IconMaterialRenderer {
         val root=reference.get() ?: return
         pendingFrames.remove(root)
         if(PrefsHelper.enabled && PrefsHelper.blurEnabled &&
-            com.cosmod.launcherglass.util.LiveBlurEngine.isResumed &&
-            !com.cosmod.launcherglass.util.LiveBlurEngine.isAppLaunchInProgress && root.isAttachedToWindow && root.isShown){
+            root.isAttachedToWindow && root.isShown){
             IconGlassHook.noteDeferredSampleFrame()
             // In Live mode sample only in native pre-draw, after this frame's
             // animation transforms. A timer must not consume its FPS slot with
@@ -256,11 +255,9 @@ object IconMaterialRenderer {
         val filter=style.filter
         val finishKey=MaterialFinish.key()
         if(sampler.wallpaper===wallpaper && sampler.source==source && sampler.filter===filter && sampler.appliedStyle==style && sampler.finishKey==finishKey)return true
-        // Opening uses the retained material. Native transforms animate its
-        // existing display list; no new refraction effects are needed per frame.
-        // The returning flight has its independent live 30 FPS producer.
-        if(!NativeSurfaceLive.isSampling && com.cosmod.launcherglass.util.LiveBlurEngine.isAppLaunchInProgress &&
-            sampler.source!=null && sampler.wallpaper===wallpaper && sampler.appliedStyle==style && sampler.finishKey==finishKey)return true
+        // These nodes belong to visible workspace views, not to the opening
+        // surface snapshot. Follow the OEM view transform even while launching:
+        // freezing here made an interrupted launch jump when HOME resumed it.
         // The global blur limit applies to every material. Mini previews may
         // lower that limit to 30; neither draw path bypasses the same clock.
         val fps=MiniIconRefresh.fps(PrefsHelper.liveFps,sampler.mini,PrefsHelper.optimizeMiniIcons)
@@ -302,7 +299,7 @@ object IconMaterialRenderer {
             restored=restoreSample(sampler) || restored
             val image=if(sampler.style.folder){
                 folderImage ?: (com.cosmod.launcherglass.util.WallpaperHelper.getFolderWallpaper(view.context) ?: wallpaper).also {folderImage=it}
-            }else wallpaper
+            }else DockMaterial.iconWallpaper(view,wallpaper)
             if(sampler.worldValid && sampler.world==world && sampler.scroll==scroll && sampler.wallpaper===image && sampler.appliedStyle==sampler.style && sampler.finishKey==MaterialFinish.key())continue
             val rect=RectF(sampler.local);world.mapRect(rect)
             if(samplerEffect(sampler,image,WallpaperFootprint.source(image,sampler.screenW,sampler.screenH,rect),nowNs,view)){
@@ -456,8 +453,13 @@ object IconMaterialRenderer {
                     try {XposedHelpers.callMethod(binding.view,"transformMatrixToGlobal",world);world.mapRect(rect)}catch(_:Throwable){rect.set(0f,0f,width.toFloat(),height.toFloat())}
                     // Native overscroll can re-record the icon even when the
                     // live updater skips it. Retain its existing edge sample.
-                    if(sampler.source==null || !freezeEdge(binding.view,world))
-                        samplerEffect(sampler,wallpaper,WallpaperFootprint.source(wallpaper,binding.screenW,binding.screenH,rect),view=binding.view)
+                    if(sampler.source==null || !freezeEdge(binding.view,world)) {
+                        // An own draw can change the crop after pre-draw. Do not
+                        // let the next pre-draw trust an older world stamp.
+                        sampler.worldValid=false
+                        val image=DockMaterial.iconWallpaper(binding.view,wallpaper)
+                        samplerEffect(sampler,image,WallpaperFootprint.source(image,binding.screenW,binding.screenH,rect),view=binding.view)
+                    }
                     plate.drawRenderNode(liftNode(sampler,binding) ?: sampler.node)
                 }else{
                     val nowNs=System.nanoTime()

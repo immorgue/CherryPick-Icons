@@ -62,7 +62,7 @@ internal class DockRenderer {
             val now=System.nanoTime()
             val fps=PrefsHelper.liveFps.coerceIn(1,60)
             val changed=sampledWallpaper!==wallpaper || sampledSource!=source
-            if(changed && sampledStyle==style && sampleWidth==w && sampleHeight==h &&
+            if(changed && WallpaperHelper.isLiveWallpaper(view.context) && sampledStyle==style && sampleWidth==w && sampleHeight==h &&
                 sampledWallpaper?.isRecycled==false && sampleClock.remainingNs(now,fps)>0L){
                 wallpaper=sampledWallpaper;source=sampledSource
             }else if(changed || sampledStyle!=style || sampleWidth!=w || sampleHeight!=h){

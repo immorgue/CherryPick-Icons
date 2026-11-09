@@ -86,7 +86,10 @@ object WallpaperHelper {
         val live=ctx?.let {isLiveWallpaper(it)} ?: true
         if(!live)staticDockWallpaper?.takeUnless {it.isRecycled}?.let {return it}
         val image=scoped(dockOwn,context)
-        if(!live && image!=null && (!dockOwn.settings.own || dockOwn.published===image))staticDockWallpaper=image
+        // While a replacement loads, scoped() may still return the preceding
+        // shared image. It is drawable, but must not become the pinned dock.
+        if(!live && image!=null && cachedRevision==sourceRevision &&
+            (!dockOwn.settings.own || dockOwn.published===image))staticDockWallpaper=image
         return image
     }
     private fun publishFolder(candidate:Bitmap){

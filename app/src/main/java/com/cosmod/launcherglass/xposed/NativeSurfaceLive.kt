@@ -119,7 +119,7 @@ object NativeSurfaceLive {
 
     @Volatile private var animatedSources:Set<View> = emptySet()
     fun ownsSource(view:View)=!LiveBlurEngine.isWorkspaceScrolling && animatedSources.contains(view)
-    val materialSource: View? get() = recording.get()?.source
+    val materialSource: View? get() = recording.get()?.source ?: sampling.get()?.capture?.source
 
     /** Copy geometry from the initial native draw, and retain only this icon's material. */
     @Suppress("DEPRECATION")
@@ -213,15 +213,42 @@ object NativeSurfaceLive {
         }
         if(active)schedule()
     }
-    private fun releaseChild(control:SurfaceControl){
+    private fun releaseChild(control:SurfaceControl,handoff:View?=null){
         val child=children.remove(control) ?: return
+        fun finish(reuse:Boolean) {
+            submitter.post {
+                if(reuse && PrefsHelper.enabled && PrefsHelper.blurEnabled && child.control.isValid && pool.size<2)pool.add(child)
+                else child.close()
+            }
+        }
+        if(handoff!=null && handoff.isAttachedToWindow && handoff.isHardwareAccelerated && Looper.myLooper()==Looper.getMainLooper()) {
+            val completed=AtomicBoolean(false)
+            val callback=Runnable {if(completed.compareAndSet(false,true))finish(true)}
+            val observer=handoff.viewTreeObserver
+            try {
+                observer.registerFrameCommitCallback(callback)
+                child.detachOnDraw(handoff)
+                handoff.invalidate()
+                // If the window disappears before committing, close this old
+                // control; never reuse it with a pending removal transaction.
+                main.postDelayed({
+                    if(completed.compareAndSet(false,true)){
+                        if(observer.isAlive)observer.unregisterFrameCommitCallback(callback)
+                        finish(false)
+                    }
+                },1000L)
+                GlassLogger.limited("LiveSurface","draw-handoff",20){"Material removal synchronized with workspace draw"}
+                return
+            }catch(t:Throwable){
+                if(observer.isAlive)observer.unregisterFrameCommitCallback(callback)
+                completed.set(true)
+                GlassLogger.limited("LiveSurface","draw-handoff-fallback",5){"Draw handoff unavailable: ${t.message}"}
+            }
+        }
         // Revoke visibility synchronously. An already-running producer may
         // still post to this child, but cannot make a retired material visible.
         try {child.detach()}catch(_:Throwable){}
-        submitter.post {
-            if(PrefsHelper.enabled && PrefsHelper.blurEnabled && child.control.isValid && pool.size<2)pool.add(child)
-            else child.close()
-        }
+        finish(true)
     }
     private fun child(capture:Capture):NativeMaterialSurface {
         val parent=capture.lease!!.control
@@ -256,7 +283,7 @@ object NativeSurfaceLive {
         }
         schedule()
     }
-    private fun retire(reason: String, predicate: (Capture) -> Boolean) = synchronized(lock) {
+    private fun retire(reason: String,handoff:View?=null, predicate: (Capture) -> Boolean) = synchronized(lock) {
         captures.entries.removeAll { (_, capture) ->
             val remove = predicate(capture)
             if (remove) {
@@ -267,7 +294,7 @@ object NativeSurfaceLive {
                     // The native record can be reused, the child producer can
                     // too. Detach before the OEM retires its parent, otherwise
                     // every open/return allocates another BufferQueue/context.
-                    releaseChild(it.control)
+                    releaseChild(it.control,handoff)
                 }
                 GlassLogger.i("LiveSurface", "Retired record=${capture.recordId}, redraws=${frame?.redraws ?: 0}, pose=${capture.lease?.pose?.get()}, reason=$reason")
             }
@@ -524,8 +551,8 @@ object NativeSurfaceLive {
                 // child. A worker-side callback posts visibility to main, so
                 // our retirement must queue behind it on the same Looper.
                 val finish=Runnable {
-                    retire("showOriginalIcon") {it===capture}
                     IconGlassHook.onNativeIconReturned(capture.source)
+                    retire("showOriginalIcon",capture.source?.rootView) {it===capture}
                 }
                 if(Looper.myLooper()==Looper.getMainLooper())finish.run()else main.post(finish)
             }

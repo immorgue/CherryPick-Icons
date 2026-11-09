@@ -7,6 +7,10 @@ import android.graphics.RectF
 import android.graphics.drawable.Drawable
 import android.os.Looper
 import android.graphics.Matrix
+import android.graphics.Bitmap
+import android.graphics.Paint
+import android.graphics.RenderNode
+import android.graphics.HardwareRenderer
 import android.view.ViewTreeObserver
 import com.cosmod.launcherglass.util.WallpaperHelper
 import com.cosmod.launcherglass.util.LiveBlurEngine
@@ -34,6 +38,10 @@ internal object DockMaterial {
     private const val NATIVE="cherrypick.nativeDock"
     private class Dock {
         val renderer=DockRenderer()
+        val iconRenderer=DockRenderer()
+        var iconKey:List<Any?>?=null
+        var iconWallpaper:Bitmap?=null
+        var iconSource:Bitmap?=null
         var target=Rect()
         var observing:ViewTreeObserver?=null
         var listener:ViewTreeObserver.OnPreDrawListener?=null
@@ -54,6 +62,63 @@ internal object DockMaterial {
     private var logged=false
 
     fun enabled()=PrefsHelper.enabled && PrefsHelper.blurEnabled && PrefsHelper.dockEnabled
+
+    /** Independent pixels only: never reference hotseat/icon RenderNodes. */
+    fun prepareIconWallpaper(wallpaper:Bitmap?) {
+        if(!enabled() || wallpaper==null || wallpaper.isRecycled)return
+        for((owner,dock) in docks.entries.toList()) {
+            val hotseat=owner as? ViewGroup ?: continue
+            if(!hotseat.isAttachedToWindow || !hotseat.isShown)continue
+            try {
+                val rect=geometry(hotseat) ?: continue
+                val dm=hotseat.resources.displayMetrics
+                val scale=maxOf(dm.widthPixels.toFloat()/wallpaper.width,dm.heightPixels.toFloat()/wallpaper.height)
+                val offset=(wallpaper.width-dm.widthPixels/scale).coerceAtLeast(0f)*LiveBlurEngine.wallpaperScrollRatio
+                // Resting coordinates keep unlock/press transforms out of the
+                // static dock cache, exactly like its own renderer.
+                var x=0f;var y=0f;var node:View?=hotseat
+                while(node!=null){
+                    val parent=node.parent as? View
+                    x+=node.left-(parent?.scrollX ?: 0);y+=node.top-(parent?.scrollY ?: 0)
+                    node=parent
+                }
+                val radius=radius(rect)
+                val live=WallpaperHelper.isLiveWallpaper(hotseat.context)
+                val key=listOf(if(live)wallpaper else null,wallpaper.width,wallpaper.height,
+                    WallpaperHelper.getDockWallpaper(hotseat.context),Rect(rect),radius,x,y,scale,offset,
+                    DockSettings.style(),PrefsHelper.gradientOpacity,PrefsHelper.iconStroke,PrefsHelper.strokeOpacity,SurfaceMaterial.geometryRevision)
+                if(dock.iconKey==key && dock.iconWallpaper?.isRecycled==false){dock.iconSource=wallpaper;continue}
+                android.os.Trace.beginSection("CherryPick.dockIconBackdrop")
+                try {
+                val recording=RenderNode("CherryPick.dockIconBackdrop")
+                recording.setPosition(0,0,wallpaper.width,wallpaper.height)
+                val canvas=recording.beginRecording(wallpaper.width,wallpaper.height)
+                try {
+                    canvas.drawBitmap(wallpaper,0f,0f,Paint(Paint.FILTER_BITMAP_FLAG))
+                    canvas.translate(offset,0f);canvas.scale(1f/scale,1f/scale);canvas.translate(x,y)
+                    dock.iconRenderer.draw(canvas,hotseat,rect,path(hotseat,rect,radius,dock),radius,1f)
+                }finally{recording.endRecording()}
+                val image=try {
+                    XposedHelpers.callStaticMethod(HardwareRenderer::class.java,"createHardwareBitmap",recording,wallpaper.width,wallpaper.height) as? Bitmap
+                }finally{recording.discardDisplayList()}
+                if(image!=null){dock.iconWallpaper=image;dock.iconSource=wallpaper;dock.iconKey=key}
+                }finally{android.os.Trace.endSection()}
+            }catch(t:Throwable){fail(t)}
+        }
+    }
+
+    fun iconWallpaper(view:View?,wallpaper:Bitmap):Bitmap {
+        if(!enabled() || view==null)return wallpaper
+        var current:View?=view
+        repeat(16){
+            val owner=current ?: return wallpaper
+            docks[owner]?.let {dock ->
+                if(dock.iconSource===wallpaper)return dock.iconWallpaper?.takeUnless {it.isRecycled} ?: wallpaper
+            }
+            current=owner.parent as? View
+        }
+        return wallpaper
+    }
 
     fun install(loader:ClassLoader){
         DockLayer.install()
