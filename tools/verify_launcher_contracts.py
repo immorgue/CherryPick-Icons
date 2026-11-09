@@ -11,14 +11,18 @@ def verify(d):
   if not condition:groups[group]=False;errors.append(group+': '+message)
  def field(group,owner,name,kind):
   check(group,inherited(d,owner,name,'field')==kind,owner+'.'+name+' '+kind)
- def method(group,owner,name,signature=None):
-  ms=inherited(d,owner,name,'method') or []
+ def method(group,owner,name,signature=None,declared=False):
+  ms=[m for m in d.get(owner,{}).get('methods',[]) if m['name']==name] if declared else inherited(d,owner,name,'method') or []
   check(group,any(m['signature']==signature for m in ms) if signature else bool(ms),owner+'.'+name+' '+str(signature))
  p='Lcom/android/launcher3/';modern=p+'anim/iconsurfacemanager/surface/IconSurfaceRenderer;' in d
  ns=p+'anim/iconsurfacemanager/'+('surface/' if modern else '')
  for n in ['getSurfaceControl','hideSurfaceControl','resetSurfaceControl','releaseSurfaceControl']:method('live_flight',ns+'IconSurfaceProvider;',n)
  for n in ['getRecordId','reuseIconSurface','showOriginalIcon']:method('live_flight',ns+'IconSurfaceRecord;',n)
  method('live_flight',ns+('IconSurfaceRenderer;' if modern else 'IconSurfaceRecord;'),'drawViewToSurface' if modern else 'transferViewToSurface')
+ # showOriginalIcon is hooked on the concrete OEM record. The handoff reads
+ # an Int ID and otherwise leaves the native call/arguments untouched.
+ method('surface_handoff',ns+'IconSurfaceRecord;','getRecordId','()I')
+ method('surface_handoff',ns+'IconSurfaceRecord;','showOriginalIcon','('+p+'Launcher;ZZZZ)V',declared=True)
  method('folder_paging',p+'folder/FolderIcon;','isScrolling','()Z')
  method('folder_paging',p+'folder/FolderPreviewDrawable;','draw','(Landroid/graphics/Canvas;)V')
  field('folder_paging',p+'folder/FolderPreviewDrawable;','mInvalid','Z')
@@ -30,6 +34,24 @@ def verify(d):
  method('dock',p+'OplusHotseat;','onDraw','(Landroid/graphics/Canvas;)V')
  field('dock',p+'CellLayout;','mShortcutsAndWidgets','Lcom/android/launcher3/ShortcutAndWidgetContainer;')
  for n in ['setDockerBackground','setBackgroundAlphaInner']:method('dock',p+'OplusHotseat;',n)
+ # hookAllMethods only sees methods declared by this class: an inherited
+ # onLayout is insufficient to initialize an empty dock's visibility state.
+ method('dock_visibility',p+'OplusHotseat;','onLayout','(ZIIII)V',declared=True)
+ method('dock_visibility',p+'OplusHotseat;','hasVerticalHotseat','()Z')
+ method('dock_visibility',p+'OplusBubbleTextView;','getIconBounds','(Landroid/graphics/Rect;)V')
+ check('dock_visibility',p+'OplusDragLayer;' in d,'OplusDragLayer view for expanded dock')
+ # ParentBackdrop uses these stable scopes by name; the recycler base class
+ # can be obfuscated (17.5) because no recycler-specific API is called.
+ for n in ['folder/FolderIcon','folder/Folder','folder/OplusFolder','folder/FolderRoundImageView',
+           'viewcontainer/GridRecyclerView','viewcontainer/ShortcutContainer']:
+  check('folder_backdrops',p+n+';' in d,n)
+ for n in ['mContentBackground','mContentAnimationBackground']:
+  field('folder_backdrops',p+'folder/OplusFolder;',n,'Landroid/widget/ImageView;')
+ method('folder_backdrops',p+'folder/OplusFolder;','onFinishInflate','()V',declared=True)
+ method('folder_backdrops',p+'folder/FolderRoundImageView;','onDraw','(Landroid/graphics/Canvas;)V',declared=True)
+ for n,k in [('mBgDrawable','Landroid/graphics/drawable/Drawable;'),
+             ('mBgView',p+'folder/FolderRoundImageView;'),('mRadius','F')]:
+  field('folder_backdrops',p+'folder/OplusPreviewBackground;',n,k)
  # The snapshot lambda's numeric suffix differs between OEM builds.
  bitmap='Lcom/oplus/basecommon/util/BitmapUtils;'
  check('snapshots',any(m['name'].startswith('convertViewToBitmapInMainExecutor$lambda$') and m['signature']=='(Ljava/lang/Runnable;IILjava/util/concurrent/CompletableFuture;Landroid/view/View;)V' and m['access']&8 for m in d.get(bitmap,{}).get('methods',[])),'snapshot recorder static signature')
