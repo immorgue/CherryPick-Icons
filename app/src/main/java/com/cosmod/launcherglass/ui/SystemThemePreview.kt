@@ -18,8 +18,14 @@ object SystemThemePreview {
             val type=context.classLoader.loadClass("com.oplus.wallpapers.core.data.model.themes.InspirationThemeData")
             val model=type.getConstructor().newInstance() as Parcelable
             type.getMethod("setId",Integer::class.java).invoke(model,id)
+            // The OEM default model is marked in-use. Its reconciliation
+            // prefers the current theme over a different requested ID when
+            // that flag is true. This is a saved selection, not current state.
+            type.getMethod("setInUse",Boolean::class.javaPrimitiveType).invoke(model,false)
             val intent=Intent().setClassName("com.oplus.wallpapers","com.oplus.wallpapers.themes.edit.ThemeEditActivity")
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("themeData",model)
+                // The OEM editor is singleTop: CLEAR_TOP alone can retain its
+                // old model. Start a fresh editor task for this selection.
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK).putExtra("themeData",model)
                 .putExtra("from_type",3).putExtra("editMode",2)
             // Match the system shell's activity launch path. A package Context
             // attributes the root process to the OEM UID and is rejected by

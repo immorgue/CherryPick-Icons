@@ -69,6 +69,22 @@ object IconMaterialRenderer {
         var wallpaper:Bitmap?=null
         var source:RectF?=null
         var filter:ColorFilter?=null
+        var previousSource:RectF?=null
+        var previousSourceFrame=-1L
+        var predictionApplied=false
+        private val predictedSource=RectF()
+        fun predict(current:RectF,active:Boolean):RectF {
+            val previous=previousSource ?: return current
+            if(!active)return current
+            // Pre-draw and an own draw can sample the same owner twice in
+            // one frame. Keep its lead instead of undoing it on that redraw.
+            if(previousSourceFrame==frameSerial && current==previous && predictionApplied)return source ?: current
+            val dx=SwipePrediction.offset(previous.left,previous.top,previous.width(),previous.height(),
+                current.left,current.top,current.width(),current.height())
+            if(dx==0f)return current
+            predictedSource.set(current);predictedSource.offset(dx,0f)
+            return predictedSource
+        }
         var liquid:LiquidGlassShader?=null
         var appliedStyle:GlassStyle?=null
         var mini=false
@@ -259,7 +275,12 @@ object IconMaterialRenderer {
         val style=sampler.style
         val filter=style.filter
         val finishKey=MaterialFinish.key()
-        val source=rawSource
+        val swipe=com.cosmod.launcherglass.util.LiveBlurEngine.isWorkspaceScrolling &&
+            !NativeSurfaceLive.isSampling && isWorkspaceSample(view,sampler)
+        val source=sampler.predict(rawSource,swipe && sampler.wallpaper===wallpaper && sampler.appliedStyle==style)
+        // Correct the retained lead immediately when motion ends. Never
+        // leave a predicted crop on a stationary icon.
+        val settlePrediction=sampler.predictionApplied && source==rawSource
         if(sampler.wallpaper===wallpaper && sampler.source==source && sampler.filter===filter && sampler.appliedStyle==style && sampler.finishKey==finishKey && sampler.backdropRevision==(parent?.revision ?: 0L))return true
         // These nodes belong to visible workspace views, not to the opening
         // surface snapshot. Follow the OEM view transform even while launching:
@@ -269,7 +290,7 @@ object IconMaterialRenderer {
         val fps=MiniIconRefresh.fps(PrefsHelper.liveFps,sampler.mini,PrefsHelper.optimizeMiniIcons)
         if(sampler.source!=null && sampler.appliedStyle==style && sampler.finishKey==finishKey){
             val remaining=sampler.clock.remainingNs(nowNs,fps)
-            if(remaining>0L && !NativeSurfaceLive.isSampling){scheduleSampleRefresh(view,remaining);return false}
+            if(remaining>0L && !NativeSurfaceLive.isSampling && !settlePrediction){scheduleSampleRefresh(view,remaining);return false}
         }
         val refracted=if(android.os.Build.VERSION.SDK_INT>=33 && style.liquid) {
             // createShaderEffect() snapshots the shader, so every sampler can
@@ -286,11 +307,25 @@ object IconMaterialRenderer {
         if(filter!=null && refracted==null)effect=RenderEffect.createColorFilterEffect(filter,effect)
         sampler.node.setRenderEffect(MaterialFinish.effect(effect,sampler.node.width,sampler.node.height))
         sampler.wallpaper=wallpaper;sampler.source=RectF(source);sampler.filter=filter;sampler.appliedStyle=style
+        sampler.previousSource=RectF(rawSource);sampler.previousSourceFrame=frameSerial
+        sampler.predictionApplied=source!=rawSource
         sampler.lastUpdateNs=nowNs
         sampler.finishKey=finishKey
         sampler.backdropRevision=parent?.revision ?: 0L
         sampler.clock.record(nowNs,fps)
         return true
+    }
+    private fun isWorkspaceSample(view:View?,sampler:Sampler):Boolean {
+        if(sampler.origin?.get()!=null)return false
+        var owner=view
+        repeat(24){
+            val current=owner ?: return false
+            val name=current.javaClass.name
+            if(name.contains("DragView") || name.contains("FolderPagedView"))return false
+            if(name.contains("Workspace") && !name.contains("Recents") && !name.contains("Task"))return true
+            owner=current.parent as? View
+        }
+        return false
     }
     @Synchronized fun updateSamplers(view:View,wallpaper:Bitmap?,transform:Matrix?=null,nowNs:Long=System.nanoTime()):Boolean {
         if(wallpaper==null)return false
@@ -310,7 +345,7 @@ object IconMaterialRenderer {
                 folderImage ?: (com.cosmod.launcherglass.util.WallpaperHelper.getFolderWallpaper(view.context) ?: wallpaper).also {folderImage=it}
             }else DockMaterial.iconWallpaper(scope,wallpaper)
             val parent=ParentBackdrop.resolve(scope,drawable,image,includeHidden=sampler.origin?.get()!=null)
-            if(sampler.worldValid && sampler.world==world && sampler.scroll==scroll && sampler.wallpaper===image && sampler.appliedStyle==sampler.style && sampler.finishKey==MaterialFinish.key() && sampler.backdropRevision==(parent?.revision ?: 0L))continue
+            if(!sampler.predictionApplied && sampler.worldValid && sampler.world==world && sampler.scroll==scroll && sampler.wallpaper===image && sampler.appliedStyle==sampler.style && sampler.finishKey==MaterialFinish.key() && sampler.backdropRevision==(parent?.revision ?: 0L))continue
             val rect=RectF(sampler.local);world.mapRect(rect)
             if(samplerEffect(sampler,image,WallpaperFootprint.source(image,sampler.screenW,sampler.screenH,rect),nowNs,view,parent)){
                 sampler.world.set(world);sampler.worldValid=true;sampler.scroll=scroll
