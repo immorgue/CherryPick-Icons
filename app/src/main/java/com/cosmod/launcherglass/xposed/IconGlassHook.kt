@@ -99,6 +99,7 @@ object IconGlassHook {
             var recovered=0
             if(current!=null && PrefsHelper.enabled && PrefsHelper.blurEnabled) {
                 DockMaterial.prepareIconWallpaper(WallpaperHelper.getBlurredWallpaper(appContext))
+                ParentBackdrop.beginFrame()
                 IconMaterialRenderer.beginFrame()
                 // OEM trim/snapshot teardown also discards nested nodes in
                 // static mode, sometimes before the resume callback arrives.
@@ -131,7 +132,7 @@ object IconGlassHook {
         for(reference in registeredViews())reference.get()?.invalidate()
         liveViews.clear();liveSnapshot=emptyList();liveSnapshotDirty=true
         ForeignDraw.reset()
-        IconMaterialRenderer.clear();DynamicIconForeground.clear()
+        IconMaterialRenderer.clear();ParentBackdrop.clear();DynamicIconForeground.clear()
     }
     internal fun recoverDiscardedIcons(root:View):Int {
         var recovered=0
@@ -219,7 +220,7 @@ object IconGlassHook {
             .also {if(!transition && !scaled)viewAnchors[view]=it}
     }
     fun invalidateFolderPreviews(){revision++}
-    fun invalidateShaders(){IconMaterialRenderer.clear();GlyphMaterialRenderer.clear();revision++}
+    fun invalidateShaders(){IconMaterialRenderer.clear();ParentBackdrop.clear();GlyphMaterialRenderer.clear();revision++}
     private data class RepaintStamp(val x:Int,val y:Int,val w:Int,val h:Int,val scroll:Int,val wallpaper:Bitmap?,val revision:Long)
     private val repaintStamps=WeakHashMap<View,RepaintStamp>()
     fun onNativeIconReturned(view:View?) {

@@ -150,6 +150,8 @@ internal object SurfaceMaterial {
         // wallpaper cannot be sampled there; use the shared software snapshot.
         val shape=shape(bounds,radius,path,nativeShape,nativeMask,pathFingerprint,identity,view)
         val footprint=local ?: RectF(bounds)
+        if(canvas.isHardwareAccelerated && !TransitionCapture.captures(canvas) && NativeSurfaceLive.materialSource==null && !ForeignDraw.isForeign(view))
+            ParentBackdrop.record(view,identity,footprint,shape.mask,radius,style,decorate)
         val metrics=view.resources.displayMetrics
         if(TransitionCapture.captures(canvas) || NativeSurfaceLive.materialSource!=null){
             val capturedBounds=Rect(bounds)

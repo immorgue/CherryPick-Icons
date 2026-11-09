@@ -75,6 +75,7 @@ object IconMaterialRenderer {
         var lastUpdateNs=0L
         val clock=SampleFrameClock()
         var finishKey=-1
+        var backdropRevision=0L
         var lift:Lift?=null
         // Frame serials (see beginFrame) of creation and of the latest own draw.
         var created=0L
@@ -250,11 +251,11 @@ object IconMaterialRenderer {
         for(sampler in entries.values)if(!sampler.node.hasDisplayList() || sampler.plateNode?.hasDisplayList()==false)return true
         return false
     }
-    private fun samplerEffect(sampler:Sampler,wallpaper:Bitmap,source:RectF,nowNs:Long=System.nanoTime(),view:View?=null):Boolean {
+    private fun samplerEffect(sampler:Sampler,wallpaper:Bitmap,source:RectF,nowNs:Long=System.nanoTime(),view:View?=null,parent:ParentBackdrop.Sample?=null):Boolean {
         val style=sampler.style
         val filter=style.filter
         val finishKey=MaterialFinish.key()
-        if(sampler.wallpaper===wallpaper && sampler.source==source && sampler.filter===filter && sampler.appliedStyle==style && sampler.finishKey==finishKey)return true
+        if(sampler.wallpaper===wallpaper && sampler.source==source && sampler.filter===filter && sampler.appliedStyle==style && sampler.finishKey==finishKey && sampler.backdropRevision==(parent?.revision ?: 0L))return true
         // These nodes belong to visible workspace views, not to the opening
         // surface snapshot. Follow the OEM view transform even while launching:
         // freezing here made an interrupted launch jump when HOME resumed it.
@@ -268,10 +269,11 @@ object IconMaterialRenderer {
         val refracted=if(android.os.Build.VERSION.SDK_INT>=33 && style.liquid) {
             // createShaderEffect() snapshots the shader, so every sampler can
             // share one compiled lens instead of compiling SkSL per icon.
-            LiquidGlassShader.shared()?.update(wallpaper,sampler.material.mask!!,source,sampler.node.width,sampler.node.height,filter,sampler.material.rounding,style)
+            LiquidGlassShader.shared()?.update(wallpaper,sampler.material.mask!!,source,sampler.node.width,sampler.node.height,filter,sampler.material.rounding,style,parent?.shader)
         }else null
         val background=refracted ?: run {
-                val shader=GlassGeometry.wallpaperShader(wallpaper)
+                // Wrap a shared parent shader before applying this icon's crop.
+                val shader=parent?.shader?.let {ComposeShader(it,LinearGradient(0f,0f,1f,0f,Color.TRANSPARENT,Color.TRANSPARENT,Shader.TileMode.CLAMP),PorterDuff.Mode.SRC_OVER)} ?: GlassGeometry.wallpaperShader(wallpaper)
                 shader.setLocalMatrix(Matrix().apply {setRectToRect(source,RectF(0f,0f,sampler.node.width.toFloat(),sampler.node.height.toFloat()),Matrix.ScaleToFit.FILL)})
                 ComposeShader(shader,sampler.material.mask!!,PorterDuff.Mode.DST_IN)
             }
@@ -281,6 +283,7 @@ object IconMaterialRenderer {
         sampler.wallpaper=wallpaper;sampler.source=RectF(source);sampler.filter=filter;sampler.appliedStyle=style
         sampler.lastUpdateNs=nowNs
         sampler.finishKey=finishKey
+        sampler.backdropRevision=parent?.revision ?: 0L
         sampler.clock.record(nowNs,fps)
         return true
     }
@@ -295,14 +298,15 @@ object IconMaterialRenderer {
         var restored=false
         val scroll=com.cosmod.launcherglass.util.LiveBlurEngine.wallpaperScrollRatio
         var folderImage:Bitmap?=null
-        for(sampler in entries.values){
+        for((drawable,sampler) in entries){
             restored=restoreSample(sampler) || restored
             val image=if(sampler.style.folder){
                 folderImage ?: (com.cosmod.launcherglass.util.WallpaperHelper.getFolderWallpaper(view.context) ?: wallpaper).also {folderImage=it}
             }else DockMaterial.iconWallpaper(view,wallpaper)
-            if(sampler.worldValid && sampler.world==world && sampler.scroll==scroll && sampler.wallpaper===image && sampler.appliedStyle==sampler.style && sampler.finishKey==MaterialFinish.key())continue
+            val parent=ParentBackdrop.resolve(view,drawable,image)
+            if(sampler.worldValid && sampler.world==world && sampler.scroll==scroll && sampler.wallpaper===image && sampler.appliedStyle==sampler.style && sampler.finishKey==MaterialFinish.key() && sampler.backdropRevision==(parent?.revision ?: 0L))continue
             val rect=RectF(sampler.local);world.mapRect(rect)
-            if(samplerEffect(sampler,image,WallpaperFootprint.source(image,sampler.screenW,sampler.screenH,rect),nowNs,view)){
+            if(samplerEffect(sampler,image,WallpaperFootprint.source(image,sampler.screenW,sampler.screenH,rect),nowNs,view,parent)){
                 sampler.world.set(world);sampler.worldValid=true;sampler.scroll=scroll
             }
         }
@@ -458,7 +462,8 @@ object IconMaterialRenderer {
                         // let the next pre-draw trust an older world stamp.
                         sampler.worldValid=false
                         val image=DockMaterial.iconWallpaper(binding.view,wallpaper)
-                        samplerEffect(sampler,image,WallpaperFootprint.source(image,binding.screenW,binding.screenH,rect),view=binding.view)
+                        samplerEffect(sampler,image,WallpaperFootprint.source(image,binding.screenW,binding.screenH,rect),view=binding.view,
+                            parent=ParentBackdrop.resolve(binding.view,binding.drawable,image))
                     }
                     plate.drawRenderNode(liftNode(sampler,binding) ?: sampler.node)
                 }else{

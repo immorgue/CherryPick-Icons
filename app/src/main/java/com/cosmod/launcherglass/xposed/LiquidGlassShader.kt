@@ -17,9 +17,12 @@ internal class LiquidGlassShader private constructor(private val shader:RuntimeS
     private var previousRounding=Float.NaN
     private var previousFilter:ColorMatrixColorFilter?=null
     private var filterSet=false
-    fun update(wallpaper:Bitmap,mask:Shader,source:RectF,width:Int,height:Int,filter:ColorMatrixColorFilter?,rounding:Float,style:GlassStyle=GlassStyle.icons()):Shader {
+    fun update(wallpaper:Bitmap,mask:Shader,source:RectF,width:Int,height:Int,filter:ColorMatrixColorFilter?,rounding:Float,style:GlassStyle=GlassStyle.icons(),backdropOverride:Shader?=null):Shader {
         shader.setFloatUniform("experimental",if(PrefsHelper.experimentalLiquid)1f else 0f)
-        if(image!==wallpaper){
+        if(backdropOverride!=null){
+            shader.setInputShader("backdrop",backdropOverride)
+            image=null
+        }else if(image!==wallpaper){
             backdrop=GlassGeometry.wallpaperShader(wallpaper)
             shader.setInputShader("backdrop",backdrop!!)
             image=wallpaper
