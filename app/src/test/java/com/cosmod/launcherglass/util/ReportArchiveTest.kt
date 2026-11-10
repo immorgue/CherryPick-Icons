@@ -38,4 +38,17 @@ class ReportArchiveTest {
         assertFalse(target.exists())
         assertFalse(java.io.File(target.path+".partial").exists())
     }
+
+    @Test fun passiveTraceIsPreservedAndChecksummedAlongsideLauncher() {
+        val base=temporary.newFile("base.apk").apply {writeBytes(byteArrayOf(1,2,3))}
+        val trace=temporary.newFile("frames.pftrace").apply {writeBytes(ByteArray(400_000){(it*19).toByte()})}
+        val target=java.io.File(temporary.root,"with-trace.zip")
+        ReportArchive.write(target,"logs","device",listOf(ReportArchive.Apk("launcher/test/base.apk",base)),trace)
+        ZipFile(target).use {zip ->
+            val entry="performance/frames.pftrace"
+            assertArrayEquals(trace.readBytes(),zip.getInputStream(zip.getEntry(entry)).readBytes())
+            val digest=MessageDigest.getInstance("SHA-256").digest(trace.readBytes()).joinToString("") {"%02x".format(it.toInt() and 255)}
+            assertTrue(zip.getInputStream(zip.getEntry("SHA256SUMS.txt")).reader().readText().contains("$digest  $entry\n"))
+        }
+    }
 }

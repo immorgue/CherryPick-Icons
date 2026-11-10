@@ -188,6 +188,16 @@ internal object LiftedBackdrop {
     /** The DragView was observed from construction without a hook gap and never drawn foreign. */
     fun permits(dragView:View)=main && dragViews[dragView]==ModuleHooks.epoch && !poisoned.containsKey(dragView)
 
+    fun hasPopup(dragView:View):Boolean {
+        val parent=dragView.parent as? android.view.ViewGroup ?: return false
+        for(i in 0 until parent.childCount){
+            val child=parent.getChildAt(i)
+            if(child.isShown && generateSequence(child.javaClass as Class<*>?){it.superclass}
+                    .any {it.name.contains("PopupContainer")})return true
+        }
+        return false
+    }
+
     fun isDragView(view:View)=dragViewClass?.isInstance(view)==true
     fun isDragLayer(view:View)=dragLayerClass?.isInstance(view)==true
 

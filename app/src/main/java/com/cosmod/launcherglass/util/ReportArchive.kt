@@ -9,7 +9,7 @@ import java.util.zip.ZipOutputStream
 internal object ReportArchive {
     data class Apk(val entry:String,val file:File)
 
-    fun write(destination:File,diagnostics:String,device:String,apks:List<Apk>):File {
+    fun write(destination:File,diagnostics:String,device:String,apks:List<Apk>,frameTrace:File?=null):File {
         require(apks.isNotEmpty()) {"Installed launcher APK was not found"}
         require(apks.map {it.entry}.toSet().size==apks.size) {"Duplicate APK names"}
         val partial=File(destination.parentFile,destination.name+".partial")
@@ -43,6 +43,23 @@ internal object ReportArchive {
                         .append("  ").append(apk.entry).append('\n')
                 }
                 zip.setLevel(6)
+                if(frameTrace!=null){
+                    val entry="performance/frames.pftrace"
+                    val digest=MessageDigest.getInstance("SHA-256")
+                    zip.putNextEntry(ZipEntry(entry))
+                    var copied=0L
+                    frameTrace.inputStream().buffered().use {input ->
+                        while(true){
+                            val count=input.read(buffer)
+                            if(count<0)break
+                            zip.write(buffer,0,count);digest.update(buffer,0,count);copied+=count
+                        }
+                    }
+                    check(copied>0 && copied==frameTrace.length()) {"Frame trace changed while creating report; retry"}
+                    zip.closeEntry()
+                    checksums.append(digest.digest().joinToString("") {"%02x".format(it.toInt() and 255)})
+                        .append("  ").append(entry).append('\n')
+                }
                 text("SHA256SUMS.txt",checksums.toString())
             }
             check(partial.renameTo(destination)) {"Could not finish diagnostic archive"}

@@ -76,12 +76,14 @@ object WallpaperHelper {
     private val folderOwn=OwnWallpaper(com.cosmod.launcherglass.xposed.FolderSettings,{PrefsHelper.folderBlurEnabled},"FolderMaterial")
     private val dockOwn=OwnWallpaper(com.cosmod.launcherglass.xposed.DockSettings,{PrefsHelper.dockEnabled},"DockMaterial")
     private fun scoped(own:OwnWallpaper,context:Context?):Bitmap? {
+        if(!PrefsHelper.backdropEnabled)return null
         val shared=getBlurredWallpaper(context)
         return if(own.settings.own)own.published?.takeUnless {it.isRecycled} ?: shared else shared
     }
     fun getFolderWallpaper(context:Context?=null):Bitmap?=scoped(folderOwn,context)
     @Volatile private var staticDockWallpaper:Bitmap?=null
     fun getDockWallpaper(context:Context?=null):Bitmap? {
+        if(!PrefsHelper.backdropEnabled)return null
         val ctx=context ?: appContext
         val live=ctx?.let {isLiveWallpaper(it)} ?: true
         if(!live)staticDockWallpaper?.takeUnless {it.isRecycled}?.let {return it}
@@ -159,6 +161,12 @@ object WallpaperHelper {
 
     private var isReloading = false
 
+    private var settlingReloadPosted = false
+    private val settlingReload = Runnable {
+        synchronized(this) { settlingReloadPosted = false }
+        appContext?.let { getBlurredWallpaper(it) }
+    }
+
     private var sourceRevision = 0L
 
     /**
@@ -168,6 +176,13 @@ object WallpaperHelper {
     @Volatile private var wallpaperStamp = 0L
     fun stamp(): Long = wallpaperStamp
     @Synchronized fun sourceReady():Boolean = blurredWallpaper?.isRecycled==false && cachedRevision==sourceRevision
+
+    /** An unlock capture can stop before ImageWallpaper reaches its final zoom. */
+    @Synchronized fun onStaticCaptureSettled() {
+        if(!PrefsHelper.enabled || !PrefsHelper.backdropEnabled)return
+        snapshotTimeMs=0L
+        invalidate(preserveStaticDock=true)
+    }
 
     private var cachedRevision = -1L
 
@@ -208,13 +223,13 @@ object WallpaperHelper {
 
             try {
 
-                if (!valid() || !PrefsHelper.enabled || !PrefsHelper.blurEnabled || (!LiveBlurEngine.isResumed && !com.cosmod.launcherglass.xposed.NativeSurfaceLive.active) ||
+                if (!valid() || !PrefsHelper.enabled || !PrefsHelper.backdropEnabled || (!LiveBlurEngine.isResumed && !com.cosmod.launcherglass.xposed.NativeSurfaceLive.active) ||
 
                     (LiveBlurEngine.isAppLaunchInProgress && !com.cosmod.launcherglass.xposed.NativeSurfaceLive.active)) return@execute
 
                 signature = GpuWallpaperBlur.fingerprint(frame)
 
-                val radius = PrefsHelper.blurRadius.coerceIn(0, 50)
+                val radius = (if(PrefsHelper.colorOnly)0 else PrefsHelper.blurRadius).coerceIn(0, 50)
 
                 val revision = synchronized(this) { sourceRevision }
 
@@ -226,7 +241,7 @@ object WallpaperHelper {
 
                     if (candidate != null) synchronized(this) {
 
-                        if (valid() && revision == sourceRevision && radius == PrefsHelper.blurRadius.coerceIn(0, 50) &&
+                        if (valid() && revision == sourceRevision && radius == (if(PrefsHelper.colorOnly)0 else PrefsHelper.blurRadius).coerceIn(0, 50) &&
 
                             PrefsHelper.enabled && ((LiveBlurEngine.isResumed && !LiveBlurEngine.isAppLaunchInProgress) || com.cosmod.launcherglass.xposed.NativeSurfaceLive.active)) {
 
@@ -306,7 +321,7 @@ object WallpaperHelper {
     @Volatile private var processingActive=false
     fun onProcessingSettingsChanged() {
 
-        val active=PrefsHelper.enabled && PrefsHelper.blurEnabled
+        val active=PrefsHelper.enabled && PrefsHelper.backdropEnabled
         if(processingActive && !active)loader.execute { GpuWallpaperBlur.close() }
         processingActive=active
 
@@ -471,7 +486,7 @@ object WallpaperHelper {
 
         if (blurredWallpaper == null || cachedRevision != sourceRevision ||
 
-            cachedBlurRadius != PrefsHelper.blurRadius.coerceIn(0, 50)) {
+            cachedBlurRadius != (if(PrefsHelper.colorOnly)0 else PrefsHelper.blurRadius).coerceIn(0, 50)) {
 
             // Window readiness does not change the wallpaper. Incrementing
             // here rejected the in-flight load on every rapid pause/resume.
@@ -489,6 +504,7 @@ object WallpaperHelper {
     @Synchronized
 
     fun getBlurredWallpaper(context: Context? = null): Bitmap? {
+        if(!PrefsHelper.backdropEnabled)return null
 
         val ctx = context ?: appContext ?: return blurredWallpaper
 
@@ -504,15 +520,35 @@ object WallpaperHelper {
 
     private fun requestLoad(context: Context) {
 
-        if (!PrefsHelper.enabled || !PrefsHelper.blurEnabled) return
+        if (!PrefsHelper.enabled || !PrefsHelper.backdropEnabled) return
 
-        val radius = PrefsHelper.blurRadius.coerceIn(0, 50)
+        val radius = (if(PrefsHelper.colorOnly)0 else PrefsHelper.blurRadius).coerceIn(0, 50)
 
         if (isReloading || SystemClock.uptimeMillis() < retryAfterMs ||
 
             (cachedRevision == sourceRevision && cachedBlurRadius == radius &&
 
                 blurredWallpaper?.isRecycled == false)) return
+
+        // A behind-window snapshot contains the wallpaper's current animation
+        // transform. Pinning that frame for a static wallpaper preserves its
+        // temporary zoom/translation after the launcher returns to rest.
+        // Keep the preceding texture and capture once the workspace settles;
+        // this also keeps a full wallpaper blur out of the return frame budget.
+        if (!isLiveWallpaper(context) && (!LiveBlurEngine.isResumed ||
+                LiveBlurEngine.isAppLaunchInProgress || LiveBlurEngine.hasRecentMotion)) {
+            // Resume/window-ready requests the pending revision again. Do not
+            // poll in the background while another application is in front.
+            if (!LiveBlurEngine.isResumed || LiveBlurEngine.isAppLaunchInProgress) return
+            if (!settlingReloadPosted) {
+                settlingReloadPosted = true
+                mainHandler.postDelayed(settlingReload, 500L)
+                GlassLogger.animationLimited("WallpaperHelper", "settled-snapshot", 50) {
+                    "Deferred static wallpaper snapshot until workspace settles (revision=$sourceRevision)"
+                }
+            }
+            return
+        }
 
         isReloading = true
 
@@ -532,7 +568,7 @@ object WallpaperHelper {
 
                 isReloading = false
 
-                if (revision == sourceRevision && radius == PrefsHelper.blurRadius.coerceIn(0, 50) && liveSerial==livePublishSerial) {
+                if (revision == sourceRevision && radius == (if(PrefsHelper.colorOnly)0 else PrefsHelper.blurRadius).coerceIn(0, 50) && liveSerial==livePublishSerial) {
 
                     if (candidate != null) {
 

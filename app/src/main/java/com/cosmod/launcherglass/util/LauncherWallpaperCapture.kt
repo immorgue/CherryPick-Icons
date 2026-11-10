@@ -186,6 +186,7 @@ object LauncherWallpaperCapture {
             main.post { stopMotionWatch() }
             return
         }
+        val settleStatic = motionFactory != null && staticWallpaper
         motionEpoch++
         main.removeCallbacks(settleCheck)
         motionFactory?.let {
@@ -194,6 +195,7 @@ object LauncherWallpaperCapture {
         }
         motionFactory = null
         LiveBlurEngine.onWallpaperMotion(false)
+        if(settleStatic)WallpaperHelper.onStaticCaptureSettled()
     }
 
     fun startMotionWatch() {
@@ -202,7 +204,7 @@ object LauncherWallpaperCapture {
             return
         }
         val context = WallpaperHelper.appContext ?: return
-        if (!PrefsHelper.enabled || !PrefsHelper.blurEnabled ||
+        if (!PrefsHelper.enabled || !PrefsHelper.backdropEnabled ||
             (!LiveBlurEngine.isResumed && !com.cosmod.launcherglass.xposed.NativeSurfaceLive.active) ||
             (LiveBlurEngine.isAppLaunchInProgress && !com.cosmod.launcherglass.xposed.NativeSurfaceLive.active) ||
             (LiveBlurEngine.isWorkspaceBlurSuspended && !PrefsHelper.drawerBlurEnabled) ||
@@ -281,6 +283,7 @@ object LauncherWallpaperCapture {
     }
 
     fun capture(context: Context): Bitmap? {
+        if(!PrefsHelper.backdropEnabled)return null
         if (Looper.myLooper() == Looper.getMainLooper() || !LiveBlurEngine.isResumed ||
             LiveBlurEngine.isAppLaunchInProgress) return null
         val root = window?.get() ?: return null

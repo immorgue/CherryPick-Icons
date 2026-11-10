@@ -39,14 +39,18 @@ internal object DiagnosticReport {
             }
         }
         check(apks.isNotEmpty()) {"Installed supported launcher APK was not found"}
+        val directory=File(context.cacheDir,"diagnostics").apply {check(isDirectory || mkdirs())}
+        // Capture before collecting logs/APKs, so history ends at the report request.
+        val frameTrace=if(prefs.getBoolean("developer_mode",false))PassiveFrameTrace.snapshot(directory)else null
         val report=buildString {
             appendLine(device)
             appendLine("\nSettings:")
+            appendLine("Passive FrameTimeline: ${if(frameTrace!=null)"attached" else "not available; no recording started"}")
             prefs.all.toSortedMap().forEach {(key,value)->appendLine("$key=$value")}
             appendLine("\nLogs:");append(GlassLogger.readLogs(context))
         }
-        val directory=File(context.cacheDir,"diagnostics").apply {check(isDirectory || mkdirs())}
         val timestamp=SimpleDateFormat("yyyy-MM-dd_HH-mm-ss-SSS",Locale.US).format(Date())
-        return ReportArchive.write(File(directory,"CherryPick_report_$timestamp.zip"),report,device,apks)
+        return try {ReportArchive.write(File(directory,"CherryPick_report_$timestamp.zip"),report,device,apks,frameTrace)}
+        finally{frameTrace?.delete()}
     }
 }

@@ -135,17 +135,19 @@ internal object SurfaceMaterial {
      * [fallback] is the native plate a drag preview draws if no material can.
      */
     fun draw(canvas:Canvas,bounds:Rect,view:View,identity:android.graphics.drawable.Drawable,radius:Float,path:Path?=null,decorate:Boolean=true,alpha:Int=255,style:GlassStyle=GlassStyle.icons(),nativeShape:android.graphics.drawable.Drawable?=null,nativeMask:Bitmap?=null,pathFingerprint:Long?=null,
-             local:RectF?=null,fallback:android.graphics.drawable.Drawable?=null):Boolean {
+             local:RectF?=null,fallback:android.graphics.drawable.Drawable?=null,drawContour:Boolean=true):Boolean {
         if(bounds.isEmpty)return false
         if(canvas.quickReject(bounds.left.toFloat(),bounds.top.toFloat(),bounds.right.toFloat(),bounds.bottom.toFloat()))return true
+        // Even an owner awaiting its first wallpaper needs the ready event.
+        // Otherwise its cached native fallback can survive until it is dragged.
+        IconGlassHook.registerMaterialView(view)
         // Clear glass (blur off) needs no wallpaper sample at all.
         val clear=IconMaterialRenderer.clearGlass(style)
         val sourceWallpaper=if(clear)null else (if(style.folder)WallpaperHelper.getFolderWallpaper(view.context)else WallpaperHelper.getBlurredWallpaper(view.context)) ?: return false
         // Native drag preview Picture: leave the footprint empty; the DragView
         // draws this material live (see DragPreviewMaterial).
         if(DragPreviewMaterial.captures(canvas) && DragPreviewMaterial.captureSurface(canvas,view,
-                DragPreviewMaterial.Surface(Rect(bounds),radius,path?.let(::Path),decorate,alpha,style,nativeShape,nativeMask,pathFingerprint,identity,fallback)))return true
-        IconGlassHook.registerMaterialView(view)
+                DragPreviewMaterial.Surface(Rect(bounds),radius,path?.let(::Path),decorate,alpha,style,nativeShape,nativeMask,pathFingerprint,identity,fallback,drawContour)))return true
         // The launcher may render a drag shadow to a software Canvas. A GPU
         // wallpaper cannot be sampled there; use the shared software snapshot.
         val shape=shape(bounds,radius,path,nativeShape,nativeMask,pathFingerprint,identity,view)
@@ -153,7 +155,7 @@ internal object SurfaceMaterial {
         if(canvas.isHardwareAccelerated && !TransitionCapture.captures(canvas) && NativeSurfaceLive.materialSource==null && !ForeignDraw.isForeign(view))
             ParentBackdrop.record(view,identity,footprint,shape.mask,radius,style,decorate)
         val metrics=view.resources.displayMetrics
-        if(TransitionCapture.captures(canvas) || NativeSurfaceLive.materialSource!=null){
+        if(!style.colorOnly && (TransitionCapture.captures(canvas) || NativeSurfaceLive.materialSource!=null)){
             val capturedBounds=Rect(bounds)
             val resting=RectF(footprint)
             val world=Matrix()
@@ -168,13 +170,14 @@ internal object SurfaceMaterial {
                 val source=image?.let {WallpaperFootprint.source(it,screenW,screenH,screen)}
                 val saved=if(alpha<255)target.saveLayerAlpha(RectF(capturedBounds),alpha)else target.save()
                 try {
+                    if(!drawContour && path!=null)target.clipPath(path)
                     target.translate(capturedBounds.left.toFloat(),capturedBounds.top.toFloat())
                     target.scale(capturedBounds.width().toFloat()/shape.mask.width,capturedBounds.height().toFloat()/shape.mask.height)
                     val rect=Rect(0,0,shape.mask.width,shape.mask.height)
                     IconMaterialRenderer.draw(target,rect,shape.mask,emptyGlyph,plateColor,style.opacity*255/100,!decorate,
                         image,source,null,decorate,style){out,area,blurred ->
                         if(!blurred)clearPlate(out,area,shape.mask,plateColor,style.opacity*255/100,decorate)
-                        if(decorate && PrefsHelper.iconStroke && PrefsHelper.strokeOpacity>0)
+                        if(decorate && drawContour && PrefsHelper.iconStroke && PrefsHelper.strokeOpacity>0)
                             out.drawBitmap(GlassGeometry.rim(shape.mask),null,area,Paint(Paint.FILTER_BITMAP_FLAG))
                     }
                 }finally{target.restoreToCount(saved)}
@@ -199,7 +202,7 @@ internal object SurfaceMaterial {
                 IconMaterialRenderer.Binding(view,identity,RectF(footprint),metrics.widthPixels,metrics.heightPixels,alpha=alpha,
                     foreign=ForeignDraw.isForeign(view) || TransitionCapture.renderingSnapshot),decorate,style) {target,rect,blurred ->
                 if(!blurred)clearPlate(target,rect,shape.mask,plateColor,style.opacity*255/100,decorate)
-                if(decorate && PrefsHelper.iconStroke && PrefsHelper.strokeOpacity>0)
+                if(decorate && drawContour && PrefsHelper.iconStroke && PrefsHelper.strokeOpacity>0)
                     target.drawBitmap(GlassGeometry.rim(shape.mask),null,rect,Paint(Paint.FILTER_BITMAP_FLAG))
             }
         }finally{canvas.restoreToCount(save)}

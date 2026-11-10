@@ -58,6 +58,16 @@ internal class NativeMaterialSurface private constructor(
     }
     companion object {
         private val session by lazy {XposedHelpers.newInstance(Class.forName("android.view.SurfaceSession"))}
+        fun prewarmHandoff(rootType:Class<*>?,control:SurfaceControl){
+            try {
+                XposedHelpers.findMethodBestMatch(SurfaceControl.Transaction::class.java,"hide",SurfaceControl::class.java)
+                XposedHelpers.findMethodBestMatch(SurfaceControl.Transaction::class.java,"reparent",*arrayOf<Any?>(control,null))
+                XposedHelpers.findMethodBestMatch(rootType ?: Class.forName("com.android.internal.policy.DecorView"),"getViewRootImpl",*emptyArray<Class<*>>())
+                XposedHelpers.findMethodBestMatch(Class.forName("android.view.ViewRootImpl"),"applyTransactionOnDraw",SurfaceControl.Transaction::class.java)
+            }catch(t:Throwable){
+                com.cosmod.launcherglass.util.GlassLogger.animationLimited("LiveSurface","handoff-warmup",100){"Optional handoff lookup warmup unavailable: ${t.javaClass.simpleName}"}
+            }
+        }
         fun create(parent:SurfaceControl?,width:Int,height:Int,canvasWidth:Int,canvasHeight:Int):NativeMaterialSurface {
             val builder=XposedHelpers.newInstance(Class.forName("android.view.SurfaceControl"+'$'+"Builder"),session)
             XposedHelpers.callMethod(builder,"setName","CherryPick.material")

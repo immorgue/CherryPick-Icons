@@ -6,12 +6,90 @@ import android.graphics.Rect
 import android.graphics.Outline
 import android.graphics.drawable.Drawable
 import android.view.View
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
 import com.cosmod.launcherglass.util.GlassLogger
 import de.robv.android.xposed.XposedHelpers
 
 /** The native 17.x contour API, or the same OplusPath calls used by 16.x. */
 internal object NativeFolderPath {
     private val logged=HashSet<String>()
+    /** OEM optical contour compensates for the GPU corner implementation. */
+    fun policyPath(policy:Drawable?,bounds:Rect,radius:Float):Path? {
+        policy ?: return null
+        val old=Rect(policy.bounds)
+        return try {
+            XposedHelpers.callMethod(policy,"setCornerRadius",radius)
+            policy.setBounds(0,0,bounds.width(),bounds.height())
+            (NativeIconAccess.field(policy,"mStrokePath") as? Path)?.takeUnless {it.isEmpty}
+                ?.let {Path(it).apply {offset(bounds.left.toFloat(),bounds.top.toFloat())}}
+        }catch(_:Throwable){null}finally{policy.bounds=old}
+    }
+    /** Theme PNGs/nine-patches carry their real corners in alpha, not Outline. */
+    fun drawableMask(drawable:Drawable?,bounds:Rect):Bitmap? {
+        drawable ?: return null
+        if(bounds.isEmpty)return null
+        val scale=minOf(1f,384f/maxOf(bounds.width(),bounds.height()))
+        val w=(bounds.width()*scale).toInt().coerceAtLeast(1)
+        val h=(bounds.height()*scale).toInt().coerceAtLeast(1)
+        val image=Bitmap.createBitmap(w+2,h+2,Bitmap.Config.ARGB_8888)
+        val old=Rect(drawable.bounds)
+        try {
+            val canvas=Canvas(image)
+            canvas.translate(1f,1f);canvas.scale(w.toFloat()/bounds.width(),h.toFloat()/bounds.height())
+            canvas.translate(-bounds.left.toFloat(),-bounds.top.toFloat())
+            drawable.bounds=bounds;drawable.draw(canvas)
+            val pixels=IntArray(image.width*image.height)
+            image.getPixels(pixels,0,image.width,0,0,image.width,image.height)
+            val peak=pixels.maxOfOrNull {it ushr 24} ?: 0
+            val center=pixels[(h/2+1)*image.width+w/2+1] ushr 24
+            val corners=intArrayOf(pixels[image.width+1],pixels[image.width+w],
+                pixels[h*image.width+1],pixels[h*image.width+w])
+            // Reject paint-only rectangles and contour-only drawables.
+            if(peak==0 || center<peak*.75f || corners.all {(it ushr 24)>=peak*.98f}){image.recycle();return null}
+            for(i in pixels.indices)pixels[i]=(((pixels[i] ushr 24)*255/peak) shl 24) or 0xffffff
+            image.setPixels(pixels,0,image.width,0,0,image.width,image.height)
+            return image
+        }catch(_:Throwable){image.recycle();return null}
+        finally{drawable.bounds=old}
+    }
+    /** Ask the stock view to clip its own drawable; no inferred radius/weight. */
+    fun gridMask(view:View,native:Drawable,bounds:Rect):Bitmap? { return try {
+        val scale=minOf(1f,384f/maxOf(bounds.width(),bounds.height()))
+        val w=(bounds.width()*scale).toInt().coerceAtLeast(1)
+        val h=(bounds.height()*scale).toInt().coerceAtLeast(1)
+        val image=Bitmap.createBitmap(w+2,h+2,Bitmap.Config.ARGB_8888)
+        val canvas=Canvas(image)
+        canvas.translate(1f,1f);canvas.scale(w.toFloat()/bounds.width(),h.toFloat()/bounds.height())
+        canvas.translate(-bounds.left.toFloat(),-bounds.top.toFloat())
+        val old=Rect(native.bounds)
+        try {
+            val clip=generateSequence(view.javaClass as Class<*>?){it.superclass}
+                .flatMap {it.declaredMethods.asSequence()}
+                .firstOrNull {it.name=="clipRoundBackground" && it.parameterTypes.contentEquals(arrayOf(Canvas::class.java))}
+            if(clip!=null){
+                clip.isAccessible=true;clip.invoke(view,canvas)
+                native.bounds=bounds;native.draw(canvas)
+            }else{
+                val mask=NativeIconAccess.call(view,"createClipSmoothRoundBitmap") as? Bitmap
+                if(mask==null){image.recycle();return null}
+                canvas.drawBitmap(mask,null,RectF(bounds),android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG))
+            }
+        }finally{native.bounds=old}
+        // Only coverage belongs to the material mask; the native tint does not.
+        val pixels=IntArray(image.width*image.height)
+        image.getPixels(pixels,0,image.width,0,0,image.width,image.height)
+        val peak=pixels.maxOfOrNull {it ushr 24} ?: 0
+        if(peak==0){image.recycle();return null}
+        for(i in pixels.indices)pixels[i]=(((pixels[i] ushr 24)*255/peak) shl 24) or (Color.WHITE and 0xffffff)
+        image.setPixels(pixels,0,image.width,0,0,image.width,image.height)
+        image
+    }catch(t:Throwable){
+        if(logged.add("grid:"+t.javaClass.name))GlassLogger.e("Compat","Stock grid mask unavailable",t)
+        null
+    }
+    }
     /** Fill geometry, not the separate optical border (which can use radius * .675). */
     fun fill(drawable:Drawable?,bounds:Rect):Path? {
         drawable ?: return null

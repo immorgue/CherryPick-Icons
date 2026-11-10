@@ -88,7 +88,7 @@ internal object DockMaterial {
      * settings changed, so a stationary launcher does no dock work per frame.
      */
     fun onFrame(){
-        if(!enabled() || docks.isEmpty())return
+        if(!enabled() || DockSettings.style().colorOnly || docks.isEmpty())return
         val context=WallpaperHelper.appContext ?: return
         // Live frames have their own publication cadence. Until the composite
         // has a smaller live update path, retain its existing refresh behaviour;

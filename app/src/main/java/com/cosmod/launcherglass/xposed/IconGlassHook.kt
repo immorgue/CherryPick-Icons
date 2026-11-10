@@ -98,7 +98,7 @@ object IconGlassHook {
         val listener=ViewTreeObserver.OnPreDrawListener {
             val current=weak.get()
             var recovered=0
-            if(current!=null && PrefsHelper.enabled && PrefsHelper.blurEnabled) {
+            if(current!=null && PrefsHelper.enabled && PrefsHelper.backdropEnabled) {
                 DockMaterial.onFrame()
                 ParentBackdrop.beginFrame()
                 IconMaterialRenderer.beginFrame()
@@ -115,7 +115,7 @@ object IconGlassHook {
                 LiftedBackdrop.prepare()
                 IconMaterialRenderer.updateLifted(current)
             }
-            if(current!=null && PrefsHelper.enabled && PrefsHelper.blurEnabled &&
+            if(current!=null && PrefsHelper.enabled && PrefsHelper.backdropEnabled &&
                 PrefsHelper.blurMode==com.cosmod.launcherglass.ui.SettingsProvider.BLUR_MODE_LIVE &&
                 current.isShown) {
                 // Animation/scroll transforms are final now; sample the same
@@ -123,7 +123,7 @@ object IconGlassHook {
                 android.os.Trace.beginSection("CherryPick.sampleBeforeDraw")
                 try {invalidateActiveIcons(onlyChangedDrawerSamples=true,beforeDraw=current)}finally{android.os.Trace.endSection()}
             }
-            if(current!=null && PrefsHelper.enabled && PrefsHelper.blurEnabled)reportIdleFrame(recovered)
+            if(current!=null && PrefsHelper.enabled && PrefsHelper.backdropEnabled)reportIdleFrame(recovered)
             true
         }
         liveRoots[root]=listener;root.viewTreeObserver.addOnPreDrawListener(listener)
@@ -233,31 +233,28 @@ object IconGlassHook {
         if(view==null)return
         val refresh=Runnable {
             repaintStamps.remove(view)
-            val wallpaper=WallpaperHelper.getBlurredWallpaper(appContext)
             fun prepare(child:View) {
-                IconMaterialRenderer.restoreDiscardedSamples(child)
-                IconMaterialRenderer.prepareReturn(child)
-                IconMaterialRenderer.updateSamplers(child,wallpaper)
-                child.invalidate()
+                val needsRecording=IconMaterialRenderer.prepareReturn(child)
+                // Final transforms are available in pre-draw. Do not build
+                // the effects here and then repeat that work in the same frame.
+                if(needsRecording)child.invalidate()
             }
-            prepare(view)
             if(view.javaClass.name.let {it.contains("GridRecyclerView") || it.contains("ShortcutContainer")}){
                 fun repair(child:View,depth:Int){
                     prepare(child)
                     if(depth<8 && child is android.view.ViewGroup)for(i in 0 until child.childCount)repair(child.getChildAt(i),depth+1)
                 }
                 repair(view,0)
-            }
+            }else prepare(view)
             var ancestor=view.parent as? View
             repeat(12) {
                 val parent=ancestor ?: return@repeat
                 if(parent.javaClass.name.contains("FolderIcon")){
                     returnedPreviewOwners[parent]=true
-                    prepare(parent)
+                    prepare(parent);parent.invalidate()
                 }
                 ancestor=parent.parent as? View
             }
-            view.invalidate()
             // Repair other visible owners once, with the final transforms in
             // pre-draw, rather than traversing/rebuilding every icon here too.
             requestLiveFrame()
@@ -269,7 +266,7 @@ object IconGlassHook {
         // Icon config resets may clear drawable associations while native
         // RenderNodes keep their display lists. Keep view registration separate
         // so the next live tick can force those lists to be recorded again.
-        val wallpaper=if(PrefsHelper.blurEnabled)WallpaperHelper.getBlurredWallpaper(appContext)else null
+        val wallpaper=if(PrefsHelper.iconBackdropEnabled)WallpaperHelper.getBlurredWallpaper(appContext)else null
         val location=IntArray(2)
         val visible=Rect()
         val world=Matrix()
@@ -442,7 +439,7 @@ object IconGlassHook {
         val footprint=Rect(0,0,parts.plateMaskBitmap.width,parts.plateMaskBitmap.height)
         val source=compatible?.let {sourceRect(it,a,footprint)}
         val plateColor=if(compatible!=null)PrefsHelper.plateColor(parts.bgColor)else parts.bgColor
-        val plateOpacity=PrefsHelper.bgOpacity
+        val plateOpacity=if(PrefsHelper.colorOnly)100 else PrefsHelper.bgOpacity
         IconMaterialRenderer.draw(canvas,bounds,plateMask,parts.glyphBitmap,plateColor,
             plateOpacity*255/100,false,compatible,source,binding,style=GlassStyle.icons().copy(extendedLens=width!=height)){target,local,blurred ->
             if(!blurred){
@@ -470,7 +467,7 @@ object IconGlassHook {
         }
     }
     private fun wallpaper(a:Anchor?):Bitmap? {
-        if(!PrefsHelper.blurEnabled)return null
+        if(!PrefsHelper.iconBackdropEnabled)return null
         if(a?.folder==true && !PrefsHelper.folderIconsBlurEnabled)return null
         if(a?.drawer==true && !PrefsHelper.drawerBlurEnabled)return null
         return WallpaperHelper.getBlurredWallpaper(appContext)
@@ -501,7 +498,7 @@ object IconGlassHook {
                 val materialAlpha=paint.alpha
                 // Legacy setDrawable uses this wrapper directly instead of a
                 // FastBitmapDrawable draw hook. Keep the 17 renderer unchanged.
-                if(NativeSurfaceLive.usesLegacyRenderer)NativeSurfaceLive.capture(canvas,parts.plateMaskBitmap.width,parts.plateMaskBitmap.height) {target ->
+                if(!PrefsHelper.colorOnly && NativeSurfaceLive.usesLegacyRenderer)NativeSurfaceLive.capture(canvas,parts.plateMaskBitmap.width,parts.plateMaskBitmap.height) {target ->
                     val saved=if(materialAlpha<255)target.saveLayerAlpha(RectF(materialBounds),materialAlpha)else target.save()
                     val rect=NativeSurfaceLive.sampleBounds(materialBounds)
                     val sample=if(rect!=null && a!=null)a.copy(x=rect.left,y=rect.top,iconW=rect.width(),iconH=rect.height())else a
@@ -590,10 +587,10 @@ object IconGlassHook {
                 if(LiveBlurEngine.isWorkspaceScrolling && scrollDrawLogs++<24)
                     GlassLogger.i("MaterialEngine","Scroll sample: host=${owner?.javaClass?.simpleName}, anchor=$a")
                 val materialBounds=Rect(bounds)
-                if(surfaceSource==null && a!=null)NativeSurfaceLive.prewarm(parts.plateMaskBitmap.width,a.screenW)
+                if(surfaceSource==null && a!=null)NativeSurfaceLive.prewarm(parts.plateMaskBitmap.width,a.screenW,owner?.rootView?.javaClass)
                 val materialAlpha=drawable.alpha
                 val retainedWallpaper=wallpaper(a)
-                if(NativeSurfaceLive.capture(canvas,parts.plateMaskBitmap.width,parts.plateMaskBitmap.height) { target ->
+                if(!PrefsHelper.colorOnly && NativeSurfaceLive.capture(canvas,parts.plateMaskBitmap.width,parts.plateMaskBitmap.height) { target ->
                     val layer=if(materialAlpha<255)target.saveLayerAlpha(RectF(materialBounds),materialAlpha)else target.save()
                     val rect=NativeSurfaceLive.sampleBounds(materialBounds)
                     val sample=if(rect!=null && a!=null)a.copy(x=rect.left,y=rect.top,iconW=rect.width(),iconH=rect.height())else a
@@ -683,7 +680,6 @@ object IconGlassHook {
             "LiftedBackdrop" to {LiftedBackdrop.install(loader)},
             "MultiIcons" to {MultiIconMaterialHook.install(loader)},
             "Dock" to {DockMaterial.install(loader)},
-            "FrameJank" to {FrameJank.install(loader)},
             "Transition" to {TransitionCapture.install(loader)},
             "ForeignDraw" to {ForeignDraw.install(loader)},
             "PhotoWidget" to {PhotoWidgetMaterial.install(loader)}

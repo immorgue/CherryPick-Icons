@@ -35,6 +35,8 @@ object NativeSurfaceLive {
     private val controls=ConcurrentHashMap<SurfaceControl,Lease>()
     private data class Sample(val capture:Capture,val draw:Draw,val pose:Pose?)
     private val sampling=ThreadLocal<Sample?>()
+    private val freezing=ThreadLocal<Boolean>()
+    internal val isFreezing:Boolean get()=freezing.get()==true
     internal val isSampling:Boolean get()=sampling.get()!=null
     private val sampleTransform=ThreadLocal<Matrix?>()
     internal fun withSampleTransform(matrix:Matrix,draw:()->Unit){
@@ -55,6 +57,7 @@ object NativeSurfaceLive {
         var canvasWidth:Int=1,var canvasHeight:Int=1,var materialWidth:Int=210,var materialHeight:Int=210)
     private data class Frame(val capture: Capture, val started: Long,
         var wallpaper: Bitmap?, var closing:Boolean=false,var direction:Int=0,var last: Long = 0L, var redraws: Int = 0, var poseVersion:Long = -1L,
+        var frozen:RenderNode?=null,var frozenGeneration:Long=0L,var freezeStartedNs:Long=0L,
         val clock:SampleFrameClock=SampleFrameClock(),val progress:SurfaceProgress=SurfaceProgress(started),
         val motion:FlightDirection=FlightDirection(if(closing)-1 else 0))
     private val leases = WeakHashMap<Surface, Lease>()
@@ -66,8 +69,8 @@ object NativeSurfaceLive {
     // in-flight draw, so a surface cannot be reused while its writer is active.
     private val pool=ArrayList<NativeMaterialSurface>(2)
     private val warmed=AtomicBoolean(false)
-    fun prewarm(materialWidth:Int,canvasSize:Int) {
-        if(!PrefsHelper.enabled || !PrefsHelper.blurEnabled || !warmed.compareAndSet(false,true))return
+    fun prewarm(materialWidth:Int,canvasSize:Int,rootType:Class<*>?=null) {
+        if(!PrefsHelper.enabled || !PrefsHelper.backdropEnabled || !warmed.compareAndSet(false,true))return
         submitter.post {
             if(!PrefsHelper.enabled){warmed.set(false);return@post}
             try {
@@ -75,18 +78,19 @@ object NativeSurfaceLive {
                 repeat((2-pool.size).coerceAtLeast(0)){
                     val output=NativeMaterialSurface.create(null,width,width,canvasSize,canvasSize)
                     try {
+                        if(it==0)NativeMaterialSurface.prewarmHandoff(rootType,output.control)
                         val canvas=output.surface.lockHardwareCanvas()
                         canvas.drawColor(Color.TRANSPARENT,PorterDuff.Mode.CLEAR)
                         output.surface.unlockCanvasAndPost(canvas)
                         pool.add(output)
                     }catch(t:Throwable){output.close();throw t}
                 }
-                GlassLogger.i("LiveSurface","Prewarmed ${pool.size} reusable GPU material producers")
+                GlassLogger.animation("LiveSurface","Prewarmed ${pool.size} reusable GPU material producers")
             }catch(t:Throwable){warmed.set(false);GlassLogger.e("LiveSurface","GPU producer warmup unavailable",t)}
         }
     }
     fun onSettingsChanged(){
-        if(!PrefsHelper.enabled || !PrefsHelper.blurEnabled){
+        if(!PrefsHelper.enabled || !PrefsHelper.backdropEnabled){
             retire("module disabled") {true}
             synchronized(lock){leases.clear();controls.clear();templates.clear();stagedPoses.clear()}
             if(submitterDelegate.isInitialized())submitter.post {pool.forEach {it.close()};pool.clear();warmed.set(false)}
@@ -124,6 +128,7 @@ object NativeSurfaceLive {
     /** Copy geometry from the initial native draw, and retain only this icon's material. */
     @Suppress("DEPRECATION")
     fun capture(canvas: Canvas, width:Int,height:Int,render: (Canvas) -> Unit):Boolean {
+        if(!PrefsHelper.backdropEnabled)return false
         val target = recording.get() ?: return TransitionCapture.captureElement(canvas,render)
         target.canvasWidth=canvas.width;target.canvasHeight=canvas.height
         target.materialWidth=width;target.materialHeight=height
@@ -204,7 +209,7 @@ object NativeSurfaceLive {
                     val direction=frame.motion.update(area)
                     if(direction!=0 && direction!=frame.direction){
                         frame.direction=direction;frame.closing=direction<0
-                        GlassLogger.limited("LiveSurface","native-direction",100){"Native direction: record=${frame.capture.recordId}, closing=${frame.closing}"}
+                        GlassLogger.animationLimited("LiveSurface","native-direction",100){"Native direction: record=${frame.capture.recordId}, closing=${frame.closing}"}
                         if(!frame.closing)releaseChild(control)
                     }
                 }
@@ -217,7 +222,7 @@ object NativeSurfaceLive {
         val child=children.remove(control) ?: return
         fun finish(reuse:Boolean) {
             submitter.post {
-                if(reuse && PrefsHelper.enabled && PrefsHelper.blurEnabled && child.control.isValid && pool.size<2)pool.add(child)
+                if(reuse && PrefsHelper.enabled && PrefsHelper.backdropEnabled && child.control.isValid && pool.size<2)pool.add(child)
                 else child.close()
             }
         }
@@ -237,12 +242,12 @@ object NativeSurfaceLive {
                         finish(false)
                     }
                 },1000L)
-                GlassLogger.limited("LiveSurface","draw-handoff",20){"Material removal synchronized with workspace draw"}
+                GlassLogger.animationLimited("LiveSurface","draw-handoff",20){"Material removal synchronized with workspace draw"}
                 return
             }catch(t:Throwable){
                 if(observer.isAlive)observer.unregisterFrameCommitCallback(callback)
                 completed.set(true)
-                GlassLogger.limited("LiveSurface","draw-handoff-fallback",5){"Draw handoff unavailable: ${t.message}"}
+                GlassLogger.animationLimited("LiveSurface","draw-handoff-fallback",5){"Draw handoff unavailable: ${t.message}"}
             }
         }
         // Revoke visibility synchronously. An already-running producer may
@@ -250,26 +255,41 @@ object NativeSurfaceLive {
         try {child.detach()}catch(_:Throwable){}
         finish(true)
     }
-    private fun child(capture:Capture):NativeMaterialSurface {
+    private fun child(capture:Capture):NativeMaterialSurface? {
         val parent=capture.lease!!.control
-        children[parent]?.let {existing ->
-            if(existing.control.isValid && existing.canvasWidth==capture.canvasWidth && existing.canvasHeight==capture.canvasHeight)return existing
-            releaseChild(parent)
+        synchronized(lock){
+            if(tokens[capture.surface]!==capture.token || frames[capture.surface]?.capture!==capture)return null
+            children[parent]?.let {existing ->
+                if(existing.control.isValid && existing.canvasWidth==capture.canvasWidth && existing.canvasHeight==capture.canvasHeight)return existing
+                releaseChild(parent)
+            }
         }
+        // Only the submitter owns the pool. Allocation/reparent may wait on
+        // graphics services and must never hold the UI's lease/pose lock.
         val width=capture.materialWidth.coerceIn(128,384)
         val height=(width.toFloat()*capture.canvasHeight/capture.canvasWidth).toInt().coerceAtLeast(1)
         val reusable=pool.indexOfFirst {it.control.isValid && it.width==width && it.height==height && it.canvasWidth==capture.canvasWidth && it.canvasHeight==capture.canvasHeight}
-        if(reusable>=0)return pool.removeAt(reusable).also {
-            it.attach(parent);children[parent]=it
-            GlassLogger.i("LiveSurface","Reused GPU material producer: record=${capture.recordId}")
+        val recycled=if(reusable>=0)pool.removeAt(reusable)else null
+        Trace.beginSection("CherryPick.surfaceAcquire")
+        val output=try {
+            if(recycled!=null)recycled.also {it.attach(parent)}
+            else NativeMaterialSurface.create(parent,width,height,capture.canvasWidth,capture.canvasHeight)
+        }catch(t:Throwable){
+            recycled?.close()
+            GlassLogger.animationLimited("LiveSurface","acquire-ended",100){"Material acquisition ended: ${t.message}"}
+            return null
+        }finally{Trace.endSection()}
+        val accepted=synchronized(lock){
+            if(tokens[capture.surface]===capture.token && frames[capture.surface]?.capture===capture && leases[capture.surface]===capture.lease && parent.isValid){
+                children[parent]=output;true
+            }else false
         }
-        return NativeMaterialSurface.create(parent,width,height,capture.canvasWidth,capture.canvasHeight).also {
-            children[parent]=it
-            GlassLogger.i("LiveSurface","Small material buffer ${width}x$height, native=${capture.canvasWidth}x${capture.canvasHeight}")
-        }
+        if(!accepted){output.close();return null}
+        GlassLogger.animationLimited("LiveSurface","producer-acquired",100){"GPU material producer: reused=${reusable>=0}, record=${capture.recordId}, size=${width}x$height"}
+        return output
     }
     private fun resume(record:Any){
-        if(!PrefsHelper.enabled || !PrefsHelper.blurEnabled || PrefsHelper.blurMode!=SettingsProvider.BLUR_MODE_LIVE)return
+        if(!PrefsHelper.enabled || !PrefsHelper.backdropEnabled || PrefsHelper.blurMode!=SettingsProvider.BLUR_MODE_LIVE)return
         val id=try {XposedHelpers.callMethod(record,"getRecordId") as? Int}catch(_:Throwable){null} ?: return
         synchronized(lock){
             val old=templates[id] ?: return
@@ -296,18 +316,21 @@ object NativeSurfaceLive {
                     // every open/return allocates another BufferQueue/context.
                     releaseChild(it.control,handoff)
                 }
-                GlassLogger.i("LiveSurface", "Retired record=${capture.recordId}, redraws=${frame?.redraws ?: 0}, pose=${capture.lease?.pose?.get()}, reason=$reason")
+                GlassLogger.animation("LiveSurface", "Retired record=${capture.recordId}, redraws=${frame?.redraws ?: 0}, pose=${capture.lease?.pose?.get()}, reason=$reason")
             }
             remove
         }
         refreshActive()
     }
+    private val commitPhase by lazy {
+        try {XposedHelpers.getStaticIntField(Choreographer::class.java,"CALLBACK_COMMIT")}catch(_:Throwable){null}
+    }
     private fun schedule(delayMs:Long=0L) {
         if(!active || !pending.compareAndSet(false,true))return
-        // A single in-flight job, aligned to display frames. The launcher UI
-        // never waits for lockHardwareCanvas / GPU buffer submission here.
         main.postDelayed({
-            Choreographer.getInstance().postFrameCallback {
+            val dispatch=Runnable {
+                // Let traversal submit the launcher frame before any offscreen
+                // producer competes for this process's shared RenderThread.
                 submitter.post {
                     try {ticker.run()}finally{
                         pending.set(false)
@@ -316,7 +339,8 @@ object NativeSurfaceLive {
                             val fps=FlightBlurPolicy.fps(PrefsHelper.liveFps,PrefsHelper.limitClosingBlur)
                             val wait=synchronized(lock){
                                 frames.values.filter {it.closing && hasNativePose(it.capture)}
-                                    .minOfOrNull {it.clock.remainingNs(now,fps)} ?: 0L
+                                    .minOfOrNull {maxOf(it.clock.remainingNs(now,fps),
+                                        if(PrefsHelper.staticAnimationBlur && it.frozen!=null)StaticBlurTiming.holdRemaining(now-it.freezeStartedNs)else 0L)} ?: 0L
                             }
                             // Only request a display callback when a material
                             // can be updated. Native transforms still run at
@@ -327,12 +351,18 @@ object NativeSurfaceLive {
                     }
                 }
             }
+            val choreographer=Choreographer.getInstance()
+            val phase=commitPhase
+            if(phase!=null)try {
+                XposedHelpers.callMethod(choreographer,"postCallback",phase,dispatch,null)
+            }catch(_:Throwable){choreographer.postFrameCallback {dispatch.run()}}
+            else choreographer.postFrameCallback {dispatch.run()}
         },delayMs)
     }
     private val ticker = object : Runnable {
         override fun run() {
             val work=synchronized(lock) {
-                if (!PrefsHelper.enabled || !PrefsHelper.blurEnabled || PrefsHelper.blurMode != SettingsProvider.BLUR_MODE_LIVE) {
+                if (!PrefsHelper.enabled || !PrefsHelper.backdropEnabled || PrefsHelper.blurMode != SettingsProvider.BLUR_MODE_LIVE) {
                     frames.clear(); captures.clear(); tokens.clear();controls.clear();stagedPoses.clear()
                     children.keys.toList().forEach {releaseChild(it)}
                     refreshActive(); return
@@ -345,22 +375,26 @@ object NativeSurfaceLive {
             val wallpaper = WallpaperHelper.getBlurredWallpaper(IconGlassHook.appContext)
             for((surface,frame) in work) {
                     val owner = frame.capture
-                    val output=synchronized(lock) {
-                    if(frames[surface]!==frame) return@synchronized null
+                    val valid=synchronized(lock) {
+                    if(frames[surface]!==frame) return@synchronized false
                     if (frame.progress.expired(now,owner.lease?.pose?.get()?.version ?: -1L) || tokens[surface] !== owner.token ||
                         leases[surface] !== owner.lease || owner.lease?.control?.isValid != true ||
                         owner.identity?.replacedBy(sourceIdentity(owner.source))==true) {
-                        GlassLogger.limited("LiveSurface","invalid-lease",100){"Invalidated record=${owner.recordId}: expired=${frame.progress.expired(now,owner.lease?.pose?.get()?.version ?: -1L)}, token=${tokens[surface]===owner.token}, lease=${leases[surface]===owner.lease}, control=${owner.lease?.control?.isValid}, identity=${owner.identity} -> ${sourceIdentity(owner.source)}, redraws=${frame.redraws}"}
+                        GlassLogger.animationLimited("LiveSurface","invalid-lease",100){"Invalidated record=${owner.recordId}: expired=${frame.progress.expired(now,owner.lease?.pose?.get()?.version ?: -1L)}, token=${tokens[surface]===owner.token}, lease=${leases[surface]===owner.lease}, control=${owner.lease?.control?.isValid}, identity=${owner.identity} -> ${sourceIdentity(owner.source)}, redraws=${frame.redraws}"}
                         frames.remove(surface); captures.remove(surface); owner.lease?.let {controls.remove(it.control,it);releaseChild(it.control)}
-                        return@synchronized null
+                        return@synchronized false
                     }
-                    if(!hasNativePose(owner))return@synchronized null
-                    child(owner)
-                    } ?: continue
+                    hasNativePose(owner)
+                    }
+                    if(!valid)continue
+                    if(PrefsHelper.staticAnimationBlur && frame.frozen!=null && StaticBlurTiming.holdRemaining(nowNs-frame.freezeStartedNs)>0L)continue
+                    val output=child(owner) ?: continue
+                    // Never restart the workspace hold when this asynchronous
+                    // producer finally runs: late buffers must stay live.
                     val pose=owner.lease?.pose?.get()
                     val poseVersion=pose?.version ?: -1L
                     val poseChanged=poseVersion!=frame.poseVersion
-                    if(frame.clock.remainingNs(nowNs,fps)>0L || (wallpaper===frame.wallpaper && !poseChanged))continue
+                    if(frame.clock.remainingNs(nowNs,fps)>0L || (wallpaper===frame.wallpaper && !poseChanged && frame.frozen==null))continue
                     var canvas: Canvas? = null
                     Trace.beginSection("CherryPick.surfaceSubmit")
                     try {
@@ -370,13 +404,19 @@ object NativeSurfaceLive {
                         canvas = output.surface.lockHardwareCanvas()
                         canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
                         canvas.scale(canvas.width.toFloat()/owner.canvasWidth,canvas.height.toFloat()/owner.canvasHeight)
-                        for (draw in owner.draws) {
-                            val save = canvas.save()
-                            canvas.concat(draw.matrix)
-                            canvas.clipRect(draw.clip)
-                            sampling.set(Sample(owner,draw,pose))
-                            try { draw.render(canvas) } finally { sampling.remove();canvas.restoreToCount(save) }
+                        if(PrefsHelper.staticAnimationBlur && frame.frozen==null && AnimationBlurWindow.holdRemaining(nowNs)>0L){
+                            val frozen=RenderNode("CherryPick.staticFlight").apply {setPosition(0,0,owner.canvasWidth,owner.canvasHeight)}
+                            val recording=frozen.beginRecording(owner.canvasWidth,owner.canvasHeight)
+                            freezing.set(true)
+                            try {drawMaterial(recording,owner,pose)}finally{freezing.remove();frozen.endRecording()}
+                            frame.frozen=frozen;frame.frozenGeneration=AnimationBlurWindow.generation;frame.freezeStartedNs=AnimationBlurWindow.startNs
                         }
+                        val frozen=frame.frozen
+                        val fade=if(PrefsHelper.staticAnimationBlur)StaticBlurTiming.progress(nowNs-frame.freezeStartedNs)else 1f
+                        if(frozen!=null){
+                            StaticBlurBlend.draw(canvas,frozen,fade){drawMaterial(canvas,owner,pose)}
+                            if(fade>=1f)frame.frozen=null
+                        }else drawMaterial(canvas,owner,pose)
                     } catch (t: Throwable) {
                         synchronized(lock){if(frames[surface]===frame){frames.remove(surface);captures.remove(surface);owner.lease?.let {releaseChild(it.control)}}}
                         GlassLogger.e("LiveSurface", "Material lease ended", t)
@@ -397,6 +437,15 @@ object NativeSurfaceLive {
             synchronized(lock){refreshActive()}
             if (active) LauncherWallpaperCapture.startMotionWatch()
             else if (!LiveBlurEngine.isResumed) LauncherWallpaperCapture.stopMotionWatch()
+        }
+    }
+
+    private fun drawMaterial(canvas:Canvas,owner:Capture,pose:Pose?){
+        for(draw in owner.draws){
+            val saved=canvas.save()
+            canvas.concat(draw.matrix);canvas.clipRect(draw.clip)
+            sampling.set(Sample(owner,draw,pose))
+            try {draw.render(canvas)}finally{sampling.remove();canvas.restoreToCount(saved)}
         }
     }
 
@@ -431,7 +480,7 @@ object NativeSurfaceLive {
             capture.recordId?.let {templates[it]=capture}
             frames[capture.surface] = frame(capture)
             refreshActive()
-            GlassLogger.i("LiveSurface", "Leased material: record=${capture.recordId}, draws=${capture.draws.size}, source=${capture.source?.javaClass?.simpleName}, live=${frames[capture.surface]?.closing}, limit=${FlightBlurPolicy.fps(PrefsHelper.liveFps,PrefsHelper.limitClosingBlur)}")
+            GlassLogger.animation("LiveSurface", "Leased material: record=${capture.recordId}, draws=${capture.draws.size}, source=${capture.source?.javaClass?.simpleName}, live=${frames[capture.surface]?.closing}, limit=${FlightBlurPolicy.fps(PrefsHelper.liveFps,PrefsHelper.limitClosingBlur)}")
         }
         main.postDelayed({retire("unused preparation") {it===capture && !hasNativePose(it)}},4000L)
         schedule()
@@ -442,7 +491,7 @@ object NativeSurfaceLive {
         usesLegacyRenderer=renderer==null
         val namespace=if(renderer!=null)"com.android.launcher3.anim.iconsurfacemanager.surface" else "com.android.launcher3.anim.iconsurfacemanager"
         val type=XposedHelpers.findClassIfExists("$namespace.IconSurfaceRecord",loader) ?: return
-        GlassLogger.i("LiveSurface","Native surface integration: $namespace")
+        GlassLogger.animation("LiveSurface","Native surface integration: $namespace")
         for(method in listOf("setPosition","setMatrix"))ModuleHooks.hookAllMethods(SurfaceControl.Transaction::class.java,method,object:XC_MethodHook(){
             override fun afterHookedMethod(param:MethodHookParam){if(!param.hasThrowable())observeTransform(param,method=="setPosition")}
         })
@@ -541,7 +590,9 @@ object NativeSurfaceLive {
             override fun beforeHookedMethod(param: MethodHookParam) {
                 val id = try { XposedHelpers.callMethod(param.thisObject, "getRecordId") as? Int } catch (_: Throwable) { null } ?: return
                 synchronized(lock) {
-                    param.setObjectExtra("returnedCapture",captures.values.firstOrNull {it.recordId==id})
+                    val capture=captures.values.firstOrNull {it.recordId==id}
+                    param.setObjectExtra("returnedCapture",capture)
+                    param.setObjectExtra("returnedClosing",capture?.let {frames[it.surface]?.closing}==true)
                 }
             }
             override fun afterHookedMethod(param:MethodHookParam) {
@@ -551,8 +602,14 @@ object NativeSurfaceLive {
                 // child. A worker-side callback posts visibility to main, so
                 // our retirement must queue behind it on the same Looper.
                 val finish=Runnable {
-                    IconGlassHook.onNativeIconReturned(capture.source)
-                    retire("showOriginalIcon",capture.source?.rootView) {it===capture}
+                    Trace.beginSection("CherryPick.returnHandoff")
+                    try {
+                        if(param.getObjectExtra("returnedClosing")==true){
+                            Trace.beginSection("CherryPick.returnRepair")
+                            try {IconGlassHook.onNativeIconReturned(capture.source)}finally{Trace.endSection()}
+                        }
+                        retire("showOriginalIcon",capture.source?.rootView) {it===capture}
+                    }finally{Trace.endSection()}
                 }
                 if(Looper.myLooper()==Looper.getMainLooper())finish.run()else main.post(finish)
             }

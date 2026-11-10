@@ -76,7 +76,8 @@ internal object SettingsTransfer {
             SettingsProvider.KEY_COLOR_DEPTH_BITS -> 8L..24L
             SettingsProvider.KEY_COLOR_DEPTH_STAGE -> 0L..3L
             SettingsProvider.KEY_DOCK_SIDE_PADDING, SettingsProvider.KEY_DOCK_VERTICAL_PADDING -> 0L..SettingsProvider.DOCK_PADDING_MAX.toLong()
-            SettingsProvider.KEY_BLUR_MODE, SettingsProvider.KEY_BLUR_STYLE,
+            SettingsProvider.KEY_BLUR_STYLE -> 0L..2L
+            SettingsProvider.KEY_BLUR_MODE,
             SettingsProvider.KEY_ICON_APPEARANCE, SettingsProvider.KEY_COLOR_MODE -> 0L..1L
             else -> 0L..100L
         }

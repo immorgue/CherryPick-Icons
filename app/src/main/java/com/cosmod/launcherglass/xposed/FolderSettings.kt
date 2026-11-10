@@ -17,15 +17,16 @@ internal open class ScopedGlassSettings(private val keys:ScopedSettingsKeys,priv
         private set
     private var stamp:List<Any>?=null
     @Volatile private var saturation=100
-    private fun inherited()=GlassStyle.icons().copy(folder=folder)
+    private fun geometry(style:GlassStyle)=if(keys===DockSettingsKeys)style.copy(extendedLens=true,exactLensRadius=true)else style
+    private fun inherited()=geometry(GlassStyle.icons().copy(folder=folder))
     fun style():GlassStyle {
         // Without own settings the surface uses the icon processing and plate tone.
         if(!own)return inherited()
         val style=selected ?: return inherited()
-        return style.copy(plateColor=PrefsHelper.plateColor(SurfaceTone.base(),saturation))
+        return geometry(style.copy(plateColor=PrefsHelper.plateColor(SurfaceTone.base(),saturation)))
     }
     /** Blur radius actually used by the surface (0: the blur switch is off). */
-    fun radius()=if(own)processing.radius else PrefsHelper.blurRadius
+    fun radius()=if(own)processing.radius else if(PrefsHelper.colorOnly)0 else PrefsHelper.blurRadius
     fun update(bundle:Bundle):Boolean {
         val signature=ArrayList<Any>()
         signature.add(bundle.getBoolean(keys.own,false))

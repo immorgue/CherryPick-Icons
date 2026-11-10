@@ -18,4 +18,11 @@ class SettingsNavigationTest {
         assertTrue(restored.back());assertEquals(SettingsScreen.MODULE,restored.current)
         assertFalse(restored.open(SettingsScreen.MODULE))
     }
+    @Test fun positionEditorReturnsToDesktopAfterRecreation() {
+        val nav=SettingsNavigation();nav.open(SettingsScreen.MODULE);nav.open(SettingsScreen.DESKTOP);nav.open(SettingsScreen.POSITIONS)
+        val restored=SettingsNavigation(nav.save())
+        assertEquals(SettingsScreen.POSITIONS,restored.current)
+        assertEquals(1,restored.current.tab)
+        assertTrue(restored.back());assertEquals(SettingsScreen.DESKTOP,restored.current)
+    }
 }

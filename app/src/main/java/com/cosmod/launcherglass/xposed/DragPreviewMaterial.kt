@@ -26,7 +26,7 @@ import kotlin.math.roundToInt
  */
 internal object DragPreviewMaterial {
     class Surface(val bounds:Rect,val radius:Float,val path:Path?,val decorate:Boolean,val alpha:Int,val style:GlassStyle,
-                  val nativeShape:Drawable?,val nativeMask:Bitmap?,val pathFingerprint:Long?,val identity:Drawable,val fallback:Drawable?)
+                  val nativeShape:Drawable?,val nativeMask:Bitmap?,val pathFingerprint:Long?,val identity:Drawable,val fallback:Drawable?,val drawContour:Boolean=true)
     /**
      * [nested]: an icon drawn by a child of the dragged view (items of a
      * multi-icon cluster). It keeps its resting wallpaper sample: only the
@@ -211,8 +211,9 @@ internal object DragPreviewMaterial {
                     val surfaceAlpha=(surface.alpha*alpha).roundToInt().coerceIn(0,255)
                     @Suppress("DEPRECATION")
                     val local=RectF(surface.bounds).also {Matrix().apply {canvas.getMatrix(this)}.mapRect(it)}
+                    if(!surface.drawContour && surface.path!=null)canvas.clipPath(surface.path)
                     if(!live || !SurfaceMaterial.draw(canvas,surface.bounds,owner!!,surface.identity,surface.radius,surface.path,surface.decorate,
-                            surfaceAlpha,surface.style,surface.nativeShape,surface.nativeMask,surface.pathFingerprint,local=local))
+                            surfaceAlpha,surface.style,surface.nativeShape,surface.nativeMask,surface.pathFingerprint,local=local,drawContour=surface.drawContour))
                         drawNativeSurface(surface,canvas,surfaceAlpha)
                 }
             }catch(t:Throwable){

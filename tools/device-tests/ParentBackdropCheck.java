@@ -6,6 +6,16 @@ import android.widget.FrameLayout;
 import android.content.Context;
 import java.lang.reflect.*;
 public class ParentBackdropCheck {
+ public static final class NativeCornerProbe extends Drawable {
+  public final Path mStrokePath=new Path();public float requestedRadius;
+  public void setCornerRadius(float value){requestedRadius=value;rebuild();}
+  private void rebuild(){mStrokePath.reset();mStrokePath.addRoundRect(new RectF(0,0,getBounds().width(),getBounds().height()),12,12,Path.Direction.CW);}
+  protected void onBoundsChange(Rect bounds){rebuild();}
+  public void draw(Canvas canvas){}
+  public void setAlpha(int value){}
+  public void setColorFilter(ColorFilter value){}
+  public int getOpacity(){return PixelFormat.TRANSLUCENT;}
+ }
  static void check(boolean ok,String message){if(!ok)throw new AssertionError(message);}
  static Class<?> cls(String name)throws Exception{return Class.forName("com.cosmod.launcherglass."+name);}
  static Object obj(Class<?> c)throws Exception{return c.getField("INSTANCE").get(null);}
@@ -23,11 +33,11 @@ public class ParentBackdropCheck {
   Class<?> helper=cls("util.WallpaperHelper");field(helper,"blurredWallpaper",wallpaper);field(helper,"cachedBlurRadius",0);field(helper,"sourceRevision",0L);field(helper,"cachedRevision",0L);
   FrameLayout owner=(FrameLayout)Class.forName("com.android.launcher3.viewcontainer.GridRecyclerView").getConstructor(Context.class).newInstance(context);View child=new View(context);owner.addView(child,new FrameLayout.LayoutParams(200,200));owner.layout(0,0,200,200);child.layout(0,0,200,200);
   Bitmap mask=Bitmap.createBitmap(200,200,Bitmap.Config.ARGB_8888);Canvas maskCanvas=new Canvas(mask);Paint white=new Paint(Paint.ANTI_ALIAS_FLAG);white.setColor(Color.WHITE);maskCanvas.drawRoundRect(new RectF(0,0,200,200),35,35,white);
-  Class<?> style=cls("xposed.GlassStyle");Constructor<?> constructor=style.getConstructor(boolean.class,int.class,int.class,int.class,int.class,ColorMatrixColorFilter.class,boolean.class,Integer.class,boolean.class);
+  Class<?> style=cls("xposed.GlassStyle");Constructor<?> constructor=style.getConstructor(boolean.class,int.class,int.class,int.class,int.class,ColorMatrixColorFilter.class,boolean.class,Integer.class,boolean.class,boolean.class,boolean.class);
   Class<?> parent=cls("xposed.ParentBackdrop");Object singleton=obj(parent);Method record=parent.getMethod("record",View.class,Drawable.class,RectF.class,Bitmap.class,float.class,style,boolean.class);Method resolve=parent.getMethod("resolve",View.class,Drawable.class,Bitmap.class);
   Drawable plate=new ColorDrawable(Color.RED),icon=new ColorDrawable(Color.WHITE);
   for(boolean liquid:new boolean[]{false,true}) {
-   Object appearance=constructor.newInstance(liquid,30,80,0,100,null,false,Integer.valueOf(Color.RED),true);
+   Object appearance=constructor.newInstance(liquid,30,80,0,100,null,false,Integer.valueOf(Color.RED),true,false,false);
    record.invoke(singleton,owner,plate,new RectF(0,0,200,200),mask,35f,appearance,false);
    parent.getMethod("beginFrame").invoke(singleton);
    Object sample=resolve.invoke(singleton,child,icon,wallpaper);check(sample!=null,"Parent plate not found");Shader shader=(Shader)sample.getClass().getMethod("getShader").invoke(sample);
@@ -42,12 +52,12 @@ public class ParentBackdropCheck {
    owner.setTranslationX(80);parent.getMethod("beginFrame").invoke(singleton);Object moved=resolve.invoke(singleton,child,icon,wallpaper);pixels=render((Shader)moved.getClass().getMethod("getShader").invoke(moved));check(Color.blue(pixels.getPixel(40,100))>245,"Parent shader lags behind translated owner");check(Color.red(pixels.getPixel(150,100))>245,"Moved parent missing");pixels.recycle();owner.setTranslationX(0);
   }
     ColorMatrixColorFilter filter=new ColorMatrixColorFilter(new float[]{0,0,0,0,0, 0,0,1,0,0, 0,0,0,0,0, 0,0,0,1,0});
-  Object colored=constructor.newInstance(false,30,80,0,0,filter,false,Integer.valueOf(Color.RED),true);
+  Object colored=constructor.newInstance(false,30,80,0,0,filter,false,Integer.valueOf(Color.RED),true,false,false);
   record.invoke(singleton,owner,plate,new RectF(0,0,200,200),mask,35f,colored,false);parent.getMethod("beginFrame").invoke(singleton);
   Object coloredSample=resolve.invoke(singleton,child,icon,wallpaper);Bitmap filtered=render((Shader)coloredSample.getClass().getMethod("getShader").invoke(coloredSample));check(Color.green(filtered.getPixel(100,100))>245,"Parent color filter was not applied");filtered.recycle();
   for(String name:new String[]{"com.android.launcher3.folder.FolderIcon","com.android.launcher3.folder.OplusFolder"}) {
    FrameLayout folder=(FrameLayout)Class.forName(name).getConstructor(Context.class).newInstance(context);View background=new View(context),content=new View(context);folder.addView(background,new FrameLayout.LayoutParams(200,200));folder.addView(content,new FrameLayout.LayoutParams(200,200));folder.layout(0,0,200,200);background.layout(0,0,200,200);content.layout(0,0,200,200);
-   Drawable folderIdentity=new ColorDrawable(Color.RED);Object appearance=constructor.newInstance(false,30,80,0,100,null,true,Integer.valueOf(Color.RED),true);
+   Drawable folderIdentity=new ColorDrawable(Color.RED);Object appearance=constructor.newInstance(false,30,80,0,100,null,true,Integer.valueOf(Color.RED),true,false,false);
    record.invoke(singleton,background,folderIdentity,new RectF(0,0,200,200),mask,35f,appearance,false);parent.getMethod("beginFrame").invoke(singleton);
    Object folderSample=resolve.invoke(singleton,content,icon,wallpaper);check(folderSample!=null,"Sibling folder background unavailable: "+name);Bitmap folderPixels=render((Shader)folderSample.getClass().getMethod("getShader").invoke(folderSample));check(Color.red(folderPixels.getPixel(100,100))>245,"Folder child ignored sibling plate");folderPixels.recycle();
    check(resolve.invoke(singleton,folder,icon,wallpaper)!=null,"Inline miniature cannot see FolderIcon background");
@@ -58,6 +68,63 @@ public class ParentBackdropCheck {
   GradientDrawable rounded=new GradientDrawable();rounded.setColor(Color.RED);rounded.setCornerRadius(24);rounded.setBounds(7,9,50,60);
   Path filled=(Path)fill.invoke(contourObject,rounded,new Rect(10,20,210,220));check(filled!=null&&!filled.isEmpty(),"Rounded native outline missing");
   check(rounded.getBounds().equals(new Rect(7,9,50,60)),"Native drawable bounds were mutated");
+  Method drawableMask=contours.getMethod("drawableMask",Drawable.class,Rect.class);
+  NativeCornerProbe policy=new NativeCornerProbe();policy.setBounds(7,9,50,60);
+  Path policyPath=(Path)contours.getMethod("policyPath",Drawable.class,Rect.class,float.class).invoke(contourObject,policy,new Rect(10,20,210,220),77f);
+  Region policyRegion=new Region();policyRegion.setPath(policyPath,new Region(0,0,300,300));
+  check(policyRegion.contains(18,28)&&policyRegion.contains(190,200),"Native compensated contour was replaced by raw-radius geometry");
+  check(policy.requestedRadius==77f && policy.getBounds().equals(new Rect(7,9,50,60)),"Native policy inputs/bounds changed");
+  check(drawableMask.invoke(contourObject,new ColorDrawable(Color.RED),new Rect(0,0,200,200))==null,"Plain paint was mistaken for rounded theme coverage");
+  Bitmap themed=Bitmap.createBitmap(200,200,Bitmap.Config.ARGB_8888);themed.setDensity(Bitmap.DENSITY_NONE);
+  Paint themePaint=new Paint(Paint.ANTI_ALIAS_FLAG);themePaint.setColor(Color.WHITE);
+  new Canvas(themed).drawRoundRect(new RectF(0,0,200,200),24f,24f,themePaint);
+  BitmapDrawable theme=new BitmapDrawable(context.getResources(),themed);theme.setBounds(7,9,50,60);
+  Bitmap themeMask=(Bitmap)drawableMask.invoke(contourObject,theme,new Rect(0,0,200,200));
+  check(themeMask!=null,"Rounded theme bitmap lost its alpha contour");
+  for(int y=0;y<200;y++)for(int x=0;x<200;x++)check(Color.alpha(themed.getPixel(x,y))==Color.alpha(themeMask.getPixel(x+1,y+1)),"Theme alpha contour changed at "+x+","+y);
+  check(theme.getBounds().equals(new Rect(7,9,50,60)),"Theme bitmap drawable bounds mutated");
+  themed.recycle();themeMask.recycle();
+  System.out.println("PASS: bitmap theme contour copied pixel-exactly; rectangular paint rejected; drawable bounds restored");
+  // A surface without its first wallpaper must still receive the ready repaint.
+  field(helper,"blurredWallpaper",null);field(helper,"isReloading",true);field(helper,"appContext",context);
+  View waiting=new View(context);waiting.layout(0,0,200,200);
+  Bitmap pending=Bitmap.createBitmap(200,200,Bitmap.Config.ARGB_8888);
+  Object waitingStyle=constructor.newInstance(false,30,80,7,100,null,false,Integer.valueOf(Color.RED),true,false,false);
+  Class<?> surface=cls("xposed.SurfaceMaterial");Method draw=null;
+  for(Method method:surface.getMethods())if(method.getName().equals("draw")){draw=method;break;}
+  check(draw!=null,"Surface draw unavailable");
+  Object drawn=draw.invoke(obj(surface),new Canvas(pending),new Rect(0,0,200,200),waiting,new ColorDrawable(Color.RED),35f,null,false,255,waitingStyle,null,null,null,null,null,true);
+  check(Boolean.FALSE.equals(drawn),"Unavailable wallpaper unexpectedly drew a material");
+  Field registry=cls("xposed.IconGlassHook").getDeclaredField("liveViews");registry.setAccessible(true);
+  check(((java.util.Map<?,?>)registry.get(null)).containsKey(waiting),"Waiting surface missed registration for wallpaper-ready repaint");
+  field(helper,"blurredWallpaper",wallpaper);field(helper,"isReloading",false);pending.recycle();
+  System.out.println("PASS: missing-wallpaper surface remains registered for the ready repaint");
+  field(prefs,"blurStyle",2);field(helper,"blurredWallpaper",wallpaper);
+  check(!(Boolean)prefs.getMethod("getIconBackdropEnabled").invoke(obj(prefs)),"Color-only icons enabled backdrop work");
+  check(!(Boolean)prefs.getMethod("getBackdropEnabled").invoke(obj(prefs)),"Color-only mode kept the background pipeline active");
+  check(helper.getMethod("getBlurredWallpaper",Context.class).invoke(obj(helper),context)==null,"Color-only mode returned a retained background");
+  check(helper.getMethod("getDockWallpaper",Context.class).invoke(obj(helper),context)==null,"Color-only dock returned a retained background");
+  // Grid background uses the OEM destination clip, never another rounded alpha mask.
+  Bitmap rectangle=Bitmap.createBitmap(3,3,Bitmap.Config.ARGB_8888);rectangle.eraseColor(Color.WHITE);
+  Bitmap flat=Bitmap.createBitmap(200,200,Bitmap.Config.ARGB_8888),expected=Bitmap.createBitmap(200,200,Bitmap.Config.ARGB_8888);
+  Path stockClip=new Path();stockClip.addRoundRect(new RectF(0,0,200,200),24,24,Path.Direction.CW);
+  Canvas actualCanvas=new Canvas(flat);actualCanvas.clipPath(stockClip);
+  Canvas stockCanvas=new Canvas(expected);stockCanvas.clipPath(stockClip);stockCanvas.drawColor(Color.RED);
+  Object colorStyle=constructor.newInstance(false,30,80,0,100,null,false,Integer.valueOf(Color.RED),true,false,true);
+  check(Boolean.TRUE.equals(draw.invoke(obj(surface),actualCanvas,new Rect(0,0,200,200),waiting,new ColorDrawable(Color.RED),77f,stockClip,false,255,colorStyle,null,rectangle,null,null,null,false)),"Native clipped flat plate unavailable");
+  for(int y=0;y<200;y++)for(int x=0;x<200;x++)check(Color.alpha(flat.getPixel(x,y))==Color.alpha(expected.getPixel(x,y)),"Native destination clip changed at "+x+","+y);
+  rectangle.recycle();flat.recycle();expected.recycle();
+  Class<?> folders=cls("xposed.FolderSettings");Object folderSettings=obj(folders);
+  android.os.Bundle own=new android.os.Bundle();own.putBoolean("folder_own_settings",true);own.putBoolean("folder_blur_radius_enabled",true);own.putInt("folder_blur_radius",7);
+  folders.getMethod("update",android.os.Bundle.class).invoke(folderSettings,own);field(prefs,"folderBlurEnabled",true);
+  check((Boolean)prefs.getMethod("getBackdropEnabled").invoke(obj(prefs)),"Optional folder glass failed to enable shared background work");
+  check(!(Boolean)prefs.getMethod("getIconBackdropEnabled").invoke(obj(prefs)),"Optional folder glass enabled icon sampling");
+  Object ownStyle=folders.getMethod("style").invoke(folderSettings);
+  check(!(Boolean)style.getMethod("getColorOnly").invoke(ownStyle),"Folder override inherited color-only icon style");
+  own.putBoolean("folder_own_settings",false);folders.getMethod("update",android.os.Bundle.class).invoke(folderSettings,own);
+  field(prefs,"blurStyle",0);
+  System.out.println("PASS: native destination clip preserved pixel-exactly; color-only rejects retained backgrounds; optional folder glass leaves icons flat");
+  HazeCheck.run();
   System.out.println("PASS: rectangular paint rejected as folder contour; rounded native outline retained; drawable bounds restored");
   System.out.println("PASS: frosted/liquid parent visible under ordinary child, rounded contour preserved, transforms follow owner, self-sampling excluded");System.exit(0);
  }

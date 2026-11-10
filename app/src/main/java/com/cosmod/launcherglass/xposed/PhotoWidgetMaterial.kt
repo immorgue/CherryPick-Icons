@@ -51,6 +51,7 @@ internal object PhotoWidgetMaterial {
         if(roots.containsKey(root))return
         val weak=java.lang.ref.WeakReference(root)
         val listener=android.view.ViewTreeObserver.OnPreDrawListener {
+            if(PrefsHelper.colorOnly)return@OnPreDrawListener true
             val current=weak.get()
             if(current!=null && PrefsHelper.enabled && PrefsHelper.photoWidgetBlur)for(host in hosts.keys.weakSnapshot()){
                 if(host.rootView!==current || !host.isShown)continue
@@ -63,9 +64,10 @@ internal object PhotoWidgetMaterial {
         }
         roots[root]=listener;root.viewTreeObserver.addOnPreDrawListener(listener)
     }
-    private fun supports(view:View):Boolean {
+    private data class PhotoSource(val info:Any?,val provider:android.content.ComponentName?,val cardType:Int?)
+    private fun source(view:View):PhotoSource? {
         if(view !is AppWidgetHostView){
-            if(generateSequence(view.javaClass as Class<*>?){it.superclass}.none {it.name=="com.android.launcher3.card.LauncherCardView"})return false
+            if(generateSequence(view.javaClass as Class<*>?){it.superclass}.none {it.name=="com.android.launcher3.card.LauncherCardView"})return null
             val info=(try {XposedHelpers.callMethod(view,"getItemInfo")}catch(_:Throwable){null}) ?: view.tag
             val provider=try {info?.let {XposedHelpers.getObjectField(it,"mProviderName")} as? android.content.ComponentName}catch(_:Throwable){null}
                 ?: try {info?.let {XposedHelpers.callMethod(it,"getTargetComponent")} as? android.content.ComponentName}catch(_:Throwable){null}
@@ -73,54 +75,38 @@ internal object PhotoWidgetMaterial {
             val cardType=try {XposedHelpers.callMethod(view,"getCardType") as? Int}catch(_:Throwable){null}
             val result=PhotoProviders.supports(provider?.packageName,provider?.className,cardType,true)
             if(logged.add("candidate:$provider:$cardType"))GlassLogger.i("PhotoWidget","Card candidate: host=${view.javaClass.name}, provider=$provider, type=$cardType, supported=$result")
-            return result
+            return if(result)PhotoSource(info,provider,cardType)else null
         }
-        val provider=view.appWidgetInfo?.provider ?: return false
-        return PhotoProviders.supports(provider.packageName,provider.className,null,false)
+        val provider=view.appWidgetInfo?.provider ?: return null
+        return if(PhotoProviders.supports(provider.packageName,provider.className,null,false))PhotoSource(null,provider,null)else null
     }
     fun install(loader:ClassLoader){
         val contentHook=object:XC_MethodHook(){
             override fun beforeHookedMethod(param:MethodHookParam){
                 val view=param.thisObject as? View ?: return
-                if(!supports(view))return
+                val source=source(view) ?: return
                 watch(view)
                 val child=content(view)
                 if(child.width<=0 || child.height<=0)return
-                val cardType=try {XposedHelpers.callMethod(view,"getCardType")}catch(_:Throwable){null}
-                val provider=(view as? AppWidgetHostView)?.appWidgetInfo?.provider?.flattenToShortString() ?: try {
-                    val info=XposedHelpers.callMethod(view,"getItemInfo")
-                    (XposedHelpers.getObjectField(info,"mProviderName") as? android.content.ComponentName)?.flattenToShortString()
-                }catch(_:Throwable){null} ?: "Gallery card/$cardType"
+                val provider=source.provider?.flattenToShortString() ?: "Gallery card/${source.cardType}"
                 if(logged.add("host:$provider"))GlassLogger.i("PhotoWidget","Registered host: ${view.javaClass.name}, provider=$provider")
                 if(!PrefsHelper.enabled || !PrefsHelper.blurEnabled || !PrefsHelper.photoWidgetBlur)return
                 val canvas=param.args.firstOrNull() as? Canvas ?: return
                 val active=drawing.get() ?: HashSet<View>().also {drawing.set(it)}
                 if(!active.add(view))return
                 param.setObjectExtra("photoActive",true)
+                android.os.Trace.beginSection("CherryPick.photoMaterial")
+                try {
                 val bounds=if(child!==view)Rect(0,0,child.width,child.height)else try {
                     Rect(XposedHelpers.callMethod(view,"getCardContentBounds") as Rect)
                 }catch(_:Throwable){Rect(view.paddingLeft,view.paddingTop,view.width-view.paddingRight,view.height-view.paddingBottom)}
                 var radius=minOf(bounds.width(),bounds.height())*.08f
                 val outline=Outline()
                 try {child.outlineProvider?.getOutline(child,outline);if(outline.radius>0f)radius=outline.radius}catch(_:Throwable){}
-                // Use the exact radius AND weight used by createClipSmoothRoundBitmap,
-                // rather than the differently shaped drag-preview outline.
-                val nativePath=if(view is AppWidgetHostView)null else try {
-                    val info=XposedHelpers.callMethod(view,"getItemInfo")
-                    val rightAngle=try {info!=null && XposedHelpers.getBooleanField(info,"mIsUseRightAngleCard")}catch(_:Throwable){false}
-                    if(rightAngle)Path().apply {addRect(RectF(bounds),Path.Direction.CCW)} else {
-                    val pair=XposedHelpers.callMethod(view,"getCardRadiusAndWeight",view)!!
-                    radius=(XposedHelpers.callMethod(pair,"a") as Number).toFloat()
-                    val weight=(XposedHelpers.callMethod(pair,"b") as Number).toFloat()
-                    Path().also {path ->
-                        val manager=XposedHelpers.findClass("com.android.launcher3.util.SmoothRoundedManager",loader)
-                        XposedHelpers.callStaticMethod(manager,"createSmoothPath",path,RectF(bounds),radius,weight,Path.Direction.CCW)
-                    }
-                    }
-                }catch(_:Throwable){null}
+                val rightAngle=try {source.info?.let {XposedHelpers.getBooleanField(it,"mIsUseRightAngleCard")}==true}catch(_:Throwable){false}
+                val pair=if(view is AppWidgetHostView || rightAngle)null else try {XposedHelpers.callMethod(view,"getCardRadiusAndWeight",view)}catch(_:Throwable){null}
+                if(pair!=null)try {radius=(XposedHelpers.callMethod(pair,"a") as Number).toFloat()}catch(_:Throwable){}
                 val nativeMask=if(view is AppWidgetHostView)null else try {
-                    val info=XposedHelpers.callMethod(view,"getItemInfo")
-                    val rightAngle=try {info!=null && XposedHelpers.getBooleanField(info,"mIsUseRightAngleCard")}catch(_:Throwable){false}
                     if(rightAngle)null else {
                         val stored=XposedHelpers.getObjectField(view,"mBitmap") as? Bitmap
                         val cardBounds=XposedHelpers.callMethod(view,"getCardBounds") as Rect
@@ -128,6 +114,17 @@ internal object PhotoWidgetMaterial {
                             ?: (XposedHelpers.callMethod(view,"createClipSmoothRoundBitmap") as? Bitmap)?.also {XposedHelpers.setObjectField(view,"mBitmap",it)})
                             ?.takeIf {!it.isRecycled && it.width>2 && it.height>2}
                     }
+                }catch(_:Throwable){null}
+                // The native alpha mask already defines both material and rim.
+                // Construct its vector fallback only when that mask is missing.
+                val nativePath=if(view is AppWidgetHostView || nativeMask!=null)null else try {
+                    if(rightAngle)Path().apply {addRect(RectF(bounds),Path.Direction.CCW)} else if(pair!=null){
+                        val weight=(XposedHelpers.callMethod(pair,"b") as Number).toFloat()
+                        Path().also {path ->
+                            val manager=XposedHelpers.findClass("com.android.launcher3.util.SmoothRoundedManager",loader)
+                            XposedHelpers.callStaticMethod(manager,"createSmoothPath",path,RectF(bounds),radius,weight,Path.Direction.CCW)
+                        }
+                    }else null
                 }catch(_:Throwable){null}
                 val identity=identities.getOrPut(child){ColorDrawable(Color.TRANSPARENT)}
                 try {
@@ -137,8 +134,8 @@ internal object PhotoWidgetMaterial {
                     val drawn=try {canvas.concat(matrix);SurfaceMaterial.draw(canvas,bounds,child,identity,radius,nativePath,decorate=false,style=style,nativeMask=nativeMask)}finally{canvas.restoreToCount(save)}
                     if(!drawn)return
                     val paint=Paint().apply {
-                        alpha=PrefsHelper.photoWidgetOpacity*255/100
-                        if(PrefsHelper.photoWidgetTint)colorFilter=photoFilter()
+                        alpha=if(PrefsHelper.colorOnly)255 else PrefsHelper.photoWidgetOpacity*255/100
+                        if(PrefsHelper.colorOnly || PrefsHelper.photoWidgetTint)colorFilter=photoFilter()
                     }
                     // Enclose the COMPLETE OEM compositor: live children, cached
                     // Picture, preload image and mSnapshot. Treating only the
@@ -149,12 +146,14 @@ internal object PhotoWidgetMaterial {
                     param.setObjectExtra("photoTransform",matrix)
                     if(logged.add(provider))GlassLogger.i("PhotoWidget","Complete compositor attached: $provider, bounds=$bounds, nativeMask=${nativeMask!=null}, nativeShape=${nativePath!=null}, radius=$radius")
                 }catch(t:Throwable){GlassLogger.e("PhotoWidget","Photo material failed",t)}
+                }finally{android.os.Trace.endSection()}
             }
             override fun afterHookedMethod(param:MethodHookParam){
                 if(param.getObjectExtra("photoActive")!=true)return
                 drawing.get()?.remove(param.thisObject as? View)
                 val save=param.getObjectExtra("photoSave") as? Int ?: return
                 val canvas=param.args.firstOrNull() as? Canvas ?: return
+                android.os.Trace.beginSection("CherryPick.photoContour")
                 try {
                     canvas.restoreToCount(save)
                     val bounds=param.getObjectExtra("photoBounds") as Rect
@@ -165,6 +164,7 @@ internal object PhotoWidgetMaterial {
                         SurfaceMaterial.contour(canvas,bounds,radius,param.getObjectExtra("photoPath") as? Path,param.getObjectExtra("photoMask") as? Bitmap)
                     }finally{canvas.restoreToCount(outer)}
                 }catch(t:Throwable){GlassLogger.e("PhotoWidget","Photo contour failed",t)}
+                finally{android.os.Trace.endSection()}
             }
         }
         for(name in listOf("com.android.launcher3.card.TitleCardView","com.android.launcher3.card.CommonCardView","com.android.launcher3.card.EngineCardView","com.android.launcher3.card.LauncherCardView","com.android.launcher3.widget.LauncherAppWidgetHostView","com.android.launcher3.widget.CustomLauncherAppWidgetHostView")){

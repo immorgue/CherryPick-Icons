@@ -24,40 +24,15 @@ internal object FolderMaterialHook {
     fun invalidateGeometry(){geometryRevision++}
     private fun enabled()=PrefsHelper.enabled && PrefsHelper.blurEnabled && PrefsHelper.folderBlurEnabled
     private fun shortcut(view:View?)=view?.javaClass?.name=="com.android.launcher3.viewcontainer.ShortcutContainer"
-    private fun enabled(view:View?)=PrefsHelper.enabled && PrefsHelper.blurEnabled && (shortcut(view) || PrefsHelper.folderBlurEnabled)
+    private fun enabled(view:View?)=enabled()
     private fun style(view:View)=if(shortcut(view))GlassStyle.icons().copy(extendedLens=true)else FolderSettings.style()
     private fun field(owner:Any,name:String):Any?=try {XposedHelpers.getObjectField(owner,name)}catch(_:Throwable){null}
-    private class NativeCorners(val wrapper:Drawable) {
-        fun path(bounds:Rect,radius:Float):Path?=try {
-            XposedHelpers.callMethod(wrapper,"setCornerRadius",radius)
-            wrapper.setBounds(0,0,bounds.width(),bounds.height())
-            (field(wrapper,"mStrokePath") as? Path)?.takeUnless {it.isEmpty}?.let {
-                Path(it).apply {offset(bounds.left.toFloat(),bounds.top.toFloat())}
-            }
-        }catch(_:Throwable){null}
-    }
-    /** Read the actual producer's corner policy before retiring it. The optical
-     * wrapper compensates GPU corner weights; raw mRadius + legacy clip does not. */
-    private fun nativeCorners(drawable:Any?,view:View,info:Any?):NativeCorners? {
-        return try {
-            drawable ?: return null
-            val policy=field(drawable,"mDefaultDrawable") ?: return null
-            val type=(field(policy,"mHostType") as? Number)?.toInt() ?: return null
-            val corner=field(policy,"mCornerType") ?: return null
-            val weight=(field(policy,"mCornerWeight") as? Number)?.toFloat() ?: return null
-            val wrapper=XposedHelpers.newInstance(policy.javaClass) as Drawable
-            XposedHelpers.setIntField(wrapper,"mHostType",type)
-            XposedHelpers.callMethod(wrapper,"setCornerType",corner)
-            XposedHelpers.callMethod(wrapper,"setConerWeight",weight)
-            GlassLogger.i("FolderMaterial","Native corner policy: type=$type corner=$corner weight=$weight")
-            NativeCorners(wrapper)
-        }catch(t:Throwable){GlassLogger.limited("FolderMaterial","cornerPolicy"){"Native corner policy unavailable: ${t.javaClass.simpleName}"};null}
-    }
-    private class Material(val source:WeakReference<View>,val owner:WeakReference<Any>?,val fallback:Drawable?,val corners:NativeCorners?=null):Drawable(){
+    private class Material(val source:WeakReference<View>,val owner:WeakReference<Any>?,val fallback:Drawable?,val nativePolicy:Drawable?=null):Drawable(){
         private var opacity=255
         private var logged=false
         private val cachedBounds=Rect()
         private val cachedPath=Path()
+        private var cachedMask:Bitmap?=null
         private var cachedRadius=Float.NaN
         private var cachedInfo:Any?=null
         private var cachedSpanX=0
@@ -94,8 +69,10 @@ internal object FolderMaterialHook {
             val path=cachedPath
             if(cachedBounds!=bounds || cachedRadius!=radius || cachedInfo!==info || cachedSpanX!=sx || cachedSpanY!=sy || cachedRevision!=geometryRevision){
             path.reset()
+            NativeFolderPath.policyPath(nativePolicy,bounds,radius)?.let {path.set(it)}
+            cachedMask=if(path.isEmpty)NativeFolderPath.drawableMask(fallback,bounds)else null
             pathFingerprint=null
-            corners?.path(bounds,radius)?.let {path.set(it);pathFingerprint=SurfaceMaterial.descriptor("nativePolicy",sx,sy)}
+            if(!path.isEmpty)pathFingerprint=SurfaceMaterial.descriptor("gpuCornerPolicy",nativePolicy?.javaClass?.name,sx,sy)
             @Suppress("UNCHECKED_CAST")
             val clip=field(view,"mSmoothClipPathFunction") as? BiConsumer<Path,RectF>
             if(path.isEmpty && clip!=null)try {
@@ -104,19 +81,24 @@ internal object FolderMaterialHook {
             }catch(_:Throwable){}
             if(path.isEmpty && native!=null && NativeFolderPath.create(view,path,RectF(bounds),radius,sx,sy))
                 pathFingerprint=SurfaceMaterial.descriptor("icon",sx,sy)
-            val fill=if(corners==null)NativeFolderPath.fill(fallback,bounds)else null
+            val fill=if(path.isEmpty)NativeFolderPath.fill(fallback,bounds)else null
             if(fill!=null){
                 if(path.isEmpty)path.set(fill)else path.op(fill,Path.Op.INTERSECT)
                 pathFingerprint=SurfaceMaterial.descriptor(pathFingerprint,"fill",fallback?.javaClass?.name,sx,sy)
             }
             cachedBounds.set(bounds);cachedRadius=radius;cachedInfo=info;cachedSpanX=sx;cachedSpanY=sy;cachedRevision=geometryRevision
             }
-            if(!logged){logged=true;GlassLogger.i("FolderMaterial","Native shape: radius=$radius, path=${!path.isEmpty}, bounds=$bounds, callback=${callback?.javaClass?.simpleName}")}
+            if(!logged){logged=true;GlassLogger.i("FolderMaterial","Native shape: radius=$radius, path=${!path.isEmpty}, nativePolicy=${nativePolicy!=null}, alphaMask=${cachedMask!=null}, bounds=$bounds, callback=${callback?.javaClass?.simpleName}")}
             @Suppress("DEPRECATION")
             val local=if(localDraw && canvas.isHardwareAccelerated)RectF(bounds).also {canvas.matrix.mapRect(it)}else null
-            if(!SurfaceMaterial.draw(canvas,bounds,view,this,radius,path.takeUnless {it.isEmpty},alpha=opacity,style=style(source.get() ?: view),nativeShape=if(path.isEmpty)fallback else null,pathFingerprint=pathFingerprint,
+            if(!SurfaceMaterial.draw(canvas,bounds,view,this,radius,if(cachedMask==null)path.takeUnless {it.isEmpty}else null,alpha=opacity,style=style(source.get() ?: view),nativeShape=if(path.isEmpty)fallback else null,nativeMask=cachedMask,pathFingerprint=pathFingerprint,
                     local=local,fallback=fallback)){
-                fallback?.bounds=bounds;fallback?.draw(canvas)
+                val saved=canvas.save()
+                val previous=fallback?.bounds?.let(::Rect)
+                try {
+                    if(cachedMask==null && !path.isEmpty)canvas.clipPath(path)
+                    fallback?.bounds=bounds;fallback?.draw(canvas)
+                }finally{if(previous!=null)fallback?.bounds=previous;canvas.restoreToCount(saved)}
             }
         }
         override fun setAlpha(alpha:Int){if(opacity!=alpha){opacity=alpha;invalidateSelf()}}
@@ -126,7 +108,9 @@ internal object FolderMaterialHook {
     }
     private fun replace(owner:Any,view:View):Boolean {
         if(field(owner,"mBgDrawable") is Material)return true
-        val corners=nativeCorners(field(owner,"mBgDrawable"),view,view.tag)
+        // Preserve the complete producer policy, not a partially initialized
+        // clone. Its optical path uses the exact OEM host/type/weight rules.
+        val nativePolicy=field(field(owner,"mBgDrawable") ?: owner,"mDefaultDrawable") as? Drawable
         val controller=field(owner,"mBlurProp")
         // Retire the producer and animation subscription before dropping its
         // drawable. A hidden native blur would still spend GPU/capture work.
@@ -141,7 +125,7 @@ internal object FolderMaterialHook {
             XposedHelpers.setObjectField(owner,"mBlurProp",null)
         }
         val fallback=try {XposedHelpers.callMethod(owner,"getNormalDrawable",view.context) as? Drawable}catch(_:Throwable){null}
-        XposedHelpers.setObjectField(owner,"mBgDrawable",Material(WeakReference(view),WeakReference(owner),fallback,corners))
+        XposedHelpers.setObjectField(owner,"mBgDrawable",Material(WeakReference(view),WeakReference(owner),fallback,nativePolicy))
         GlassLogger.i("FolderMaterial","Custom plate installed; native controller retired=${controller!=null}")
         return true
     }
@@ -245,9 +229,9 @@ internal object FolderMaterialHook {
                     val info=param.args.getOrNull(2) ?: view.tag
                     val sx=(info?.let {XposedHelpers.callMethod(it,"getSpanX")} as? Int) ?: 1
                     val sy=(info?.let {XposedHelpers.callMethod(it,"getSpanY")} as? Int) ?: 1
-                    val path=Path()
-                    NativeFolderPath.create(view,path,RectF(bounds),radius,sx,sy)
-                    if(!path.isEmpty)NativeFolderPath.intersectFill(path,material.fallback,bounds)
+                    val path=NativeFolderPath.policyPath(material.nativePolicy,bounds,radius) ?: Path().also {
+                        NativeFolderPath.create(view,it,RectF(bounds),radius,sx,sy)
+                    }
                     val fingerprint=SurfaceMaterial.descriptor("nativeClip",sx,sy,material.fallback?.javaClass?.name)
                     if(SurfaceMaterial.draw(canvas,bounds,view,material,radius,path.takeUnless {it.isEmpty},alpha=material.alpha,
                         style=style(view),nativeShape=if(path.isEmpty)material.fallback else null,pathFingerprint=fingerprint,fallback=material.fallback)){

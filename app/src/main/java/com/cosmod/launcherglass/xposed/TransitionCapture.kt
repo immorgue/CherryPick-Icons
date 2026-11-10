@@ -64,6 +64,7 @@ internal object TransitionCapture {
         scenes[bitmap]?.let {drawableScenes[drawable]=it}
     }
     fun drawLive(drawable:BitmapDrawable,canvas:Canvas):Boolean {
+        if(!PrefsHelper.backdropEnabled)return false
         val scene=drawableScenes[drawable] ?: scenes[drawable.bitmap] ?: return false
         val overlay=scene.adornments?.takeUnless {it.isRecycled} ?: return false
         val bounds=Rect(drawable.bounds);val alpha=drawable.alpha
@@ -90,7 +91,7 @@ internal object TransitionCapture {
         val floating=XposedHelpers.findClassIfExists("com.android.launcher3.anim.floatingdrawable.IconDrawableView",loader)
         if(floating!=null)ModuleHooks.hookAllMethods(floating,"onDraw",object:XC_MethodHook(){
             override fun beforeHookedMethod(param:MethodHookParam){
-                if(!PrefsHelper.enabled || !PrefsHelper.blurEnabled)return
+                if(!PrefsHelper.enabled || !PrefsHelper.backdropEnabled)return
                 val original=NativeIconAccess.field(param.thisObject,"originalIconDrawable") as? BitmapDrawable ?: return
                 val scene=drawableScenes[original] ?: scenes[original.bitmap] ?: return
                 if(!scene.guardCorners)return
@@ -167,6 +168,7 @@ internal object TransitionCapture {
     fun isViewCapture(drawable:Drawable)=((drawable as? BitmapDrawable)?.bitmap)?.let {captures[it]==true} ?: false
     /** Record native badges/labels once and retain exact material geometry as GPU recipes. */
     fun drawHardware(view:View,canvas:Canvas):Boolean {
+        if(!PrefsHelper.backdropEnabled || (PrefsHelper.colorOnly && FolderSettings.style().colorOnly))return false
         if(target.get()!==view || recording.get()==true || canvas.isHardwareAccelerated || !PrefsHelper.enabled)return false
         if(view.width<=0 || view.height<=0)return false
         val key=source(view)

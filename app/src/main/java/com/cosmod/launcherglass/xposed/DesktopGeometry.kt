@@ -21,22 +21,23 @@ internal object DesktopGeometry {
     private fun field(owner:Any,named:String,compact:String)=
         NativeIconAccess.field(owner,named) ?: NativeIconAccess.field(owner,compact) ?: error("Missing desktop field $named/$compact")
     private fun number(owner:Any,named:String,compact:String)=(field(owner,named,compact) as Number).toInt()
-    private val indicatorPadding=setOf("workspace_page_indicator_bottom_padding_offset",
-        "workspace_page_indicator_vertical_padding","workspace_page_indicator_vertical_padding_breeno")
-    private val indicatorHeight=setOf("workspace_page_indicator_height","workspace_page_indicator_breeno_entry_height")
     private val widgetPadding=setOf("CellLayout_widget_padding_left_right","oplus_default_app_widget_padding_left",
         "oplus_default_app_widget_padding_right","oplus_default_app_widget_padding_top","oplus_default_app_widget_padding_bottom")
     // Resource IDs belong to the installed launcher and cannot be linked into this module's R class.
     @android.annotation.SuppressLint("DiscouragedApi")
     fun load(bundle:Bundle) {
+        DesktopOffsets.load(bundle)
+        DesktopCells.load(bundle)
         values=DesktopSizing.defaults.mapValues {(key,fallback) -> bundle.getInt(key,fallback).coerceIn(DesktopSizing.ranges.getValue(key))}
         if(dimensions.isEmpty())WallpaperHelper.appContext?.let {context ->
-            dimensions=(indicatorPadding+indicatorHeight+widgetPadding).mapNotNull {name ->
+            dimensions=widgetPadding.mapNotNull {name ->
                 context.resources.getIdentifier(name,"dimen",context.packageName).takeIf {it!=0}?.let {it to name}
             }.toMap()
         }
     }
     fun install(loader:ClassLoader) {
+        DesktopOffsets.install(loader)
+        DesktopCells.install(loader)
         val profile=XposedHelpers.findClass("com.android.launcher3.DeviceProfile",loader)
         XposedBridge.hookAllConstructors(profile,object:XC_MethodHook(){
             override fun beforeHookedMethod(param:MethodHookParam) {
@@ -98,11 +99,11 @@ internal object DesktopGeometry {
                     if(resources.configuration.orientation!=android.content.res.Configuration.ORIENTATION_PORTRAIT)return
                     if(resources.getResourcePackageName(id)!=WallpaperHelper.appContext?.packageName)return
                     val base=param.result as Int
-                    val key=if(name in widgetPadding)DesktopSizing.WIDGET_GAPS else DesktopSizing.INDICATOR_GAPS
+                    val key=DesktopSizing.WIDGET_GAPS
                     val percent=values.getValue(key)
                     if(percent==100)return
                     val scaled=DesktopSizing.padding(base,percent)
-                    param.result=if(name in indicatorHeight)maxOf(scaled,minOf(base,(48*resources.displayMetrics.density).toInt()))else scaled
+                    param.result=scaled
                 }
             })
     }

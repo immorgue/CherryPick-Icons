@@ -32,6 +32,7 @@ internal object ParentBackdrop {
     fun beginFrame(){frame++}
     fun clear(){plates.clear();observed.clear();revision++;failed=false}
     fun record(view:View,identity:Drawable,bounds:RectF,mask:Bitmap,radius:Float,style:GlassStyle,decorate:Boolean) {
+        if(style.colorOnly)return
         // Expanded folder backgrounds are siblings of the icon content. Bind
         // their material to the folder scope, retaining the background's own
         // coordinate system rather than treating the folder as its canvas.
@@ -55,7 +56,7 @@ internal object ParentBackdrop {
         entries[identity]=Plate(WeakReference(identity),WeakReference(view),RectF(bounds),mask,radius,style,decorate,++sequence)
     }
     @JvmOverloads fun resolve(view:View,identity:Drawable,wallpaper:Bitmap,includeHidden:Boolean=false):Sample? {
-        if(failed || !PrefsHelper.enabled || !PrefsHelper.blurEnabled)return null
+        if(failed || !PrefsHelper.enabled || !PrefsHelper.backdropEnabled)return null
         var owner:View?=view
         repeat(16) {
             val current=owner ?: return null

@@ -110,3 +110,17 @@ python tools/test_launcher_contracts.py <local-cache>
 Для воспроизводимого баг-репорта кнопка в настройках модуля создаёт ZIP с логами,
 настройками, данными устройства и APK установленного OEM-лаунчера, включая splits.
 Архив содержит SHA256SUMS.txt. Передача выполняется через системное меню «Поделиться».
+
+
+## Дополнение для 0.2.80: отдельные вертикальные смещения
+
+Локальная проверка шести APK из `apks`: во всех есть отдельные `id/workspace`, `id/hotseat`, `id/page_indicator` и объявленный `OplusDragLayer.onLayout(ZIIII)V`. Новый адаптер меняет bounds после native layout, предварительно снимает прошлую добавку и компенсирует смещение целевого предка, поэтому нулевой индикатор остаётся на своём месте при перемещении сетки. Анимационные translation/scale не перезаписываются. Работает для портретной ориентации; landscape сохраняет native layout.
+
+`verify_launcher_contracts.py` проверяет группу `desktop_offsets`. `test_launcher_contracts.py` прошёл 41 отрицательный случай на пяти уникальных APK. Ресурсные имена дополнительно проверены через aapt dump resources каждого из шести APK. Это статическая совместимость; новые положения, hit-testing и анимации с изменёнными координатами на устройстве пока не проверены: пользователь временно забрал телефон.
+
+
+### 0.2.90-dev: native contours, optional surface glass and cell editing
+
+All six local launcher APKs pass 17 contract families. Added checks cover native CellLayout metrics and padding accessors, plus BubbleTextView dock icon sizing; 64 missing-contract cases are detected across five unique APKs. No additional launcher APK was installed.
+
+On the current 17.5.4 device, ordinary folder corners and the native destination clip for multi-folders were compared with the module disabled; the user confirmed the corner fix. Color-only icons with independent folder/multi-folder glass and dock glass were also exercised. Release build, lint and 80 unit tests pass. The new cell width/height controls and dock icon scaling still require completion of device layout/drag testing: the user stopped further checks to publish sources.

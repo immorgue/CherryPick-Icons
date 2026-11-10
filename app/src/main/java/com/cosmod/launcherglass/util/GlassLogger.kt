@@ -7,6 +7,24 @@ import java.util.Date
 import java.util.Locale
 
 object GlassLogger {
+    private val animationLogs=java.util.concurrent.ThreadPoolExecutor(1,1,30L,
+        java.util.concurrent.TimeUnit.SECONDS,java.util.concurrent.ArrayBlockingQueue<Runnable>(64),
+        java.util.concurrent.ThreadFactory {work -> Thread({
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+            work.run()
+        },"CherryPickLogs").apply {isDaemon=true}},java.util.concurrent.ThreadPoolExecutor.DiscardOldestPolicy()
+    ).apply {allowCoreThreadTimeOut(true)}
+
+    /** Logcat stays immediate; LSPosed's synchronous file writer leaves the animation/lease lock. */
+    fun animation(component:String,message:String) {
+        val formatted="[${dateFormat.get()!!.format(Date())}] [$component] $message"
+        Log.i(TAG,formatted)
+        animationLogs.execute {try {XposedBridge.log("$TAG: $formatted")}catch(_:Throwable){}}
+    }
+    fun animationLimited(component:String,key:String,every:Int=500,message:()->String){
+        val count=synchronized(counters){(counters[key] ?: 0).inc().also {counters[key]=it}}
+        if(count<=3 || count%every==0)animation(component,if(count<=3)message()else "${message()} (x$count)")
+    }
 
     const val TAG = "ColorOSGlass"
     private val dateFormat = object:ThreadLocal<SimpleDateFormat>() {

@@ -7,14 +7,15 @@ import kotlin.math.roundToInt
 
 /** Experimental optical veil, independently switchable from color quantization. */
 internal object GlassHaze {
-    private data class Size(val width:Int,val height:Int)
+    private data class Size(val width:Int,val height:Int,val bloom:Boolean)
     private val effects=object:LruCache<Size,RenderEffect>(24){}
     @androidx.annotation.RequiresApi(33)
     @Synchronized private fun base(width:Int,height:Int):RenderEffect {
-        val key=Size(width,height)
+        val key=Size(width,height,PrefsHelper.hazeBloomEnabled)
         return effects[key] ?: run {
             val shader=RuntimeShader(SOURCE)
             shader.setFloatUniform("size",width.toFloat(),height.toFloat())
+            shader.setFloatUniform("bloom",if(key.bloom)1f else 0f)
             RenderEffect.createRuntimeShaderEffect(shader,"image").also {effects.put(key,it)}
         }
     }
@@ -29,6 +30,7 @@ internal object GlassHaze {
         try {
             val pixels=IntArray(source.width*source.height)
             readable.getPixels(pixels,0,source.width,0,0,source.width,source.height)
+            val bloom=PrefsHelper.hazeBloomEnabled
             for(y in 0 until source.height)for(x in 0 until source.width){
                 val i=y*source.width+x;val c=pixels[i]
                 if(Color.alpha(c)==0)continue
@@ -37,9 +39,15 @@ internal object GlassHaze {
                 val veil=.025f+.09f*exp(-(dx*dx+dy*dy)*2.4f)
                 val r=Color.red(c)/255f;val g=Color.green(c)/255f;val b=Color.blue(c)/255f
                 val luma=.2126f*r+.7152f*g+.0722f*b
+                // Reuse light already spread by the main blur. No neighbourhood reads.
+                val bright=if(bloom)((maxOf(r,g,b)-.10f)/.40f).coerceIn(0f,1f) else 0f
+                val glow=.85f*bright*bright*(3f-2f*bright)
+                val shadowKnee=((maxOf(r,g,b)-.04f)/.24f).coerceIn(0f,1f)
+                val shadow=if(bloom).32f*(1f-shadowKnee*shadowKnee*(3f-2f*shadowKnee)) else 0f
                 fun channel(v:Float,tint:Float):Int {
                     val softened=((v*.88f+luma*.12f)-.5f)*.92f+.5f
-                    return (((softened*(1f-veil)+tint*veil)*(1f-.06f*py)).coerceIn(0f,1f)*255f).roundToInt()
+                    val hazed=(softened*(1f-veil)+tint*veil)*(1f-.06f*py)*(1f-shadow)
+                    return ((hazed+(1f-hazed)*v*glow).coerceIn(0f,1f)*255f).roundToInt()
                 }
                 pixels[i]=Color.argb(Color.alpha(c),channel(r,.60f),channel(g,.67f),channel(b,.70f))
             }
@@ -49,17 +57,25 @@ internal object GlassHaze {
     private const val SOURCE="""
         uniform shader image;
         uniform float2 size;
+        uniform float bloom;
         half4 main(float2 xy) {
             half4 c=image.eval(xy);
             float a=float(c.a);
             if(a<=.00001)return c;
             float3 rgb=clamp(float3(c.rgb)/a,0.0,1.0);
+            float3 source=rgb;
             float luma=dot(rgb,float3(.2126,.7152,.0722));
             rgb=(mix(rgb,float3(luma),.12)-.5)*.92+.5;
             float2 uv=xy/size;
             float2 delta=(uv-float2(.18,.08))*float2(1.0,.85);
             float veil=.025+.09*exp(-dot(delta,delta)*2.4);
             rgb=mix(rgb,float3(.60,.67,.70),veil)*(1.0-.06*uv.y);
+            if(bloom>.5) {
+                float peak=max(source.r,max(source.g,source.b));
+                float bright=smoothstep(.10,.50,peak);
+                rgb*=1.0-.32*(1.0-smoothstep(.04,.28,peak));
+                rgb+=(1.0-rgb)*source*(.85*bright);
+            }
             return half4(half3(clamp(rgb,0.0,1.0)*a),c.a);
         }
     """
@@ -68,6 +84,7 @@ internal object GlassHaze {
 /** Optical finish sits after lens/colorization and before the plate overlay. */
 internal object MaterialFinish {
     fun key()=(if(PrefsHelper.hazeEnabled)32 else 0) or
+        (if(PrefsHelper.hazeEnabled && PrefsHelper.hazeBloomEnabled)64 else 0) or
         (if(PrefsHelper.colorDepthStage==ColorDepthEffect.AFTER_REFRACTION)PrefsHelper.colorDepthBits else 24)
     fun needed()=PrefsHelper.hazeEnabled ||
         (PrefsHelper.colorDepthBits<24 && PrefsHelper.colorDepthStage==ColorDepthEffect.AFTER_REFRACTION)

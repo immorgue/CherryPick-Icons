@@ -37,6 +37,7 @@ def verify(d):
  # hookAllMethods only sees methods declared by this class: an inherited
  # onLayout is insufficient to initialize an empty dock's visibility state.
  method('dock_visibility',p+'OplusHotseat;','onLayout','(ZIIII)V',declared=True)
+ method('desktop_offsets',p+'OplusDragLayer;','onLayout','(ZIIII)V',declared=True)
  method('dock_visibility',p+'OplusHotseat;','hasVerticalHotseat','()Z')
  method('dock_visibility',p+'OplusBubbleTextView;','getIconBounds','(Landroid/graphics/Rect;)V')
  check('dock_visibility',p+'OplusDragLayer;' in d,'OplusDragLayer view for expanded dock')
@@ -49,18 +50,27 @@ def verify(d):
   field('folder_backdrops',p+'folder/OplusFolder;',n,'Landroid/widget/ImageView;')
  method('folder_backdrops',p+'folder/OplusFolder;','onFinishInflate','()V',declared=True)
  method('folder_backdrops',p+'folder/FolderRoundImageView;','onDraw','(Landroid/graphics/Canvas;)V',declared=True)
- # Fill and optical stroke can have different corner radii. Never substitute
- # GradientDrawableWrapper.mStrokePath for the normal folder fill contour.
+ # A live GPU producer uses a compensated optical contour; the fallback
+ # theme drawable can instead encode its silhouette in bitmap alpha.
  field('folder_geometry',p+'folder/big/SmoothRoundDrawable;','mPath','Landroid/graphics/Path;')
  method('folder_geometry',p+'folder/OplusPreviewBackground;','getNormalDrawable','(Landroid/content/Context;)Landroid/graphics/drawable/Drawable;')
  smooth=p+'util/SmoothRoundedManager;'
  if any(m['name']=='createIconFolderClipPath' for m in d.get(smooth,{}).get('methods',[])):
   method('folder_geometry',smooth,'createIconFolderClipPath','(Landroid/graphics/Path;Landroid/graphics/RectF;FFII)V')
+  wrapper=p+'uioverrides/states/blurdrawable/GradientDrawableWrapper;'
+  field('folder_geometry',wrapper,'mStrokePath','Landroid/graphics/Path;')
+  method('folder_geometry',wrapper,'setCornerRadius','(F)V')
  else:
   method('folder_geometry','Lcom/android/common/util/IconUtils;','isIconRadiusRound','()Z')
   method('folder_geometry','Lcom/android/common/util/IconUtils;','isMiddle','(II)Z')
  if p+'drawable/GlassDrawable;' in d:
   field('folder_geometry',p+'drawable/GlassDrawable;','backgroundDrawable','Landroid/graphics/drawable/Drawable;')
+ grid=p+'viewcontainer/GridRecyclerView;'
+ clip=inherited(d,grid,'clipRoundBackground','method') or []
+ if any(m['signature']=='(Landroid/graphics/Canvas;)V' for m in clip):
+  method('native_grid_mask',grid,'clipRoundBackground','(Landroid/graphics/Canvas;)V')
+ else:
+  method('native_grid_mask',grid,'createClipSmoothRoundBitmap','()Landroid/graphics/Bitmap;')
  for n,k in [('mBgDrawable','Landroid/graphics/drawable/Drawable;'),
              ('mBgView',p+'folder/FolderRoundImageView;'),('mRadius','F')]:
   field('folder_backdrops',p+'folder/OplusPreviewBackground;',n,k)
@@ -95,6 +105,14 @@ def verify(d):
  field('desktop_geometry',hotseat,'hotseatBarSizePx' if legacy else 'n','I');field('desktop_geometry',indicator,'workspacePageIndicatorHeight' if legacy else 'd','I')
  method('desktop_geometry',hotseat,'getMarginBottom' if legacy else ('b' if compact else 'i'),'(Z)I' if compact else '()I')
  method('desktop_geometry',profile,'updateInsets','(Landroid/graphics/Rect;)V')
+ for name in ['mContainerType','mCellWidth','mCellHeight','mCountX','mCountY']:field('desktop_cells',p+'CellLayout;',name,'I')
+ method('desktop_cells',p+'CellLayout;','setCellDimensionsInner','(II)V')
+ for name in ['getLayoutPaddingStart','getLayoutPaddingTop']:method('desktop_cells',p+'CellLayout;',name,'()I')
+ method('desktop_cells',p+'CellLayout;','onMeasure','(II)V')
+ field('dock_icon_size',p+'BubbleTextView;','mIconSize','I')
+ field('dock_icon_size',p+'BubbleTextView;','mIcon','Landroid/graphics/drawable/Drawable;')
+ method('dock_icon_size',p+'BubbleTextView;','onMeasure','(II)V')
+ method('dock_icon_size',p+'BubbleTextView;','applyCompoundDrawables','(Landroid/graphics/drawable/Drawable;)V')
  icon='Lto5;' if compact else 'Lcom/android/launcher/theme/LauncherIconConfig;'
  method('icon_size',icon,'b' if compact else 'calculateIconSizeByUxDesign','([I)I')
  field('icon_theme',icon,'D' if compact else 'sInstance',icon)

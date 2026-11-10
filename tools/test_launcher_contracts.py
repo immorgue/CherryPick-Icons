@@ -40,10 +40,20 @@ def main():
             ('folder_backdrops',p+'folder/OplusFolder;','fields','mContentAnimationBackground'),
             ('folder_backdrops',p+'folder/FolderRoundImageView;','methods','onDraw'),
             ('dock_visibility',p+'OplusHotseat;','methods','onLayout'),
+            ('desktop_offsets',p+'OplusDragLayer;','methods','onLayout'),
+            ('desktop_cells',p+'CellLayout;','methods','setCellDimensionsInner'),
+            ('desktop_cells',p+'CellLayout;','fields','mContainerType'),
+            ('dock_icon_size',p+'BubbleTextView;','methods','applyCompoundDrawables'),
             ('surface_handoff',ns+'IconSurfaceRecord;','methods','showOriginalIcon'),
         ]
         if p+'drawable/GlassDrawable;' in classes:
             cases.append(('folder_geometry',p+'drawable/GlassDrawable;','fields','backgroundDrawable'))
+        smooth=p+'util/SmoothRoundedManager;'
+        if any(m['name']=='createIconFolderClipPath' for m in classes.get(smooth,{}).get('methods',[])):
+            cases.append(('folder_geometry',p+'uioverrides/states/blurdrawable/GradientDrawableWrapper;','fields','mStrokePath'))
+        grid=p+'viewcontainer/GridRecyclerView;'
+        clip='clipRoundBackground' if any(m['name']=='clipRoundBackground' for m in classes[grid]['methods'])else 'createClipSmoothRoundBitmap'
+        cases.append(('native_grid_mask',grid,'methods',clip))
         for group,owner,kind,name in cases:
             result=verify(changed(classes,owner,kind,name))
             assert result['families'][group] is False,(item['file'],owner,name)

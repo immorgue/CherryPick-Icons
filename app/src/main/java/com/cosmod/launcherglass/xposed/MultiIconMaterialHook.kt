@@ -11,11 +11,9 @@ import java.lang.ref.WeakReference
 
 /** Native shortcut clusters keep their individual items, hit targets and transitions. */
 internal object MultiIconMaterialHook {
-    private fun enabled()=PrefsHelper.enabled && PrefsHelper.blurEnabled
+    private fun enabled()=PrefsHelper.enabled && PrefsHelper.blurEnabled && PrefsHelper.folderBlurEnabled
     internal data class Contour(val bounds:Rect,val radius:Float,val spanX:Int,val spanY:Int) {
-        fun path(view:View)=Path().takeIf {NativeFolderPath.create(view,it,RectF(bounds),radius,spanX,spanY)}?.also {
-            NativeFolderPath.intersectFill(it,grids[view]?.native,bounds)
-        }
+        fun path(view:View)=Path().takeIf {NativeFolderPath.create(view,it,RectF(bounds),radius,spanX,spanY)}
     }
     internal fun contour(view:View):Contour? {
         if(!view.javaClass.name.endsWith(".GridRecyclerView"))return null
@@ -35,6 +33,11 @@ internal object MultiIconMaterialHook {
         private var spans=0
         private var geometry=-1L
         private var fingerprint=0L
+        // The OEM draw already clips the destination canvas. A second raster
+        // silhouette changes the corners (and applies antialiasing twice).
+        private val coverage=Bitmap.createBitmap(3,3,Bitmap.Config.ARGB_8888).apply {eraseColor(Color.WHITE)}
+        private val edge=Paint(Paint.ANTI_ALIAS_FLAG).apply {style=Paint.Style.STROKE;strokeWidth=2f}
+        private var edgeOpacity=-1
         override fun draw(canvas:Canvas){
             val view=owner.get() ?: return native.draw(canvas)
             if(!enabled()){native.draw(canvas);return}
@@ -51,16 +54,29 @@ internal object MultiIconMaterialHook {
             if(previous!=rect || radius!=nativeRadius || spans!=sx*100+sy || geometry!=SurfaceMaterial.geometryRevision){
                 clip.reset()
                 if(!NativeFolderPath.create(view,clip,RectF(rect),nativeRadius,sx,sy)){native.draw(canvas);return}
-                NativeFolderPath.intersectFill(clip,native,rect)
+                // GridRecyclerView clips the stock plate with this exact path.
+                // Intersecting a drawable outline adds a second, different radius.
                 previous.set(rect);radius=nativeRadius;spans=sx*100+sy;geometry=SurfaceMaterial.geometryRevision
+                edgeOpacity=-1
                 // The OEM contour is a function of size, radius and spans only.
                 fingerprint=SurfaceMaterial.descriptor("grid",sx,sy)
             }
             val saved=canvas.save()
             try {
+                // Use the native vector on the actual destination, including
+                // drag/resize branches where GridRecyclerView skips its clip.
                 canvas.clipPath(clip)
-                if(!SurfaceMaterial.draw(canvas,rect,view,this,nativeRadius,clip,alpha=native.alpha,
-                    style=GlassStyle.icons().copy(extendedLens=true),pathFingerprint=fingerprint,fallback=native))native.draw(canvas)
+                if(!SurfaceMaterial.draw(canvas,rect,view,this,nativeRadius,clip,alpha=native.alpha,nativeMask=coverage,
+                    style=FolderSettings.style().copy(extendedLens=true),pathFingerprint=fingerprint,fallback=native,drawContour=false))native.draw(canvas)
+                if(PrefsHelper.iconStroke && PrefsHelper.strokeOpacity>0){
+                    if(edgeOpacity!=PrefsHelper.strokeOpacity){
+                        edgeOpacity=PrefsHelper.strokeOpacity
+                        val a=(edgeOpacity*.8f).toInt().coerceIn(0,255)
+                        edge.shader=LinearGradient(rect.left.toFloat(),rect.top.toFloat(),rect.right.toFloat(),rect.bottom.toFloat(),
+                            intArrayOf(Color.argb(a,255,255,255),Color.argb(a/5,255,255,255),Color.argb(a/2,0,0,0)),null,Shader.TileMode.CLAMP)
+                    }
+                    edge.alpha=native.alpha;canvas.drawPath(clip,edge)
+                }
             }finally{canvas.restoreToCount(saved)}
         }
         override fun onBoundsChange(bounds:Rect){native.bounds=bounds}
@@ -73,6 +89,7 @@ internal object MultiIconMaterialHook {
     private val hosts=WeakHashMap<View,Boolean>()
     private val grids=WeakHashMap<View,GridPlate>()
     fun onSettingsChanged(){
+        for(view in grids.keys.weakSnapshot())view.invalidate()
         if(!enabled()){
             for((view,plate) in grids.strongSnapshot()){
                 if(NativeIconAccess.field(view,"mBackDrawable")===plate)XposedHelpers.setObjectField(view,"mBackDrawable",plate.native)

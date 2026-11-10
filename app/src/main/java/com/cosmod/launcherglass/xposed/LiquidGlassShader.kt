@@ -58,6 +58,8 @@ internal class LiquidGlassShader private constructor(private val shader:RuntimeS
         shader.setFloatUniform("capSize",if(extend)edge else width.toFloat(),if(extend)edge else height.toFloat())
         shader.setFloatUniform("size",width.toFloat(),height.toFloat())
         shader.setFloatUniform("rounding",rounding)
+        shader.setFloatUniform("exactRadius",if(style.exactLensRadius)1f else 0f)
+        shader.setFloatUniform("minimumRounding",if(style.exactLensRadius)0f else .20f)
         shader.setFloatUniform("bevelWidth",.015f+style.width*.0014f)
         shader.setFloatUniform("distortion",style.distortion/50f)
     }
@@ -106,6 +108,8 @@ internal class LiquidGlassShader private constructor(private val shader:RuntimeS
             uniform float2 capSize;
             uniform float2 size;
             uniform float rounding;
+            uniform float minimumRounding;
+            uniform float exactRadius;
             uniform float bevelWidth;
             uniform float distortion;
             uniform float4 rowR;
@@ -117,6 +121,22 @@ internal class LiquidGlassShader private constructor(private val shader:RuntimeS
             float2 lensOffset(float2 xy) {
                 float edgeSize=min(size.x,size.y);
                 float2 center=xy-size*.5;
+                if(exactRadius>.5){
+                    float radius=edgeSize*clamp(rounding,0.0,.5);
+                    float2 q=abs(center)-size*.5+radius;
+                    float2 outside=max(q,float2(0.0));
+                    float len=length(outside);
+                    float distance=len+min(max(q.x,q.y),0.0)-radius;
+                    float2 direction=len>.001 ? sign(center)*outside/len :
+                        (q.x>q.y ? float2(sign(center.x),0.0) : float2(0.0,sign(center.y)));
+                    float band=max(edgeSize*bevelWidth*2.0,.5);
+                    float shoulder=1.0-smoothstep(0.0,band,max(-distance,0.0));
+                    float corner=smoothstep(0.0,.3,min(outside.x,outside.y)/max(radius,1.0))*smoothstep(.2,.5,rounding);
+                    float slope=.95*mix(1.0,.55,corner)*shoulder/sqrt(max(.15,1.0-.85*shoulder*shoulder));
+                    float3 normal=normalize(float3(direction*slope,1.0));
+                    float3 ray=refract(float3(0.0,0.0,-1.0),normal,1.0/1.45);
+                    return ray.xy/max(-ray.z,.25)*(edgeSize*.22)*distortion;
+                }
                 // Reuse the icon lens unchanged at each rounded end. The excess
                 // length is a straight extrusion of its central cross-section,
                 // so wide/tall folders are neither stretched ellipses nor a
@@ -127,7 +147,7 @@ internal class LiquidGlassShader private constructor(private val shader:RuntimeS
                 // Intersect a radial ray with a rounded rectangle, instead of
                 // selecting the nearest side. The optical cap stays rounded
                 // even when the silhouette is deliberately almost square.
-                float radius=edgeSize*max(rounding,.20);
+                float radius=edgeSize*clamp(max(rounding,minimumRounding),0.0,.5);
                 float2 halfSize=capSize*.5;
                 float2 absDirection=abs(direction);
                 float2 sideDistances=halfSize/max(absDirection,float2(.0001));

@@ -85,7 +85,7 @@ class MainActivity : AppCompatActivity() {
     private val md3Resets = mutableListOf<Pair<View,List<String>>>()
     /** Experimental standard Material 3 interface; the classic interface stays the default. */
     private var md3 = false
-    private fun md3Requested() = bool(SettingsProvider.KEY_DEVELOPER_MODE) && bool(SettingsProvider.KEY_MD3_UI)
+    private fun md3Requested() = bool(SettingsProvider.KEY_MD3_UI)
     private val cancelHolds = mutableListOf<() -> Unit>()
     private val primary get() = color(M.attr.colorPrimary)
     private val onSurface get() = color(M.attr.colorOnSurface)
@@ -99,6 +99,7 @@ class MainActivity : AppCompatActivity() {
         ?: prefs.getInt(key,SettingsDefaults.integer(key))
     private fun darkIcons() = prefs.getBoolean(SettingsProvider.KEY_NATIVE_ICON_DARK, com.cosmod.launcherglass.util.IconPalette.isSystemDark(this))
     private fun master() = bool(SettingsProvider.KEY_ENABLED)
+    private fun colorOnly() = number(SettingsProvider.KEY_BLUR_STYLE)==SettingsProvider.BLUR_STYLE_COLOR
     private fun blur() = master() && bool(SettingsProvider.KEY_BLUR_ENABLED)
     private fun folderOwn()=blur() && bool(SettingsProvider.KEY_FOLDER_BLUR_ENABLED) && bool(FolderSettingsKeys.OWN)
     private fun dockOwn()=blur() && bool(SettingsProvider.KEY_DOCK_ENABLED) && bool(DockSettingsKeys.OWN)
@@ -111,8 +112,10 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         prefs = getSharedPreferences(SettingsProvider.PREFS_NAME, MODE_PRIVATE)
-        prefs.registerOnSharedPreferenceChangeListener(supportListener)
         SettingsDefaults.initialize(this, prefs)
+        if(!prefs.getBoolean("settings_cards_v2",false))prefs.edit()
+            .putBoolean(SettingsProvider.KEY_MD3_UI,true).putBoolean("settings_cards_v2",true).apply()
+        prefs.registerOnSharedPreferenceChangeListener(supportListener)
         navigation=SettingsNavigation(savedInstanceState?.getIntArray("navigation"))
         blurExpanded = savedInstanceState?.getBoolean("blurExpanded") ?: true
         designExpanded = savedInstanceState?.getBoolean("designExpanded") ?: false
@@ -286,14 +289,14 @@ class MainActivity : AppCompatActivity() {
         prefs.edit().apply {
             // Own settings start as a copy of the icon values instead of jumping to defaults.
             ScopedSettingsKeys.all.firstOrNull {it.own==key}?.takeIf {value==true}?.let {scope ->
-                scope.integers.forEach {base -> val own=scope.key(base);if(!prefs.contains(own))putInt(own,number(base))}
+                scope.integers.forEach {base -> val own=scope.key(base);if(!prefs.contains(own))putInt(own,if(base==SettingsProvider.KEY_BLUR_STYLE && colorOnly())SettingsProvider.BLUR_STYLE_FROSTED else number(base))}
                 scope.booleans.forEach {base -> val own=scope.key(base);if(!prefs.contains(own))putBoolean(own,bool(base))}
             }
             when(value) { is Boolean -> putBoolean(key, value); is Int -> putInt(key, value) } }.apply()
         contentResolver.notifyChange(SettingsProvider.CONTENT_URI, null)
         if(key==WallpaperProfiles.ENABLED && value==true)WallpaperProfiles.saveCurrent(this,prefs)
         updateGates();updateStatus()
-        if(ScopedSettingsKeys.isOwnKey(key) || key==SettingsProvider.KEY_DEVELOPER_MODE || key==WallpaperProfiles.ENABLED)refreshControls()
+        if(ScopedSettingsKeys.isOwnKey(key) || key==SettingsProvider.KEY_DEVELOPER_MODE || key==WallpaperProfiles.ENABLED || key==SettingsProvider.KEY_BLUR_STYLE)refreshControls()
         if(md3!=md3Requested())rebuildPage()
     }
     /** Rebuilds the page after the interface style changes, keeping the scroll position. */
@@ -364,12 +367,13 @@ class MainActivity : AppCompatActivity() {
         SettingsScreen.MODULE -> getString(R.string.ui_nav_module)
         SettingsScreen.APP -> getString(R.string.ui_settings)
         SettingsScreen.COLORS -> getString(R.string.ui_nav_colors)
-        SettingsScreen.BLUR -> getString(R.string.ui_background_blur)
+        SettingsScreen.BLUR -> getString(R.string.ui_material_mode)
         SettingsScreen.ICONS -> getString(R.string.ui_icon_design)
         SettingsScreen.FOLDERS -> getString(R.string.ui_nav_folders)
         SettingsScreen.DOCK -> getString(R.string.ui_nav_dock)
         SettingsScreen.WIDGETS -> getString(R.string.ui_widgets)
         SettingsScreen.DESKTOP -> getString(R.string.ui_desktop_title)
+        SettingsScreen.POSITIONS -> getString(R.string.ui_desktop_positions)
         SettingsScreen.WALLPAPERS -> getString(R.string.ui_nav_wallpapers)
         SettingsScreen.BEHAVIOR -> getString(R.string.ui_nav_behavior)
         SettingsScreen.DEVELOPER -> getString(R.string.ui_developer_mode)
@@ -377,7 +381,7 @@ class MainActivity : AppCompatActivity() {
     private fun navigate(screen:SettingsScreen){
         if(!navigation.open(screen))return
         when(screen){
-            SettingsScreen.BLUR -> blurExpanded=true
+            SettingsScreen.BLUR -> blurExpanded=false
             SettingsScreen.ICONS -> designExpanded=true
             SettingsScreen.FOLDERS -> folderExpanded=true
             SettingsScreen.DOCK -> dockExpanded=true
@@ -413,7 +417,8 @@ class MainActivity : AppCompatActivity() {
         line.addView(labels, LinearLayout.LayoutParams(0, -2, 1f))
         val toggle = toggle(label, key)
         val chevron = onExpand?.let { expandButton(expanded, label, it) }
-        line.addView(actions(listOfNotNull(reset(key), chevron, toggle)))
+        line.addView(actions(listOfNotNull(chevron, toggle)))
+        line.setOnLongClickListener {confirmReset(key);true}
         add(wrapper, line)
         rowRipple(line)
         line.contentDescription = if (subtitle != null) "$label. $subtitle" else label
@@ -467,10 +472,13 @@ class MainActivity : AppCompatActivity() {
             SettingsScreen.DOCK -> dockSection(body)
             SettingsScreen.WIDGETS -> buildWidgetSettings(body)
             SettingsScreen.DESKTOP -> desktopDesignerSection(body)
+            SettingsScreen.POSITIONS -> desktopPositionEditor(body)
             SettingsScreen.WALLPAPERS -> buildWallpaperSettings(body)
             SettingsScreen.BEHAVIOR -> buildBehaviorSettings(body)
             SettingsScreen.DEVELOPER -> buildDeveloperSettings(body)
         }
+        if(navigation.current.tab==1 && navigation.current!=SettingsScreen.MODULE)
+            add(body,text(getString(R.string.ui_reset_hold_hint),12f,true),top=20)
         screenHost.addView(shell,FrameLayout.LayoutParams(-1,-1));activeShell=shell
         visibleScreen=navigation.current
         val y=scrollOffsets[visibleScreen] ?: 0
@@ -515,7 +523,7 @@ class MainActivity : AppCompatActivity() {
     private fun buildModuleCategories(body:LinearLayout){
         add(body,text(getString(R.string.ui_nav_appearance),13f,true),bottom=12)
         category(body,R.string.ui_nav_colors,R.string.ui_nav_colors_hint,SettingsScreen.COLORS)
-        category(body,R.string.ui_background_blur,R.string.ui_nav_blur_hint,SettingsScreen.BLUR)
+        category(body,R.string.ui_material_mode,R.string.ui_material_mode_hint,SettingsScreen.BLUR)
         category(body,R.string.ui_icon_design,R.string.ui_nav_icons_hint,SettingsScreen.ICONS)
         add(body,text(getString(R.string.ui_nav_workspace),13f,true),top=16,bottom=12)
         category(body,R.string.ui_nav_folders,R.string.ui_nav_folders_hint,SettingsScreen.FOLDERS)
@@ -639,9 +647,11 @@ class MainActivity : AppCompatActivity() {
         add(body,card(about),top=24)
     }
     private fun buildBlurSettings(body:LinearLayout){
-        section(body, getString(R.string.ui_background_blur), "", SettingsProvider.KEY_BLUR_ENABLED, blurExpanded,
+        blurStyleSelector(body)
+        val glass=column().apply {visibility=if(colorOnly())View.GONE else View.VISIBLE}
+        refreshers.add {glass.visibility=if(colorOnly())View.GONE else View.VISIBLE}
+        section(glass, getString(R.string.ui_background_blur), "", SettingsProvider.KEY_BLUR_ENABLED, blurExpanded,
             { blurExpanded = it }, ::master, ::blur) { content ->
-            blurStyleSelector(content)
             effectGroup(content,getString(R.string.ui_blur),SettingsProvider.KEY_BLUR_RADIUS_ENABLED,
                 getString(R.string.ui_blur_radius),SettingsProvider.KEY_BLUR_RADIUS,max=50,allowed=::blur,min=0,suffix="") { details ->
                 if(bool(SettingsProvider.KEY_DEVELOPER_MODE)) {
@@ -665,6 +675,7 @@ class MainActivity : AppCompatActivity() {
             add(locations,locationDetails)
             add(content,card(locations,true),top=8,bottom=4)
         }
+        add(body,glass)
     }
     private fun buildIconSettings(body:LinearLayout){
         section(body, getString(R.string.ui_icon_design), getString(R.string.ui_icon_design_hint), SettingsProvider.KEY_DESIGN_ENABLED, designExpanded,
@@ -732,6 +743,82 @@ class MainActivity : AppCompatActivity() {
         gate(idle) { blur() && number(SettingsProvider.KEY_BLUR_MODE)==SettingsProvider.BLUR_MODE_LIVE }
         add(body,idle,bottom=24)
     }
+    private fun desktopPositionEditor(body:LinearLayout) {
+        val names=linkedMapOf(
+            com.cosmod.launcherglass.util.DesktopSizing.GRID_Y to getString(R.string.ui_desktop_grid_y),
+            com.cosmod.launcherglass.util.DesktopSizing.INDICATOR_Y to getString(R.string.ui_desktop_indicator_y),
+            com.cosmod.launcherglass.util.DesktopSizing.DOCK_Y to getString(R.string.ui_desktop_dock_y))
+        add(body,text(getString(R.string.ui_desktop_positions_hint),14f,true),bottom=12)
+        val content=column().apply {setPadding(dp(16),dp(16),dp(16),dp(16))}
+        val preview=DesktopPositionPreview(this).apply {positions=names.keys.associateWith {number(it)}}
+        content.addView(preview,LinearLayout.LayoutParams(-1,dp(260)))
+        val choices=column()
+        val buttons=linkedMapOf<String,com.google.android.material.button.MaterialButton>()
+        val controls=column().apply {visibility=View.GONE}
+        val label=text("",16f,bold=true).apply {accessibilityLiveRegion=View.ACCESSIBILITY_LIVE_REGION_POLITE}
+        add(controls,label,top=12,bottom=4)
+        val value=text("",14f,true)
+        add(controls,value)
+        val slider=Slider(this).apply {valueFrom=-120f;valueTo=120f;stepSize=1f}
+        add(controls,slider)
+        add(controls,text(getString(R.string.ui_desktop_position_hint),12f,true),bottom=8)
+        var selected:String?=null
+        var changing=false
+        var tracking=false
+        fun formatted(n:Int)="${if(n>0)"+" else ""}$n dp"
+        fun updatePreview(){
+            preview.positions=names.keys.associateWith {number(it)}
+            preview.cellWidthPercent=number(com.cosmod.launcherglass.util.DesktopSizing.CELL_WIDTH)
+            preview.cellHeightPercent=number(com.cosmod.launcherglass.util.DesktopSizing.CELL_HEIGHT)
+        }
+        updatePreview()
+        val cellControls=column()
+        add(cellControls,text(getString(R.string.ui_desktop_grid_cells),18f,bold=true),top=20,bottom=8)
+        add(cellControls,text(getString(R.string.ui_desktop_grid_cells_hint),14f,true),bottom=8)
+        for((title,key) in listOf(R.string.ui_desktop_cell_width to com.cosmod.launcherglass.util.DesktopSizing.CELL_WIDTH,
+            R.string.ui_desktop_cell_height to com.cosmod.launcherglass.util.DesktopSizing.CELL_HEIGHT))
+            add(cellControls,slider(getString(title),key,80,120,"%",onPreview={updatePreview()}))
+        add(controls,cellControls)
+        refreshers.add {updatePreview()}
+        fun select(key:String){
+            selected=key;preview.selected=key
+            cellControls.visibility=if(key==com.cosmod.launcherglass.util.DesktopSizing.GRID_Y)View.VISIBLE else View.GONE
+            changing=true;slider.value=number(key).coerceIn(-120,120).toFloat();changing=false
+            label.text=names[key];value.text=formatted(number(key));slider.contentDescription=names[key]
+            buttons.forEach {(id,button)->button.isChecked=id==key}
+            reveal(controls,true)
+        }
+        preview.onSelect={key -> haptic(preview);select(key)}
+        for((key,name) in names){
+            val button=com.google.android.material.button.MaterialButton(this,null,M.attr.materialButtonOutlinedStyle).apply {
+                text=name;isAllCaps=false;minHeight=dp(48);isCheckable=true
+                setOnClickListener {haptic(it);select(key)}
+            }
+            buttons[key]=button;add(choices,button,bottom=4)
+        }
+        slider.setLabelFormatter {formatted(it.roundToInt())}
+        slider.addOnChangeListener {_,position,user ->
+            val key=selected
+            if(user && !changing && key!=null){
+                val n=position.roundToInt();prefs.edit().putInt(key,n).apply();value.text=formatted(n);updatePreview()
+                if(!tracking)save(key,n)
+            }
+        }
+        slider.addOnSliderTouchListener(object:Slider.OnSliderTouchListener {
+            override fun onStartTrackingTouch(slider:Slider){tracking=true;haptic(slider,true)}
+            override fun onStopTrackingTouch(slider:Slider){tracking=false;selected?.let {save(it,slider.value.roundToInt())}}
+        })
+        add(controls,com.google.android.material.button.MaterialButton(this,null,M.attr.materialButtonOutlinedStyle).apply {
+            text=getString(R.string.ui_reset_defaults);isAllCaps=false;minHeight=dp(48)
+            setOnClickListener {selected?.let {key -> save(key,0);updatePreview();select(key)}}
+        })
+        // The position slider sits immediately below the diagram; the named
+        // buttons remain available for screen readers and overlapping elements.
+        add(content,controls)
+        add(content,choices,top=12)
+        add(body,card(content))
+    }
+
     private fun desktopDesignerSection(body:LinearLayout) {
         val content=column().apply {setPadding(dp(20),dp(20),dp(20),dp(12))}
         add(content,text(getString(R.string.ui_desktop_title),19f,bold=true))
@@ -739,7 +826,6 @@ class MainActivity : AppCompatActivity() {
         val sizing=column().apply {visibility=View.GONE}
         for((label,key,hint) in listOf(
             Triple(R.string.ui_desktop_icon_size,com.cosmod.launcherglass.util.DesktopSizing.ICON_SCALE,R.string.ui_desktop_icon_size_hint),
-            Triple(R.string.ui_desktop_indicator_gaps,com.cosmod.launcherglass.util.DesktopSizing.INDICATOR_GAPS,R.string.ui_desktop_indicator_gaps_hint),
             Triple(R.string.ui_desktop_widget_gaps,com.cosmod.launcherglass.util.DesktopSizing.WIDGET_GAPS,R.string.ui_desktop_widget_gaps_hint),
             Triple(R.string.ui_desktop_bottom_bias,com.cosmod.launcherglass.util.DesktopSizing.BOTTOM_BIAS,R.string.ui_desktop_bottom_bias_hint))) {
             val range=com.cosmod.launcherglass.util.DesktopSizing.ranges.getValue(key)
@@ -756,6 +842,10 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener {haptic(it);sizingOpen=!sizingOpen;reveal(sizing,sizingOpen)}
         },bottom=8)
         add(content,sizing)
+        add(content,com.google.android.material.button.MaterialButton(this,null,M.attr.materialButtonOutlinedStyle).apply {
+            text=getString(R.string.ui_desktop_positions_open);isAllCaps=false;minHeight=dp(48)
+            setOnClickListener {haptic(it);navigate(SettingsScreen.POSITIONS)}
+        },bottom=8)
         add(content,com.google.android.material.button.MaterialButton(this,null,M.attr.materialButtonOutlinedStyle).apply {
             text=getString(R.string.ui_desktop_open);isAllCaps=false;minHeight=dp(48)
             setOnClickListener {
@@ -854,7 +944,8 @@ class MainActivity : AppCompatActivity() {
         add(labels,text(label,16f))
         line.addView(labels,LinearLayout.LayoutParams(0,-2,1f))
         val chevron=expandButton(false,label) {open -> reveal(details,open)}
-        line.addView(actions(listOf(reset(resetKey),chevron)))
+        line.addView(actions(listOf(chevron)))
+        line.setOnLongClickListener {confirmReset(resetKey);true}
         if(md3)rowRipple(line)
         labels.isClickable=true;labels.isFocusable=true;labels.contentDescription=label
         labels.setOnClickListener {chevron.performClick()}
@@ -869,14 +960,16 @@ class MainActivity : AppCompatActivity() {
      */
     private fun ownGlassControls(content:LinearLayout,scope:ScopedSettingsKeys,hint:String?,status:Boolean,
         allowed:()->Boolean,top:Int=0) {
-        add(content,switchRow(getString(R.string.ui_folder_own),scope.own,hint),top=top)
-        val mode=if(status)text(getString(if(bool(scope.own))R.string.ui_folder_mode_own else R.string.ui_folder_mode_icons),14f,true) else null
-        mode?.let {add(content,it,bottom=10)}
+        add(content,text(getString(if(scope===DockSettingsKeys)R.string.ui_dock_appearance else R.string.ui_folder_appearance),16f,bold=true),top=top,bottom=10)
+        val inherited=ModeChoiceCard(this,getString(R.string.ui_style_inherit),getString(R.string.ui_style_inherit_hint))
+        val own=ModeChoiceCard(this,getString(R.string.ui_style_separate),getString(if(scope===DockSettingsKeys)R.string.ui_dock_separate_hint else R.string.ui_folder_separate_hint))
+        inherited.setOnClickListener {haptic(it);save(scope.own,false)}
+        own.setOnClickListener {haptic(it);save(scope.own,true)}
+        gate(inherited){master()};gate(own){master()}
+        add(content,inherited,bottom=8);add(content,own,bottom=12)
         val controls=column().apply {visibility=if(bool(scope.own))View.VISIBLE else View.GONE}
-        refreshers.add {
-            controls.visibility=if(bool(scope.own))View.VISIBLE else View.GONE
-            mode?.text=getString(if(bool(scope.own))R.string.ui_folder_mode_own else R.string.ui_folder_mode_icons)
-        }
+        fun selection(){inherited.chosen=!bool(scope.own);own.chosen=bool(scope.own);controls.visibility=if(bool(scope.own))View.VISIBLE else View.GONE}
+        selection();refreshers.add {selection()}
         gate(controls,allowed)
         if(!status)space(controls,8)
         scopedStyleSelector(controls,scope,allowed)
@@ -900,77 +993,42 @@ class MainActivity : AppCompatActivity() {
         add(content,controls)
     }
 
-    private fun scopedStyleSelector(parent:LinearLayout,scope:ScopedSettingsKeys,allowed:()->Boolean) {
-        val styleKey=scope.key(SettingsProvider.KEY_BLUR_STYLE)
-        val title=row()
-        title.addView(text(getString(R.string.ui_blur_style),16f,bold=true),LinearLayout.LayoutParams(0,-2,1f))
-        add(parent,title,bottom=4)
-        val group=com.google.android.material.button.MaterialButtonToggleGroup(this).apply {
-            isSingleSelection=true;isSelectionRequired=true
-        }
-        val buttons=listOf("Frosted","Liquid Glass").map { label ->
-            com.google.android.material.button.MaterialButton(this,null,M.attr.materialButtonOutlinedStyle).apply {
-                id=View.generateViewId();text=label;isAllCaps=false;textSize=14f;cornerRadius=dp(12)
-                insetTop=0;insetBottom=0;minWidth=0;minimumWidth=0
-                group.addView(this,LinearLayout.LayoutParams(0,dp(48),1f))
+    private fun styleCards(parent:LinearLayout,key:String,scoped:Boolean,allowed:()->Boolean) {
+        val labels=listOf(R.string.ui_mode_frosted,R.string.ui_mode_liquid,R.string.ui_mode_color)
+        val hints=listOf(R.string.ui_mode_frosted_hint,R.string.ui_mode_liquid_hint,R.string.ui_mode_color_hint)
+        val choices=(if(scoped)0..1 else 0..2).map {index ->
+            ModeChoiceCard(this,getString(labels[index]),getString(hints[index])).apply {
+                chosen=number(key).coerceIn(0,if(scoped)1 else 2)==index
+                setOnClickListener {
+                    haptic(it)
+                    if(!scoped)prefs.edit().putBoolean(SettingsProvider.KEY_BLUR_ENABLED,true).apply()
+                    save(key,index)
+                    refreshControls()
+                }
+                gate(this){allowed() && (index!=1 || android.os.Build.VERSION.SDK_INT>=33)}
+                add(parent,this,bottom=10)
             }
         }
-        var refreshing=false
-        fun refresh(){refreshing=true;group.check(buttons[number(styleKey).coerceIn(0,1)].id);refreshing=false}
-        refresh()
-        group.addOnButtonCheckedListener { _,id,checked ->
-            if(checked && !refreshing) {
-                haptic(group);save(styleKey,buttons.indexOfFirst {it.id==id})
-            }
-        }
-        gate(group,allowed)
-        gate(buttons[1]) {allowed() && android.os.Build.VERSION.SDK_INT>=33}
-        refreshers.add {refresh()}
-        add(parent,group,bottom=8)
-        val parameters=column()
-        add(parameters,slider(getString(R.string.ui_liquid_width),scope.key(SettingsProvider.KEY_LIQUID_WIDTH),0,100,"%"))
-        add(parameters,slider(getString(R.string.ui_liquid_distortion),scope.key(SettingsProvider.KEY_LIQUID_DISTORTION),0,300,"%"))
-        parameters.visibility=if(number(styleKey)==1)View.VISIBLE else View.GONE
-        refreshers.add {parameters.visibility=if(number(styleKey)==1)View.VISIBLE else View.GONE}
-        group.addOnButtonCheckedListener {_,_,checked -> if(checked && !refreshing)reveal(parameters,number(styleKey)==1)}
-        gate(parameters) {allowed() && number(styleKey)==1}
-        add(parent,parameters,bottom=8)
+        refreshers.add {choices.forEachIndexed {index,choice -> choice.chosen=number(key).coerceIn(0,if(scoped)1 else 2)==index}}
     }
-
+    private fun lensControls(parent:LinearLayout,key:(String)->String,allowed:()->Boolean) {
+        val controls=column()
+        collapsibleGroup(controls,getString(R.string.ui_refraction_settings),key(SettingsProvider.KEY_LIQUID_WIDTH)) {details ->
+            add(details,slider(getString(R.string.ui_liquid_width),key(SettingsProvider.KEY_LIQUID_WIDTH),0,100,"%"))
+            add(details,slider(getString(R.string.ui_liquid_distortion),key(SettingsProvider.KEY_LIQUID_DISTORTION),0,300,"%"))
+        }
+        fun selected()=number(key(SettingsProvider.KEY_BLUR_STYLE))==SettingsProvider.BLUR_STYLE_LIQUID
+        controls.visibility=if(selected())View.VISIBLE else View.GONE
+        refreshers.add {controls.visibility=if(selected())View.VISIBLE else View.GONE}
+        gate(controls){allowed() && selected()};add(parent,controls,bottom=8)
+    }
+    private fun scopedStyleSelector(parent:LinearLayout,scope:ScopedSettingsKeys,allowed:()->Boolean) {
+        styleCards(parent,scope.key(SettingsProvider.KEY_BLUR_STYLE),true,allowed)
+        lensControls(parent,scope::key,allowed)
+    }
     private fun blurStyleSelector(parent:LinearLayout) {
-        val title=row()
-        title.addView(text(getString(R.string.ui_blur_style),16f,bold=true),LinearLayout.LayoutParams(0,-2,1f))
-        add(parent,title,bottom=4)
-        val group=com.google.android.material.button.MaterialButtonToggleGroup(this).apply {
-            isSingleSelection=true;isSelectionRequired=true
-        }
-        val buttons=listOf("Frosted","Liquid Glass").map { label ->
-            com.google.android.material.button.MaterialButton(this,null,M.attr.materialButtonOutlinedStyle).apply {
-                id=View.generateViewId();text=label;isAllCaps=false;textSize=14f;cornerRadius=dp(12)
-                insetTop=0;insetBottom=0;minWidth=0;minimumWidth=0
-                group.addView(this,LinearLayout.LayoutParams(0,dp(48),1f))
-            }
-        }
-        var refreshing=false
-        fun refresh(){refreshing=true;group.check(buttons[number(SettingsProvider.KEY_BLUR_STYLE).coerceIn(0,1)].id);refreshing=false}
-        refresh()
-        group.addOnButtonCheckedListener { _,id,checked ->
-            if(checked && !refreshing) {
-                haptic(group);save(SettingsProvider.KEY_BLUR_STYLE,buttons.indexOfFirst {it.id==id})
-            }
-        }
-        gate(group,::blur)
-        gate(buttons[1]) {blur() && android.os.Build.VERSION.SDK_INT>=33}
-        refreshers.add {refresh()}
-        add(parent,group,bottom=8)
-        val parameters=column()
-        add(parameters,slider(getString(R.string.ui_liquid_width),SettingsProvider.KEY_LIQUID_WIDTH,0,100,"%"))
-        add(parameters,slider(getString(R.string.ui_liquid_distortion),SettingsProvider.KEY_LIQUID_DISTORTION,0,300,"%"))
-        parameters.visibility=if(number(SettingsProvider.KEY_BLUR_STYLE)==1)View.VISIBLE else View.GONE
-        refreshers.add {parameters.visibility=if(number(SettingsProvider.KEY_BLUR_STYLE)==1)View.VISIBLE else View.GONE}
-        group.addOnButtonCheckedListener {_,_,checked -> if(checked && !refreshing)reveal(parameters,number(SettingsProvider.KEY_BLUR_STYLE)==1)}
-        gate(parameters) {blur() && number(SettingsProvider.KEY_BLUR_STYLE)==1}
-        add(parent,parameters,bottom=8)
+        styleCards(parent,SettingsProvider.KEY_BLUR_STYLE,false,::master)
+        lensControls(parent,{it},::blur)
     }
 
     private fun coloringSection(parent: LinearLayout) {
@@ -1087,38 +1145,29 @@ class MainActivity : AppCompatActivity() {
         add(parent,section,bottom=12)
     }
 
-    private fun section(parent: LinearLayout, title: String, subtitle: String, key: String,
-        expanded: Boolean, onExpand: (Boolean) -> Unit, headerAllowed: () -> Boolean,
-        contentAllowed: () -> Boolean, content: (LinearLayout) -> Unit) {
-        val group = column()
-        val header = row().apply {
-            if (md3) { setPadding(dp(16),dp(12),dp(8),dp(12)); minimumHeight = dp(72) }
-            else { setPadding(dp(20),dp(16),dp(16),dp(16)); minimumHeight = dp(80) }
-        }
-        val titleArea = row()
-        val labels = column()
-        add(labels, if (md3) text(title, 22f) else text(title, 19f, bold = true))
-        titleArea.addView(labels, LinearLayout.LayoutParams(0,-2,1f))
-        titleArea.contentDescription = "$title, ${if(expanded) getString(R.string.ui_collapse) else getString(R.string.ui_expand)}"
-        header.addView(titleArea, LinearLayout.LayoutParams(0,-2,1f))
-        val toggle = toggle(title, key)
-        add(group, header)
-        val children = column().apply { setPadding(dp(8),0,dp(8),dp(12)); visibility = if (expanded) View.VISIBLE else View.GONE }
-        add(group, children)
-        val sectionCard = card(group)
-        gate(sectionCard, headerAllowed)
-        gate(children, contentAllowed)
-        if(subtitle.isNotBlank())add(children,text(subtitle,12f,true).apply { setPadding(dp(20),dp(4),dp(20),dp(8)) })
-        content(children)
-        val chevron = expandButton(expanded, title) { open ->
-            onExpand(open)
-            reveal(children,open)
-            titleArea.contentDescription = "$title, ${if(open) getString(R.string.ui_collapse) else getString(R.string.ui_expand)}"
-        }
-        header.addView(actions(if (md3) listOf(reset(key),chevron,toggle) else listOf(reset(key),toggle,chevron)))
-        titleArea.setOnClickListener { chevron.performClick() }
-        titleArea.isFocusable = true
-        add(parent, sectionCard, bottom = 12)
+    private fun section(parent:LinearLayout,title:String,subtitle:String,key:String,
+        expanded:Boolean,onExpand:(Boolean)->Unit,headerAllowed:()->Boolean,
+        contentAllowed:()->Boolean,content:(LinearLayout)->Unit) {
+        val group=column()
+        val header=row().apply {setPadding(dp(20),dp(16),dp(16),dp(16));minimumHeight=dp(64)}
+        val labels=column()
+        add(labels,text(title,19f,bold=true))
+        if(subtitle.isNotBlank())add(labels,text(subtitle,14f,true),top=6)
+        header.addView(labels,LinearLayout.LayoutParams(0,-2,1f))
+        val control=toggle(title,key);header.addView(control)
+        header.setOnClickListener {control.performClick()}
+        header.setOnLongClickListener {confirmReset(key);true}
+        add(group,header)
+        val children=column().apply {setPadding(dp(8),0,dp(8),dp(12))}
+        content(children);gate(children,contentAllowed);add(group,children)
+        val container=card(group);gate(container,headerAllowed);add(parent,container,bottom=16)
+    }
+
+    private fun confirmReset(key:String) {
+        MaterialAlertDialogBuilder(this).setTitle(getString(R.string.ui_reset_defaults))
+            .setMessage(getString(R.string.ui_reset_confirm))
+            .setNegativeButton(getString(R.string.ui_cancel),null)
+            .setPositiveButton(getString(R.string.ui_reset)){_,_->resetToDefaults(resetKeys(key))}.show()
     }
 
     private fun makeSwitch(label:String,key:String):SquareAction = SquareAction(this,
@@ -1299,11 +1348,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun slider(label: String, key: String, min: Int, max: Int, suffix: String, hint: String? = null): LinearLayout {
+    private fun slider(label: String, key: String, min: Int, max: Int, suffix: String, hint: String? = null,onPreview:((Int)->Unit)?=null): LinearLayout {
         val group = column().apply { setPadding(dp(20),dp(18),dp(20),dp(10)) }
         val labels = row()
         labels.addView(text(label,14f), LinearLayout.LayoutParams(0,-2,1f))
-        val value = text("${number(key)}$suffix",14f,bold = true).apply { setTextColor(primary); setPadding(dp(12),0,0,0) }
+        fun formatted(n:Int)="${if(min<0 && n>0)"+" else ""}$n$suffix"
+        val value = text(formatted(number(key)),14f,bold = true).apply { setTextColor(primary); setPadding(dp(12),0,0,0) }
         labels.addView(value)
         add(group, labels)
         if(hint != null) add(group, text(hint,12f,true),6)
@@ -1311,24 +1361,24 @@ class MainActivity : AppCompatActivity() {
             valueFrom = min.toFloat(); valueTo = max.toFloat(); stepSize = 1f
             this.value = number(key).coerceIn(min,max).toFloat()
             contentDescription = label
-            setLabelFormatter { "${it.roundToInt()}$suffix" }
+            setLabelFormatter { formatted(it.roundToInt()) }
         }
         var lastTick = 0L
         var tracking = false
         refreshers.add {
             if(!tracking) {
                 control.value=number(key).coerceIn(min,max).toFloat()
-                value.text="${number(key)}$suffix"
+                value.text=formatted(number(key))
             }
         }
         control.addOnChangeListener { view, changed, user ->
-            val n = changed.roundToInt(); value.text = "$n$suffix"
+            val n = changed.roundToInt(); value.text = formatted(n)
             if(user) {
                 val now = SystemClock.uptimeMillis()
                 if (now-lastTick >= 35L || n == min || n == max) { haptic(view,true); lastTick=now }
                 // Keep UI movement local. Notify the launcher once when released,
                 // avoiding expensive model/blur resets for every finger pixel.
-                prefs.edit().putInt(key,n).apply()
+                prefs.edit().putInt(key,n).apply();onPreview?.invoke(n)
                 if (!tracking) { contentResolver.notifyChange(SettingsProvider.CONTENT_URI,null); updateGates() }
             }
         }
@@ -1521,6 +1571,10 @@ class MainActivity : AppCompatActivity() {
         divider(developerOptions)
         add(developerOptions,switchRow(getString(R.string.ui_haze_test),SettingsProvider.KEY_HAZE_ENABLED))
         add(developerOptions,text(getString(R.string.ui_haze_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
+        add(developerOptions,switchRow(getString(R.string.ui_smooth_swipe_lead),SettingsProvider.KEY_SMOOTH_SWIPE_LEAD))
+        add(developerOptions,text(getString(R.string.ui_smooth_swipe_lead_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
+        add(developerOptions,switchRow(getString(R.string.ui_haze_bloom),SettingsProvider.KEY_HAZE_BLOOM))
+        add(developerOptions,text(getString(R.string.ui_haze_bloom_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
         divider(developerOptions)
         add(developerOptions,switchRow(getString(R.string.ui_disable_edge_optimization),SettingsProvider.KEY_DISABLE_EDGE_OPTIMIZATION))
         add(developerOptions,text(getString(R.string.ui_disable_edge_optimization_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
@@ -1536,6 +1590,8 @@ class MainActivity : AppCompatActivity() {
         add(developerOptions,text(getString(R.string.ui_compact_dock_effects_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
         add(developerOptions,switchRow(getString(R.string.ui_reuse_static_wallpaper),SettingsProvider.KEY_REUSE_STATIC_WALLPAPER))
         add(developerOptions,text(getString(R.string.ui_reuse_static_wallpaper_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
+        add(developerOptions,switchRow(getString(R.string.ui_static_animation_blur),SettingsProvider.KEY_STATIC_ANIMATION_BLUR))
+        add(developerOptions,text(getString(R.string.ui_static_animation_blur_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
         add(developerOptions,switchRow(getString(R.string.ui_scene_drag_backdrop),SettingsProvider.KEY_SCENE_DRAG_BACKDROP))
         add(developerOptions,text(getString(R.string.ui_scene_drag_backdrop_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
         divider(developerOptions)

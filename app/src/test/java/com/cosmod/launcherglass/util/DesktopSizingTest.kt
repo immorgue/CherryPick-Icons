@@ -23,4 +23,12 @@ class DesktopSizingTest {
         assertEquals(120,DesktopSizing.downwardShift(80,200,100))
         assertEquals(0,DesktopSizing.downwardShift(200,80,100))
     }
+    @Test fun nativeCellAxesGrowIndependentlyAroundTheSameCenter() {
+        assertEquals(330,DesktopSizing.cellPixels(300,110))
+        assertEquals(300,DesktopSizing.cellPixels(300,100))
+        assertEquals(-60,DesktopSizing.cellOriginShift(300,330,4))
+        assertEquals(90,DesktopSizing.cellOriginShift(300,270,6))
+        // Repeated layout uses the original metrics, never the preceding scaled cell.
+        assertEquals(330,DesktopSizing.cellPixels(300,110))
+    }
 }

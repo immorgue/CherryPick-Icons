@@ -10,12 +10,12 @@ internal object WallpaperProfiles {
     private const val FILE="wallpaper_profiles_v1"
     private const val ACTIVE="active"
     private val excluded=setOf(SettingsProvider.KEY_ENABLED,SettingsProvider.KEY_DEVELOPER_MODE,
-        SettingsProvider.KEY_SCENE_DRAG_BACKDROP,
+        SettingsProvider.KEY_SCENE_DRAG_BACKDROP,SettingsProvider.KEY_STATIC_ANIMATION_BLUR,
         SettingsProvider.KEY_GPU_EFFECTS,SettingsProvider.KEY_EXPERIMENTAL_LIQUID,
         SettingsProvider.KEY_DOCK_EVENT_DRIVEN,SettingsProvider.KEY_COMPACT_DOCK_EFFECTS,
         SettingsProvider.KEY_REUSE_STATIC_WALLPAPER,SettingsProvider.KEY_LIMIT_CLOSING_BLUR,
         SettingsProvider.KEY_DISABLE_EDGE_OPTIMIZATION,SettingsProvider.KEY_OPTIMIZE_MINI_ICONS,
-        SettingsProvider.KEY_HAZE_ENABLED,SettingsProvider.KEY_COLOR_DEPTH_ENABLED,
+        SettingsProvider.KEY_HAZE_ENABLED,SettingsProvider.KEY_HAZE_BLOOM,SettingsProvider.KEY_SMOOTH_SWIPE_LEAD,SettingsProvider.KEY_COLOR_DEPTH_ENABLED,
         SettingsProvider.KEY_COLOR_DEPTH_BITS,SettingsProvider.KEY_COLOR_DEPTH_STAGE)
     private val keys get()=SettingsDefaults.portable().keys-excluded-
         com.cosmod.launcherglass.util.DesktopSizing.ranges.keys

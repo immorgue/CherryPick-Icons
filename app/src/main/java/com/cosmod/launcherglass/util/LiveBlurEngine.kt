@@ -70,7 +70,7 @@ object LiveBlurEngine {
     }
 
     fun onWallpaperFrameReady() = onMainThread {
-        if (!PrefsHelper.enabled || !PrefsHelper.blurEnabled || !isResumed || isAppLaunchInProgress) return@onMainThread
+        if (!PrefsHelper.enabled || !PrefsHelper.backdropEnabled || !isResumed || isAppLaunchInProgress) return@onMainThread
         if (PrefsHelper.blurMode == SettingsProvider.BLUR_MODE_LIVE) {
             IconGlassHook.requestLiveFrame()
             if (!isTickerRunning.get()) {
@@ -118,7 +118,7 @@ object LiveBlurEngine {
         }
     }
 
-    private fun hasLiveBlurWork(): Boolean = PrefsHelper.blurEnabled &&
+    private fun hasLiveBlurWork(): Boolean = PrefsHelper.backdropEnabled &&
         (!isWorkspaceBlurSuspended || PrefsHelper.drawerBlurEnabled)
 
     private fun transitionVisible()=com.cosmod.launcherglass.xposed.NativeSurfaceLive.active
@@ -143,12 +143,14 @@ object LiveBlurEngine {
     }
 
     fun onAppLaunchStarted() = onMainThread {
+        com.cosmod.launcherglass.xposed.AnimationBlurWindow.begin(0)
         isAppLaunchInProgress = true
         com.cosmod.launcherglass.xposed.NativeSurfaceLive.onFlightStarted(opening=true)
         stopFrameLoop()
     }
 
     fun onHomeReturnStarted() = onMainThread {
+        com.cosmod.launcherglass.xposed.AnimationBlurWindow.begin(1)
         val wasSuspended = isAppLaunchInProgress || !isResumed
         isAppLaunchInProgress = false
         isResumed = true
@@ -254,7 +256,7 @@ object LiveBlurEngine {
     }
 
     fun onPrefsChanged() = onMainThread {
-        if(!PrefsHelper.enabled){
+        if(!PrefsHelper.enabled || !PrefsHelper.backdropEnabled){
             LauncherWallpaperCapture.stopMotionWatch()
             mainHandler.removeCallbacks(tickerRunnable);isTickerRunning.set(false)
             isMoving=false;isWallpaperMoving=false;activePointerCount=0
@@ -340,6 +342,7 @@ object LiveBlurEngine {
     }
 
     fun onActivityResumed() = onMainThread {
+        com.cosmod.launcherglass.xposed.AnimationBlurWindow.begin(1)
         isAppLaunchInProgress = false
         isResumed = true
         com.cosmod.launcherglass.xposed.NativeSurfaceLive.onFlightStarted(opening=false)

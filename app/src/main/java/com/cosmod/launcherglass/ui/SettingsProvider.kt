@@ -78,6 +78,7 @@ class SettingsProvider : ContentProvider() {
                 bundle.putBoolean(KEY_COMPACT_DOCK_EFFECTS,prefs.getBoolean(KEY_COMPACT_DOCK_EFFECTS,false))
                 bundle.putBoolean(KEY_REUSE_STATIC_WALLPAPER,prefs.getBoolean(KEY_REUSE_STATIC_WALLPAPER,false))
                 bundle.putBoolean(KEY_SCENE_DRAG_BACKDROP,prefs.getBoolean(KEY_SCENE_DRAG_BACKDROP,false))
+                bundle.putBoolean(KEY_STATIC_ANIMATION_BLUR,prefs.getBoolean(KEY_STATIC_ANIMATION_BLUR,false))
                 for(scope in ScopedSettingsKeys.all){
                     bundle.putBoolean(scope.own,prefs.getBoolean(scope.own,false))
                     for(base in scope.integers){
@@ -100,6 +101,8 @@ class SettingsProvider : ContentProvider() {
                 bundle.putInt(KEY_COLOR_DEPTH_BITS,prefs.getInt(KEY_COLOR_DEPTH_BITS,8))
                 bundle.putInt(KEY_COLOR_DEPTH_STAGE,prefs.getInt(KEY_COLOR_DEPTH_STAGE,3).coerceIn(0,3))
                 bundle.putBoolean(KEY_HAZE_ENABLED,prefs.getBoolean(KEY_HAZE_ENABLED,false))
+                bundle.putBoolean(KEY_HAZE_BLOOM,prefs.getBoolean(KEY_HAZE_BLOOM,false))
+                bundle.putBoolean(KEY_SMOOTH_SWIPE_LEAD,prefs.getBoolean(KEY_SMOOTH_SWIPE_LEAD,false))
                 bundle.putBoolean(KEY_DISABLE_EDGE_OPTIMIZATION,prefs.getBoolean(KEY_DISABLE_EDGE_OPTIMIZATION,SettingsDefaults.boolean(KEY_DISABLE_EDGE_OPTIMIZATION)))
                 bundle.putBoolean(KEY_OPTIMIZE_MINI_ICONS,prefs.getBoolean(KEY_OPTIMIZE_MINI_ICONS,SettingsDefaults.boolean(KEY_OPTIMIZE_MINI_ICONS)))
                 bundle.putBoolean(KEY_DOCK_ENABLED,prefs.getBoolean(KEY_DOCK_ENABLED,SettingsDefaults.boolean(KEY_DOCK_ENABLED)))
@@ -165,6 +168,7 @@ class SettingsProvider : ContentProvider() {
                     if(b.containsKey(KEY_COMPACT_DOCK_EFFECTS))editor.putBoolean(KEY_COMPACT_DOCK_EFFECTS,b.getBoolean(KEY_COMPACT_DOCK_EFFECTS))
                     if(b.containsKey(KEY_REUSE_STATIC_WALLPAPER))editor.putBoolean(KEY_REUSE_STATIC_WALLPAPER,b.getBoolean(KEY_REUSE_STATIC_WALLPAPER))
                     if(b.containsKey(KEY_SCENE_DRAG_BACKDROP))editor.putBoolean(KEY_SCENE_DRAG_BACKDROP,b.getBoolean(KEY_SCENE_DRAG_BACKDROP))
+                    if(b.containsKey(KEY_STATIC_ANIMATION_BLUR))editor.putBoolean(KEY_STATIC_ANIMATION_BLUR,b.getBoolean(KEY_STATIC_ANIMATION_BLUR))
                     for(scope in ScopedSettingsKeys.all){
                         if(b.containsKey(scope.own))editor.putBoolean(scope.own,b.getBoolean(scope.own))
                         for(base in scope.integers){val key=scope.key(base);if(b.containsKey(key))editor.putInt(key,b.getInt(key))}
@@ -181,6 +185,8 @@ class SettingsProvider : ContentProvider() {
                     if(b.containsKey(KEY_COLOR_DEPTH_BITS))editor.putInt(KEY_COLOR_DEPTH_BITS,b.getInt(KEY_COLOR_DEPTH_BITS).coerceIn(8,24))
                     if(b.containsKey(KEY_COLOR_DEPTH_STAGE))editor.putInt(KEY_COLOR_DEPTH_STAGE,b.getInt(KEY_COLOR_DEPTH_STAGE).coerceIn(0,3))
                     if(b.containsKey(KEY_HAZE_ENABLED))editor.putBoolean(KEY_HAZE_ENABLED,b.getBoolean(KEY_HAZE_ENABLED))
+                    if(b.containsKey(KEY_HAZE_BLOOM))editor.putBoolean(KEY_HAZE_BLOOM,b.getBoolean(KEY_HAZE_BLOOM))
+                    if(b.containsKey(KEY_SMOOTH_SWIPE_LEAD))editor.putBoolean(KEY_SMOOTH_SWIPE_LEAD,b.getBoolean(KEY_SMOOTH_SWIPE_LEAD))
                     if(b.containsKey(KEY_DISABLE_EDGE_OPTIMIZATION))editor.putBoolean(KEY_DISABLE_EDGE_OPTIMIZATION,b.getBoolean(KEY_DISABLE_EDGE_OPTIMIZATION))
                     if(b.containsKey(KEY_OPTIMIZE_MINI_ICONS))editor.putBoolean(KEY_OPTIMIZE_MINI_ICONS,b.getBoolean(KEY_OPTIMIZE_MINI_ICONS))
                     if(b.containsKey(KEY_DOCK_ENABLED))editor.putBoolean(KEY_DOCK_ENABLED,b.getBoolean(KEY_DOCK_ENABLED))
@@ -214,7 +220,7 @@ class SettingsProvider : ContentProvider() {
                     if (b.containsKey(KEY_DRAWER_BLUR_ENABLED)) editor.putBoolean(KEY_DRAWER_BLUR_ENABLED, b.getBoolean(KEY_DRAWER_BLUR_ENABLED))
                     if (b.containsKey(KEY_BLUR_RADIUS)) editor.putInt(KEY_BLUR_RADIUS, b.getInt(KEY_BLUR_RADIUS))
                     if (b.containsKey(KEY_BLUR_MODE)) editor.putInt(KEY_BLUR_MODE, b.getInt(KEY_BLUR_MODE))
-                    if (b.containsKey(KEY_BLUR_STYLE)) editor.putInt(KEY_BLUR_STYLE, b.getInt(KEY_BLUR_STYLE).coerceIn(0,1))
+                    if (b.containsKey(KEY_BLUR_STYLE)) editor.putInt(KEY_BLUR_STYLE, b.getInt(KEY_BLUR_STYLE).coerceIn(0,2))
                     for(key in listOf(KEY_BLUR_QUALITY,KEY_LIQUID_WIDTH))if(b.containsKey(key))editor.putInt(key,b.getInt(key).coerceIn(0,100))
                     if (b.containsKey(KEY_LIVE_FPS)) editor.putInt(KEY_LIVE_FPS, b.getInt(KEY_LIVE_FPS))
                     if (b.containsKey(KEY_IDLE_PAUSE)) editor.putBoolean(KEY_IDLE_PAUSE, b.getBoolean(KEY_IDLE_PAUSE))
@@ -264,6 +270,7 @@ class SettingsProvider : ContentProvider() {
         const val METHOD_CONSUME_DESKTOP = "consumeDesktopDesigner"
         const val METHOD_SET = "set"
         const val METHOD_WALLPAPER_CHANGED="wallpaperChanged"
+        const val KEY_STATIC_ANIMATION_BLUR="experimental_static_animation_blur"
         const val KEY_SCENE_DRAG_BACKDROP="experimental_scene_drag_backdrop"
 
         const val KEY_LIGHT_HUE = "color_light_hue"
@@ -300,6 +307,8 @@ class SettingsProvider : ContentProvider() {
         const val KEY_COLOR_DEPTH_BITS = "blur_color_depth_bits"
         const val KEY_COLOR_DEPTH_STAGE = "blur_color_depth_stage"
         const val KEY_HAZE_ENABLED = "glass_haze_enabled"
+        const val KEY_HAZE_BLOOM = "experimental_haze_bloom"
+        const val KEY_SMOOTH_SWIPE_LEAD = "experimental_smooth_swipe_lead"
         const val KEY_DISABLE_EDGE_OPTIMIZATION = "disable_edge_optimization"
         const val KEY_OPTIMIZE_MINI_ICONS = "optimize_folder_mini_icons"
         /** Glass dock behind the hotseat icons. Paddings and radius: % of the icon size. */
@@ -336,6 +345,7 @@ class SettingsProvider : ContentProvider() {
         const val KEY_LIQUID_DISTORTION = "liquid_distortion"
         const val BLUR_STYLE_FROSTED = 0
         const val BLUR_STYLE_LIQUID = 1
+        const val BLUR_STYLE_COLOR = 2
         const val KEY_LIVE_FPS = "live_blur_fps"
         const val KEY_IDLE_PAUSE = "idle_pause"
         const val KEY_GLYPH_STROKE_WIDTH = "glyph_stroke_width"

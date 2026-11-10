@@ -8,7 +8,7 @@ import com.cosmod.launcherglass.util.LiquidOptics
 
 /** Software counterpart of LiquidGlassShader: the same lens, native mask and linear sampling. */
 internal object CpuLiquidGlass {
-    private data class Key(val width:Int,val height:Int,val rounding:Float,val edge:Int,val strength:Int,val extend:Boolean)
+    private data class Key(val width:Int,val height:Int,val rounding:Float,val edge:Int,val strength:Int,val extend:Boolean,val exactRadius:Boolean)
     private data class Coordinates(val x:FloatArray,val y:FloatArray)
     private data class Pixels(val generation:Int,val pixels:IntArray)
     private val images=WeakHashMap<Bitmap,Pixels>()
@@ -26,13 +26,31 @@ internal object CpuLiquidGlass {
         val padY=if(key.extend)(h-edge)*.5f else 0f
         val halfX=if(key.extend)edge*.5f else w*.5f
         val halfY=if(key.extend)edge*.5f else h*.5f
-        val radius=edge*max(key.rounding,.20f)
+        val radius=edge*max(key.rounding,if(key.exactRadius)0f else .20f).coerceIn(0f,.5f)
         val cx=halfX-radius;val cy=halfY-radius
         val edgeStart=(1f-(.015f+key.edge*.0014f)*4f).coerceIn(.25f,.96f)
         val result=Coordinates(FloatArray(w*h),FloatArray(w*h))
         val eta=1f/1.45f
         for(y in 0 until h)for(x in 0 until w){
             val px=x+.5f;val py=y+.5f
+            if(key.exactRadius){
+                val cx=px-w*.5f;val cy=py-h*.5f
+                val r=edge*key.rounding.coerceIn(0f,.5f)
+                val qx=abs(cx)-w*.5f+r;val qy=abs(cy)-h*.5f+r
+                val ox=max(qx,0f);val oy=max(qy,0f);val len=sqrt(ox*ox+oy*oy)
+                val distance=len+min(max(qx,qy),0f)-r
+                val dx=if(len>.001f)sign(cx)*ox/len else if(qx>qy)sign(cx)else 0f
+                val dy=if(len>.001f)sign(cy)*oy/len else if(qy>=qx)sign(cy)else 0f
+                val band=max(edge*(.015f+key.edge*.0014f)*2f,.5f)
+                val shoulder=1f-smooth(0f,band,max(-distance,0f))
+                val corner=smooth(0f,.3f,min(ox,oy)/max(r,1f))*smooth(.2f,.5f,key.rounding)
+                val slope=.95f*(1f-.45f*corner)*shoulder/sqrt(max(.15f,1f-.85f*shoulder*shoulder))
+                val norm=sqrt(1f+slope*slope);val nx=dx*slope/norm;val ny=dy*slope/norm;val nz=1f/norm
+                val dot=-nz;val factor=eta*dot+sqrt(max(1f-eta*eta*(1f-dot*dot),0f))
+                val amount=edge*.22f*(key.strength/50f)/max(eta+factor*nz,.25f)
+                val i=y*w+x;result.x[i]=(px-factor*nx*amount)/w;result.y[i]=(py-factor*ny*amount)/h
+                continue
+            }
             val centerX=sign(px-w*.5f)*max(abs(px-w*.5f)-padX,0f)
             val centerY=sign(py-h*.5f)*max(abs(py-h*.5f)-padY,0f)
             val distance=sqrt(centerX*centerX+centerY*centerY)
@@ -67,7 +85,7 @@ internal object CpuLiquidGlass {
             if(readable!==wallpaper)readable.recycle()
             images[wallpaper]=Pixels(wallpaper.generationId,data);data
         }
-        val map=coordinates(Key(width,height,rounding,style.width,style.distortion,style.folder || style.extendedLens))
+        val map=coordinates(Key(width,height,rounding,style.width,style.distortion,style.folder || style.extendedLens,style.exactLensRadius))
         val alpha=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888)
         Canvas(alpha).drawBitmap(mask,null,Rect(0,0,width,height),Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
         val output=IntArray(width*height);alpha.getPixels(output,0,width,0,0,width,height)
