@@ -14,7 +14,7 @@ internal object GlassGeometry {
         var depth:FloatArray?=null
     }
     private class NativeMask(val generation:Int,val geometry:Geometry)
-    private data class RimKey(val shape:ShapeKey,val opacity:Int)
+    private data class RimKey(val shape:ShapeKey,val opacity:Int,val edgeOnly:Boolean)
     private val nativeMasks=WeakHashMap<Bitmap,NativeMask>()
     // Sized for all plate, cluster and panel masks in use plus a history:
     // a 2 MiB limit held two large masks, so alternating shapes recomputed
@@ -95,9 +95,9 @@ internal object GlassGeometry {
         return depth
     }
     @Synchronized fun rounding(mask:Bitmap)=geometry(mask).rounding
-    @Synchronized fun rim(mask:Bitmap):Bitmap {
+    @Synchronized fun rim(mask:Bitmap,edgeOnly:Boolean=false):Bitmap {
         val shape=geometry(mask)
-        val key=RimKey(shape.key,if(PrefsHelper.iconStroke)PrefsHelper.strokeOpacity.coerceIn(0,100)else 0)
+        val key=RimKey(shape.key,if(PrefsHelper.iconStroke)PrefsHelper.strokeOpacity.coerceIn(0,100)else 0,edgeOnly)
         rims.get(key)?.let {return it}
         val width=mask.width;val height=mask.height
         val distance=depth(shape)
@@ -107,10 +107,11 @@ internal object GlassGeometry {
         val strength=key.opacity*.016f
         // Tabulate both exponential falloffs at 1/8 px; evaluating exp() twice
         // for every pixel dominated rim creation for large plates.
-        val ringScale=max(.7f,edge*.010f);val bevelScale=max(1f,edge*.085f)
+        val ringScale=if(edgeOnly)1.2f else max(.7f,edge*.010f)
+        val bevelScale=max(1f,edge*.085f)
         val steps=(edge*4f+16f).toInt()
         val ringTable=FloatArray(steps) {exp(-(it/8f)/ringScale)}
-        val bevelTable=FloatArray(steps) {exp(-(it/8f)/bevelScale)}
+        val bevelTable=if(edgeOnly)null else FloatArray(steps) {exp(-(it/8f)/bevelScale)}
         for(y in 0 until height)for(x in 0 until width){
             val i=y*width+x
             val coverage=(shape.alpha[i].toInt() and 255)/255f
@@ -119,7 +120,11 @@ internal object GlassGeometry {
             val d=max(distance[i]-.5f,0f)
             val index=(d*8f).toInt()
             val ring=if(index<steps)ringTable[index]else exp(-d/ringScale)
-            val bevel=if(index<steps)bevelTable[index]else exp(-d/bevelScale)
+            val bevel=when {
+                bevelTable==null -> 0f
+                index<steps -> bevelTable[index]
+                else -> exp(-d/bevelScale)
+            }
             // Fade diagonally into the dark lower-right reflection.
             val diagonal=(.5f+.5f*(cx/(width*.5f)*.65f+cy/(height*.5f)*.76f)/1.41f)
             val fade=((diagonal-.12f)/.76f).coerceIn(0f,1f)

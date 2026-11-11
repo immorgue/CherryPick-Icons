@@ -21,11 +21,39 @@ internal object FolderMaterialHook {
     private val main=Handler(Looper.getMainLooper())
     private val converted=WeakHashMap<Any,Boolean>()
     private var geometryRevision=0L
-    fun invalidateGeometry(){geometryRevision++}
+    internal class LongContour(private val path:Path, private val bounds:Rect, val radius:Float){
+        fun fit(target:Rect, rotate:Boolean):Path {
+            val matrix=Matrix().apply {
+                setTranslate(-bounds.exactCenterX(),-bounds.exactCenterY())
+                if(rotate)postRotate(90f)
+                val width=if(rotate)bounds.height()else bounds.width()
+                val height=if(rotate)bounds.width()else bounds.height()
+                postScale(target.width().toFloat()/width,target.height().toFloat()/height)
+                postTranslate(target.exactCenterX(),target.exactCenterY())
+            }
+            return Path().also {path.transform(matrix,it)}
+        }
+        fun radiusAt(target:Rect)=radius*minOf(target.width(),target.height())/minOf(bounds.width(),bounds.height())
+    }
+    @Volatile private var horizontal:LongContour?=null
+    @Volatile private var vertical:LongContour?=null
+    fun invalidateGeometry(){geometryRevision++;horizontal=null;vertical=null}
+    fun longContour(sx:Int,sy:Int):LongContour? {
+        if(sx==2 && sy==1)return horizontal
+        if(sx==1 && sy==2)return vertical
+        return null
+    }
+    private fun rememberLongContour(view:View?,sx:Int,sy:Int,bounds:Rect,radius:Float,path:Path){
+        if(view==null || shortcut(view) || sx+sy!=3 || minOf(sx,sy)!=1 ||
+            bounds.isEmpty || longContour(sx,sy)!=null || Looper.myLooper()!=Looper.getMainLooper())return
+        val contour=LongContour(Path(path),Rect(bounds),radius)
+        if(sx==2)horizontal=contour else vertical=contour
+        MultiIconMaterialHook.invalidateContours()
+        GlassLogger.i("FolderMaterial","Shared long-folder contour: ${sx}x$sy, radius=$radius, bounds=$bounds")
+    }
     private fun enabled()=PrefsHelper.enabled && PrefsHelper.blurEnabled && PrefsHelper.folderBlurEnabled
     private fun shortcut(view:View?)=view?.javaClass?.name=="com.android.launcher3.viewcontainer.ShortcutContainer"
     private fun enabled(view:View?)=enabled()
-    private fun style(view:View)=if(shortcut(view))GlassStyle.icons().copy(extendedLens=true)else FolderSettings.style()
     private fun field(owner:Any,name:String):Any?=try {XposedHelpers.getObjectField(owner,name)}catch(_:Throwable){null}
     private class Material(val source:WeakReference<View>,val owner:WeakReference<Any>?,val fallback:Drawable?,val nativePolicy:Drawable?=null):Drawable(){
         private var opacity=255
@@ -38,6 +66,7 @@ internal object FolderMaterialHook {
         private var cachedSpanX=0
         private var cachedSpanY=0
         private var cachedRevision=-1L
+        private var cachedTemplate:LongContour?=null
         private var pathFingerprint:Long?=null
         // Called only from the owner's current onDraw. Scheduling another
         // invalidation here would request a new frame for a value already
@@ -67,12 +96,18 @@ internal object FolderMaterialHook {
             val sx=(try {info?.let {XposedHelpers.callMethod(it,"getSpanX")} as? Int}catch(_:Throwable){null}) ?: span?.getOrNull(0) ?: 1
             val sy=(try {info?.let {XposedHelpers.callMethod(it,"getSpanY")} as? Int}catch(_:Throwable){null}) ?: span?.getOrNull(1) ?: 1
             val path=cachedPath
-            if(cachedBounds!=bounds || cachedRadius!=radius || cachedInfo!==info || cachedSpanX!=sx || cachedSpanY!=sy || cachedRevision!=geometryRevision){
+            val long=if(shortcut(source.get()))MultiIconMaterialHook.sharedContour(bounds,radius,sx,sy)else null
+            if(cachedBounds!=bounds || cachedRadius!=radius || cachedInfo!==info || cachedSpanX!=sx || cachedSpanY!=sy ||
+                cachedRevision!=geometryRevision || cachedTemplate!==long?.template){
             path.reset()
-            NativeFolderPath.policyPath(nativePolicy,bounds,radius)?.let {path.set(it)}
+            (long?.sharedPath() ?: NativeFolderPath.policyPath(nativePolicy,bounds,radius))?.let {
+                path.set(it)
+                if(long==null && drawingHost===view && !localDraw && view is ImageView)
+                    rememberLongContour(source.get(),sx,sy,bounds,radius,it)
+            }
             cachedMask=if(path.isEmpty)NativeFolderPath.drawableMask(fallback,bounds)else null
             pathFingerprint=null
-            if(!path.isEmpty)pathFingerprint=SurfaceMaterial.descriptor("gpuCornerPolicy",nativePolicy?.javaClass?.name,sx,sy)
+            if(!path.isEmpty)pathFingerprint=SurfaceMaterial.descriptor("gpuCornerPolicy",nativePolicy?.javaClass?.name,sx,sy,long?.template)
             @Suppress("UNCHECKED_CAST")
             val clip=field(view,"mSmoothClipPathFunction") as? BiConsumer<Path,RectF>
             if(path.isEmpty && clip!=null)try {
@@ -87,11 +122,12 @@ internal object FolderMaterialHook {
                 pathFingerprint=SurfaceMaterial.descriptor(pathFingerprint,"fill",fallback?.javaClass?.name,sx,sy)
             }
             cachedBounds.set(bounds);cachedRadius=radius;cachedInfo=info;cachedSpanX=sx;cachedSpanY=sy;cachedRevision=geometryRevision
+            cachedTemplate=long?.template
             }
             if(!logged){logged=true;GlassLogger.i("FolderMaterial","Native shape: radius=$radius, path=${!path.isEmpty}, nativePolicy=${nativePolicy!=null}, alphaMask=${cachedMask!=null}, bounds=$bounds, callback=${callback?.javaClass?.simpleName}")}
             @Suppress("DEPRECATION")
             val local=if(localDraw && canvas.isHardwareAccelerated)RectF(bounds).also {canvas.matrix.mapRect(it)}else null
-            if(!SurfaceMaterial.draw(canvas,bounds,view,this,radius,if(cachedMask==null)path.takeUnless {it.isEmpty}else null,alpha=opacity,style=style(source.get() ?: view),nativeShape=if(path.isEmpty)fallback else null,nativeMask=cachedMask,pathFingerprint=pathFingerprint,
+            if(!SurfaceMaterial.draw(canvas,bounds,view,this,long?.materialRadius ?: radius,if(cachedMask==null)path.takeUnless {it.isEmpty}else null,alpha=opacity,style=FolderSettings.style(),nativeShape=if(path.isEmpty)fallback else null,nativeMask=cachedMask,pathFingerprint=pathFingerprint,
                     local=local,fallback=fallback)){
                 val saved=canvas.save()
                 val previous=fallback?.bounds?.let(::Rect)
@@ -229,12 +265,13 @@ internal object FolderMaterialHook {
                     val info=param.args.getOrNull(2) ?: view.tag
                     val sx=(info?.let {XposedHelpers.callMethod(it,"getSpanX")} as? Int) ?: 1
                     val sy=(info?.let {XposedHelpers.callMethod(it,"getSpanY")} as? Int) ?: 1
-                    val path=NativeFolderPath.policyPath(material.nativePolicy,bounds,radius) ?: Path().also {
+                    val long=if(shortcut(material.source.get()))MultiIconMaterialHook.sharedContour(bounds,radius,sx,sy)else null
+                    val path=long?.sharedPath() ?: NativeFolderPath.policyPath(material.nativePolicy,bounds,radius) ?: Path().also {
                         NativeFolderPath.create(view,it,RectF(bounds),radius,sx,sy)
                     }
-                    val fingerprint=SurfaceMaterial.descriptor("nativeClip",sx,sy,material.fallback?.javaClass?.name)
-                    if(SurfaceMaterial.draw(canvas,bounds,view,material,radius,path.takeUnless {it.isEmpty},alpha=material.alpha,
-                        style=style(view),nativeShape=if(path.isEmpty)material.fallback else null,pathFingerprint=fingerprint,fallback=material.fallback)){
+                    val fingerprint=SurfaceMaterial.descriptor("nativeClip",sx,sy,material.fallback?.javaClass?.name,long?.template)
+                    if(SurfaceMaterial.draw(canvas,bounds,view,material,long?.materialRadius ?: radius,path.takeUnless {it.isEmpty},alpha=material.alpha,
+                        style=FolderSettings.style(),nativeShape=if(path.isEmpty)material.fallback else null,pathFingerprint=fingerprint,fallback=material.fallback)){
                         if(converted.put(param.thisObject,true)==null)GlassLogger.i("FolderMaterial","Native hover/resize material: bounds=$bounds, radius=$radius")
                     }else{
                         val fallback=material.fallback ?: return

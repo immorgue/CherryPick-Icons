@@ -143,14 +143,12 @@ object LiveBlurEngine {
     }
 
     fun onAppLaunchStarted() = onMainThread {
-        com.cosmod.launcherglass.xposed.AnimationBlurWindow.begin(0)
         isAppLaunchInProgress = true
         com.cosmod.launcherglass.xposed.NativeSurfaceLive.onFlightStarted(opening=true)
         stopFrameLoop()
     }
 
     fun onHomeReturnStarted() = onMainThread {
-        com.cosmod.launcherglass.xposed.AnimationBlurWindow.begin(1)
         val wasSuspended = isAppLaunchInProgress || !isResumed
         isAppLaunchInProgress = false
         isResumed = true
@@ -342,7 +340,6 @@ object LiveBlurEngine {
     }
 
     fun onActivityResumed() = onMainThread {
-        com.cosmod.launcherglass.xposed.AnimationBlurWindow.begin(1)
         isAppLaunchInProgress = false
         isResumed = true
         com.cosmod.launcherglass.xposed.NativeSurfaceLive.onFlightStarted(opening=false)

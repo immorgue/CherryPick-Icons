@@ -91,7 +91,6 @@
     <string name="ui_reuse_static_wallpaper_hint">Checks the system wallpaper ID on app return and reuses the processed static background. Wallpaper and processing settings changes still invalidate the cache. Not applied to live wallpapers or system wallpaper effects. Developer mode only.</string>
     <string name="ui_dock_event_driven_hint">Refreshes the dock plate and the icon blur only when something actually changed, and lands deferred blur samples on the next frame instead of a timer. Turn off to compare with the previous per-frame behaviour. Outside developer mode this stays on.</string>
     <string name="ui_support_project">Support the project</string>
-    <string name="ui_support_project_button">Support\nthe project</string>
     <string name="ui_author_profile">by @immorgue — Telegram profile</string>
     <string name="ui_telegram_error">Could not open Telegram</string>
     <string name="ui_restart_launcher">Restart launcher</string>
@@ -217,8 +216,8 @@
     <string name="ui_theme_unavailable">The saved system theme catalogue is unavailable on this firmware or root access was denied.</string>
     <string name="ui_theme_system_apply_hint">Browse your saved themes. The checkmark opens the selected theme in the system editor; its Apply button preserves the full system theme.</string>
     <string name="ui_theme_android_hint">Saved system themes are not exposed on this firmware. Showing the current wallpaper and installed live wallpaper services; their system preview handles application.</string>
-    <string name="ui_static_animation_blur">Static blur during animations · experimental</string>
-    <string name="ui_static_animation_blur_hint">Hold the current material for 120 ms, then crossfade to live over 100 ms. Covers launch, return and unlock; native movement continues. Off by default.</string>
+    <string name="ui_static_animation_blur">Static blur during animations</string>
+    <string name="ui_static_animation_blur_hint">Keeps the blur snapshot for the entire open and close animation. Live blur fades in after the icon returns.</string>
     <string name="ui_haze_bloom">Haze: colored glow · experimental</string>
     <string name="ui_haze_bloom_hint">Intensifies bright colors already spread by the blur and deepens shadows. Requires iOS haze. No additional texture samples or blur passes; at radius 0 there is no broad halo. Off by default.</string>
     <string name="ui_smooth_swipe_lead">Smooth swipe anticipation · experimental</string>

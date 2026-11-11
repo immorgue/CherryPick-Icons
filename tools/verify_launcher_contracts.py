@@ -109,9 +109,16 @@ def verify(d):
  method('desktop_cells',p+'CellLayout;','setCellDimensionsInner','(II)V')
  for name in ['getLayoutPaddingStart','getLayoutPaddingTop']:method('desktop_cells',p+'CellLayout;',name,'()I')
  method('desktop_cells',p+'CellLayout;','onMeasure','(II)V')
+ method('desktop_cells',p+'CellLayout;','onLayout','(ZIIII)V')
+ method('desktop_cells',p+'CellLayout;','getUnusedHorizontalSpace','()I')
+ field('desktop_cells',p+'CellLayout;','mBorderSpace','Landroid/graphics/Point;')
+ method('desktop_cells',p+'ShortcutAndWidgetContainer;','setupLp','(Landroid/view/View;)V')
+ cell_params=p+'celllayout/CellLayoutLayoutParams;'
+ check('desktop_cells',any(m['signature'].startswith('(II') and m['signature'].endswith(')V') for m in inherited(d,cell_params,'setup','method') or []),cell_params+'.setup with cell dimensions')
+ for axis in ['x','y']:field('desktop_cells',p+'celllayout/CellLayoutLayoutParams;',axis,'I')
  field('dock_icon_size',p+'BubbleTextView;','mIconSize','I')
  field('dock_icon_size',p+'BubbleTextView;','mIcon','Landroid/graphics/drawable/Drawable;')
- method('dock_icon_size',p+'BubbleTextView;','onMeasure','(II)V')
+ method('dock_icon_size',p+'ShortcutAndWidgetContainer;','measureChild','(Landroid/view/View;)V',declared=True)
  method('dock_icon_size',p+'BubbleTextView;','applyCompoundDrawables','(Landroid/graphics/drawable/Drawable;)V')
  icon='Lto5;' if compact else 'Lcom/android/launcher/theme/LauncherIconConfig;'
  method('icon_size',icon,'b' if compact else 'calculateIconSizeByUxDesign','([I)I')

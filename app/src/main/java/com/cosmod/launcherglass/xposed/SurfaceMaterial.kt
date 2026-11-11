@@ -151,9 +151,13 @@ internal object SurfaceMaterial {
         // The launcher may render a drag shadow to a software Canvas. A GPU
         // wallpaper cannot be sampled there; use the shared software snapshot.
         val shape=shape(bounds,radius,path,nativeShape,nativeMask,pathFingerprint,identity,view)
+        // A native destination clip owns the silhouette. Reuse its path for
+        // a narrow rim, with no extra inner bevel or rounded lens.
+        val contourMask=if(!drawContour && path!=null && !path.isEmpty)
+            shape(bounds,radius,path,pathFingerprint=pathFingerprint,identity=null,view=view).mask else shape.mask
         val footprint=local ?: RectF(bounds)
         if(canvas.isHardwareAccelerated && !TransitionCapture.captures(canvas) && NativeSurfaceLive.materialSource==null && !ForeignDraw.isForeign(view))
-            ParentBackdrop.record(view,identity,footprint,shape.mask,radius,style,decorate)
+            ParentBackdrop.record(view,identity,footprint,contourMask,radius,style,decorate)
         val metrics=view.resources.displayMetrics
         if(!style.colorOnly && (TransitionCapture.captures(canvas) || NativeSurfaceLive.materialSource!=null)){
             val capturedBounds=Rect(bounds)
@@ -175,10 +179,10 @@ internal object SurfaceMaterial {
                     target.scale(capturedBounds.width().toFloat()/shape.mask.width,capturedBounds.height().toFloat()/shape.mask.height)
                     val rect=Rect(0,0,shape.mask.width,shape.mask.height)
                     IconMaterialRenderer.draw(target,rect,shape.mask,emptyGlyph,plateColor,style.opacity*255/100,!decorate,
-                        image,source,null,decorate,style){out,area,blurred ->
+                        image,source,null,decorate,style,contourMask){out,area,blurred ->
                         if(!blurred)clearPlate(out,area,shape.mask,plateColor,style.opacity*255/100,decorate)
-                        if(decorate && drawContour && PrefsHelper.iconStroke && PrefsHelper.strokeOpacity>0)
-                            out.drawBitmap(GlassGeometry.rim(shape.mask),null,area,Paint(Paint.FILTER_BITMAP_FLAG))
+                        if(decorate && PrefsHelper.iconStroke && PrefsHelper.strokeOpacity>0)
+                            out.drawBitmap(GlassGeometry.rim(contourMask,edgeOnly=!drawContour),null,area,Paint(Paint.FILTER_BITMAP_FLAG))
                     }
                 }finally{target.restoreToCount(saved)}
             })return true
@@ -200,10 +204,10 @@ internal object SurfaceMaterial {
             IconMaterialRenderer.draw(canvas,local,shape.mask,emptyGlyph,plateColor,
                 style.opacity*255/100,!decorate,wallpaper,source,
                 IconMaterialRenderer.Binding(view,identity,RectF(footprint),metrics.widthPixels,metrics.heightPixels,alpha=alpha,
-                    foreign=ForeignDraw.isForeign(view) || TransitionCapture.renderingSnapshot),decorate,style) {target,rect,blurred ->
+                    foreign=ForeignDraw.isForeign(view) || TransitionCapture.renderingSnapshot),decorate,style,contourMask) {target,rect,blurred ->
                 if(!blurred)clearPlate(target,rect,shape.mask,plateColor,style.opacity*255/100,decorate)
-                if(decorate && drawContour && PrefsHelper.iconStroke && PrefsHelper.strokeOpacity>0)
-                    target.drawBitmap(GlassGeometry.rim(shape.mask),null,rect,Paint(Paint.FILTER_BITMAP_FLAG))
+                if(decorate && PrefsHelper.iconStroke && PrefsHelper.strokeOpacity>0)
+                    target.drawBitmap(GlassGeometry.rim(contourMask,edgeOnly=!drawContour),null,rect,Paint(Paint.FILTER_BITMAP_FLAG))
             }
         }finally{canvas.restoreToCount(save)}
         return true

@@ -113,6 +113,19 @@ public class ParentBackdropCheck {
   Object colorStyle=constructor.newInstance(false,30,80,0,100,null,false,Integer.valueOf(Color.RED),true,false,true);
   check(Boolean.TRUE.equals(draw.invoke(obj(surface),actualCanvas,new Rect(0,0,200,200),waiting,new ColorDrawable(Color.RED),77f,stockClip,false,255,colorStyle,null,rectangle,null,null,null,false)),"Native clipped flat plate unavailable");
   for(int y=0;y<200;y++)for(int x=0;x<200;x++)check(Color.alpha(flat.getPixel(x,y))==Color.alpha(expected.getPixel(x,y)),"Native destination clip changed at "+x+","+y);
+  field(prefs,"iconStroke",true);field(prefs,"strokeOpacity",100);
+  Bitmap outlined=Bitmap.createBitmap(200,200,Bitmap.Config.ARGB_8888);
+  Canvas outlineCanvas=new Canvas(outlined);outlineCanvas.clipPath(stockClip);
+  check(Boolean.TRUE.equals(draw.invoke(obj(surface),outlineCanvas,new Rect(0,0,200,200),waiting,new ColorDrawable(Color.RED),77f,stockClip,true,255,colorStyle,null,rectangle,null,null,null,false)),"Native clipped plate with contour unavailable");
+  int changed=0;
+  for(int y=0;y<200;y++)for(int x=0;x<200;x++){
+   int before=flat.getPixel(x,y),after=outlined.getPixel(x,y);
+   check(Color.alpha(before)==Color.alpha(after),"Contour changed the native silhouette at "+x+","+y);
+   if(before!=after)changed++;
+  }
+  check(changed>100 && flat.getPixel(100,100)==outlined.getPixel(100,100),"Native path rim missing or painted across the center");
+  outlined.recycle();field(prefs,"iconStroke",false);
+  System.out.println("PASS: multi-folder contour changes edge lighting while leaving stock silhouette and center intact");
   rectangle.recycle();flat.recycle();expected.recycle();
   Class<?> folders=cls("xposed.FolderSettings");Object folderSettings=obj(folders);
   android.os.Bundle own=new android.os.Bundle();own.putBoolean("folder_own_settings",true);own.putBoolean("folder_blur_radius_enabled",true);own.putInt("folder_blur_radius",7);

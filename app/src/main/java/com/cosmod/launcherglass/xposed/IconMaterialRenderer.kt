@@ -14,7 +14,7 @@ import com.cosmod.launcherglass.util.GlassLogger
 /** UI-thread cache: moving wallpaper changes a shader matrix, not icon layers. */
 object IconMaterialRenderer {
     private data class Key(
-        val mask: Bitmap, val glyph: Bitmap, val width: Int, val height: Int,
+        val mask: Bitmap, val contourMask:Bitmap, val glyph: Bitmap, val width: Int, val height: Int,
         val color: Int, val opacity: Int, val hideGlyph: Boolean, val blurred: Boolean,
         val gradient: Int, val stroke: Int, val shadow: Int, val glyphStroke: Int, val glyphStrokeWidth: Int, val glyphStrokeBrightness: Int,
         val depthBits:Int,val depthStage:Int
@@ -90,9 +90,10 @@ object IconMaterialRenderer {
         var predictionApplied=false
         var returnPending=false
         var presentedEffect:RenderEffect?=null
-        var frozenEffect:RenderEffect?=null
-        var freezeGeneration=0L
-        var freezeStartedNs=0L
+        var liveEffect:RenderEffect?=null
+        var returnBackdrop:NativeSurfaceLive.StaticBackdrop?=null
+        var returnEffect:RenderEffect?=null
+        var returnStartedNs=0L
         private val predictedSource=RectF()
         private val smoothLead=SmoothSwipeLead()
         private var leadFrame=-1L
@@ -141,7 +142,7 @@ object IconMaterialRenderer {
     /** Called once per launcher pre-draw, before any restoration or recording. */
     @Synchronized fun beginFrame(){frameSerial++}
     /** A returned view needs its final crop on the first visible frame, not a later FPS slot. */
-    @Synchronized fun prepareReturn(view:View):Boolean {
+    @Synchronized internal fun prepareReturn(view:View,fadeFromStatic:Boolean,backdrop:NativeSurfaceLive.StaticBackdrop?):Boolean {
         val entries=samplers[view] ?: return true
         prune(entries)
         var restored=false;var count=0
@@ -150,10 +151,13 @@ object IconMaterialRenderer {
             restored=restoreSample(sampler) || restored
             sampler.worldValid=false;sampler.returnPending=true
             sampler.resetMotion()
-            // The native flight has ended. A workspace node must not keep an
-            // opening/closing snapshot and fade to a different crop afterwards.
-            sampler.frozenEffect=null;sampler.freezeGeneration=AnimationBlurWindow.generation
-            sampler.freezeStartedNs=0L
+            // Keep the last visible workspace material until the OEM hands
+            // the icon back. Start the fade on its first real workspace draw.
+            sampler.returnEffect=if(fadeFromStatic)sampler.presentedEffect else null
+            sampler.returnStartedNs=0L
+            sampler.returnBackdrop=backdrop?.takeIf {
+                fadeFromStatic && it.mask===sampler.material.maskImage && it.style==sampler.style && !it.wallpaper.isRecycled
+            }
             // source may already match the final crop while the node still
             // holds a blend effect. Force one fresh effect, not a view redraw.
             sampler.finishKey=-1
@@ -330,21 +334,13 @@ object IconMaterialRenderer {
         val filter=style.filter
         val finishKey=MaterialFinish.key()
         val fps=MiniIconRefresh.fps(PrefsHelper.liveFps,sampler.mini,PrefsHelper.optimizeMiniIcons)
-        if(sampler.source==null || sampler.appliedStyle!=style || sampler.finishKey!=finishKey){
-            sampler.frozenEffect=null;sampler.presentedEffect=null
+        if(sampler.appliedStyle!=style || !PrefsHelper.staticAnimationBlur){
+            sampler.returnEffect=null
+            sampler.returnBackdrop=null
         }
-        val freeze=PrefsHelper.staticAnimationBlur && AnimationBlurWindow.active(nowNs)
-        if(freeze && sampler.freezeGeneration!=AnimationBlurWindow.generation && sampler.frozenEffect==null){
-            sampler.freezeGeneration=AnimationBlurWindow.generation
-            sampler.freezeStartedNs=AnimationBlurWindow.startNs
-            sampler.frozenEffect=sampler.presentedEffect
-        }
-        val fade=if(PrefsHelper.staticAnimationBlur && sampler.freezeGeneration!=0L)StaticBlurTiming.progress(nowNs-sampler.freezeStartedNs)else 1f
-        if(fade==0f && sampler.frozenEffect!=null && sampler.appliedStyle==style && sampler.finishKey==finishKey){
-            scheduleSampleRefresh(view,StaticBlurTiming.holdRemaining(nowNs-sampler.freezeStartedNs))
-            return true
-        }
-        val blending=sampler.frozenEffect!=null
+        val blending=sampler.returnEffect!=null || sampler.returnBackdrop!=null
+        if(blending && sampler.returnStartedNs==0L)sampler.returnStartedNs=nowNs
+        val fade=if(blending)StaticBlurTiming.returnProgress(nowNs-sampler.returnStartedNs)else 1f
         val swipe=com.cosmod.launcherglass.util.LiveBlurEngine.isWorkspaceScrolling &&
             !NativeSurfaceLive.isSampling && isWorkspaceSample(view,sampler)
         val compatible=sampler.wallpaper===wallpaper && sampler.appliedStyle==style
@@ -366,6 +362,40 @@ object IconMaterialRenderer {
             val remaining=sampler.clock.remainingNs(nowNs,fps)
             if(remaining>0L && !NativeSurfaceLive.isSampling && !settlePrediction && !sampler.returnPending && !(blending && fade>=1f)){scheduleSampleRefresh(view,remaining,PrefsHelper.smoothSwipeLead && !swipe);return false}
         }
+        val sameCrop=contentMatches && sampler.source==source && sampler.backdropRevision==(parent?.revision ?: 0L)
+        val live=if(sameCrop) sampler.liveEffect ?: backdropEffect(sampler,wallpaper,source,parent)
+            else backdropEffect(sampler,wallpaper,source,parent)
+        sampler.liveEffect=live
+        if(sampler.returnPending && sampler.returnStartedNs==nowNs){
+            val flight=sampler.returnBackdrop?.takeUnless {it.wallpaper.isRecycled}
+            if(flight!=null){
+                sampler.returnEffect=if(flight.wallpaper===wallpaper && flight.source==source && parent==null)
+                    null else backdropEffect(sampler,flight.wallpaper,flight.source,null)
+            }
+            sampler.returnBackdrop=null
+            if(sampler.returnEffect!=null)GlassLogger.animationLimited("LiveSurface","return-dissolve",100){
+                "Workspace blur dissolve after handoff, native sample=${flight!=null}"
+            }
+        }
+        val shown=sampler.returnEffect?.let {StaticBlurBlend.effect(it,live,fade)} ?: live
+        sampler.node.setRenderEffect(shown);sampler.presentedEffect=shown
+        if(fade>=1f)sampler.returnEffect=null
+        else if(sampler.returnEffect!=null)scheduleSampleRefresh(view,1_000_000_000L/fps)
+        sampler.wallpaper=wallpaper;sampler.source=RectF(source);sampler.filter=filter;sampler.appliedStyle=style
+        sampler.previousSource=RectF(rawSource);sampler.previousSourceFrame=frameSerial
+        sampler.predictionApplied=source!=rawSource
+        if(PrefsHelper.smoothSwipeLead && !swipe && sampler.predictionApplied)
+            scheduleSampleRefresh(view,1_000_000_000L/fps,cadenceOnly=true)
+        sampler.lastUpdateNs=nowNs
+        sampler.finishKey=finishKey
+        sampler.backdropRevision=parent?.revision ?: 0L
+        sampler.returnPending=false
+        sampler.clock.record(nowNs,fps)
+        return true
+    }
+    private fun backdropEffect(sampler:Sampler,wallpaper:Bitmap,source:RectF,parent:ParentBackdrop.Sample?):RenderEffect {
+        val style=sampler.style
+        val filter=style.filter
         val refracted=if(android.os.Build.VERSION.SDK_INT>=33 && style.liquid) {
             // createShaderEffect() snapshots the shader, so every sampler can
             // share one compiled lens instead of compiling SkSL per icon.
@@ -379,24 +409,9 @@ object IconMaterialRenderer {
             }
         var effect=RenderEffect.createShaderEffect(background)
         if(filter!=null && refracted==null)effect=RenderEffect.createColorFilterEffect(filter,effect)
-        val live=MaterialFinish.effect(effect,sampler.node.width,sampler.node.height) ?: effect
-        val shown=sampler.frozenEffect?.let {StaticBlurBlend.effect(it,live,fade)} ?: live
-        sampler.node.setRenderEffect(shown);sampler.presentedEffect=shown
-        if(freeze && fade==0f && sampler.frozenEffect==null)sampler.frozenEffect=live
-        if(fade>=1f)sampler.frozenEffect=null
-        else scheduleSampleRefresh(view,1_000_000_000L/fps)
-        sampler.wallpaper=wallpaper;sampler.source=RectF(source);sampler.filter=filter;sampler.appliedStyle=style
-        sampler.previousSource=RectF(rawSource);sampler.previousSourceFrame=frameSerial
-        sampler.predictionApplied=source!=rawSource
-        if(PrefsHelper.smoothSwipeLead && !swipe && sampler.predictionApplied)
-            scheduleSampleRefresh(view,1_000_000_000L/fps,cadenceOnly=true)
-        sampler.lastUpdateNs=nowNs
-        sampler.finishKey=finishKey
-        sampler.backdropRevision=parent?.revision ?: 0L
-        sampler.returnPending=false
-        sampler.clock.record(nowNs,fps)
-        return true
+        return MaterialFinish.effect(effect,sampler.node.width,sampler.node.height) ?: effect
     }
+
     private fun isWorkspaceSample(view:View?,sampler:Sampler):Boolean {
         if(sampler.origin?.get()!=null)return false
         var owner=view
@@ -422,19 +437,12 @@ object IconMaterialRenderer {
         var folderImage:Bitmap?=null
         for((drawable,sampler) in entries){
             restored=restoreSample(sampler) || restored
-            if(PrefsHelper.staticAnimationBlur && sampler.frozenEffect!=null && !sampler.returnPending &&
-                sampler.finishKey==MaterialFinish.key() &&
-                StaticBlurTiming.holdRemaining(nowNs-sampler.freezeStartedNs)>0L){
-                // A held sample does not need a new parent shader/composite.
-                scheduleSampleRefresh(view,StaticBlurTiming.holdRemaining(nowNs-sampler.freezeStartedNs),cadenceOnly=true)
-                continue
-            }
             val scope=sampler.origin?.get() ?: view
             val image=if(sampler.style.folder){
                 folderImage ?: (com.cosmod.launcherglass.util.WallpaperHelper.getFolderWallpaper(view.context) ?: wallpaper).also {folderImage=it}
             }else DockMaterial.iconWallpaper(scope,wallpaper)
             val parent=ParentBackdrop.resolve(scope,drawable,image,includeHidden=sampler.origin?.get()!=null)
-            if(sampler.frozenEffect==null && !sampler.predictionApplied && sampler.worldValid && sampler.world==world && sampler.scroll==scroll && sampler.wallpaper===image && sampler.appliedStyle==sampler.style && sampler.finishKey==MaterialFinish.key() && sampler.backdropRevision==(parent?.revision ?: 0L))continue
+            if(sampler.returnEffect==null && !sampler.predictionApplied && sampler.worldValid && sampler.world==world && sampler.scroll==scroll && sampler.wallpaper===image && sampler.appliedStyle==sampler.style && sampler.finishKey==MaterialFinish.key() && sampler.backdropRevision==(parent?.revision ?: 0L))continue
             val rect=RectF(sampler.local);world.mapRect(rect)
             if(samplerEffect(sampler,image,WallpaperFootprint.source(image,sampler.screenW,sampler.screenH,rect),nowNs,view,parent)){
                 sampler.world.set(world);sampler.worldValid=true;sampler.scroll=scroll
@@ -448,19 +456,19 @@ object IconMaterialRenderer {
     fun draw(
         canvas: Canvas, bounds: Rect, mask: Bitmap, glyph: Bitmap,
         color: Int, tintAlpha: Int, hideGlyph: Boolean,
-        sampleWallpaper: Bitmap?, sampleSource: RectF?,binding:Binding?=null,volume:Boolean=true,style:GlassStyle=GlassStyle.icons(),buildOverlay: (Canvas, Rect, Boolean) -> Unit
+        sampleWallpaper: Bitmap?, sampleSource: RectF?,binding:Binding?=null,volume:Boolean=true,style:GlassStyle=GlassStyle.icons(),contourMask:Bitmap=mask,buildOverlay: (Canvas, Rect, Boolean) -> Unit
     ) {
         if(Thread.currentThread().name=="CherryPickSurface" && binding==null && PrefsHelper.gpuEffects){
-            drawMaterial(canvas,bounds,mask,glyph,color,tintAlpha,hideGlyph,sampleWallpaper,sampleSource,binding,volume,style,recordingCache(),buildOverlay)
+            drawMaterial(canvas,bounds,mask,glyph,color,tintAlpha,hideGlyph,sampleWallpaper,sampleSource,binding,volume,style,contourMask,recordingCache(),buildOverlay)
         }else synchronized(this){
             android.os.Trace.beginSection("CherryPick.iconRecord")
-            try {drawMaterial(canvas,bounds,mask,glyph,color,tintAlpha,hideGlyph,sampleWallpaper,sampleSource,binding,volume,style,cache,buildOverlay)}
+            try {drawMaterial(canvas,bounds,mask,glyph,color,tintAlpha,hideGlyph,sampleWallpaper,sampleSource,binding,volume,style,contourMask,cache,buildOverlay)}
             finally{android.os.Trace.endSection()}
         }
     }
     private fun drawMaterial(
         canvas:Canvas,bounds:Rect,mask:Bitmap,glyph:Bitmap,color:Int,tintAlpha:Int,hideGlyph:Boolean,
-        sampleWallpaper:Bitmap?,sampleSource:RectF?,binding:Binding?,volume:Boolean,style:GlassStyle,
+        sampleWallpaper:Bitmap?,sampleSource:RectF?,binding:Binding?,volume:Boolean,style:GlassStyle,contourMask:Bitmap,
         cache:LruCache<Key,Material>,buildOverlay:(Canvas,Rect,Boolean)->Unit
     ) {
         val width = bounds.width()
@@ -476,7 +484,7 @@ object IconMaterialRenderer {
         val wallpaper = if (clear) null else sampleWallpaper
         val source = if (clear) null else sampleSource
         val blurred = wallpaper != null && source != null
-        val key = Key(mask, glyph, width, height, color, tintAlpha, hideGlyph, blurred,
+        val key = Key(mask, contourMask, glyph, width, height, color, tintAlpha, hideGlyph, blurred,
             if(volume)PrefsHelper.gradientOpacity else 0,
             if (!hideGlyph && PrefsHelper.iconStroke) PrefsHelper.strokeOpacity else 0,
             if (PrefsHelper.glyphShadow) PrefsHelper.shadowOpacity else 0,
@@ -506,7 +514,7 @@ object IconMaterialRenderer {
             if(changed && (frame.bitmap==null || remaining==0L || NativeSurfaceLive.isSampling)){
                 val bitmap=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888)
                 val software=wallpaper?.let {com.cosmod.launcherglass.util.WallpaperHelper.forCanvas(it,Canvas(bitmap))}
-                draw(Canvas(bitmap),Rect(0,0,width,height),mask,glyph,color,tintAlpha,hideGlyph,software,footprint,null,volume,style,buildOverlay)
+                draw(Canvas(bitmap),Rect(0,0,width,height),mask,glyph,color,tintAlpha,hideGlyph,software,footprint,null,volume,style,contourMask,buildOverlay)
                 frame.bitmap=bitmap;frame.wallpaper=wallpaper;frame.source=footprint?.let(::RectF);frame.style=style;frame.finish=MaterialFinish.key();frame.clock.record(now,fps)
             }else if(changed)scheduleSampleRefresh(binding?.view,remaining)
             frame.bitmap?.let {canvas.drawBitmap(it,null,bounds,outputPaint)}
@@ -653,18 +661,17 @@ object IconMaterialRenderer {
                     }
                     if(MaterialFinish.needed()){
                         if(canvas.isHardwareAccelerated){
-                            val isolated=NativeSurfaceLive.isFreezing
-                            val node=(if(isolated)null else material.backgroundNode) ?: RenderNode("CherryPick.opticalFinish").apply {
-                                setPosition(0,0,width,height);if(!isolated)material.backgroundNode=this
+                            val node=material.backgroundNode ?: RenderNode("CherryPick.opticalFinish").apply {
+                                setPosition(0,0,width,height);material.backgroundNode=this
                             }
                             val finishKey=MaterialFinish.key()
-                            if(isolated || material.backgroundEffectKey!=finishKey){
-                                node.setRenderEffect(MaterialFinish.effect(null,width,height));if(!isolated)material.backgroundEffectKey=finishKey
+                            if(material.backgroundEffectKey!=finishKey){
+                                node.setRenderEffect(MaterialFinish.effect(null,width,height));material.backgroundEffectKey=finishKey
                             }
-                            if(isolated || !node.hasDisplayList() || material.backgroundSerial!=material.shaderSerial){
+                            if(!node.hasDisplayList() || material.backgroundSerial!=material.shaderSerial){
                                 val recording=node.beginRecording(width,height)
                                 try {recording.drawRect(0f,0f,width.toFloat(),height.toFloat(),material.paint)}finally{node.endRecording()}
-                                if(!isolated)material.backgroundSerial=material.shaderSerial
+                                material.backgroundSerial=material.shaderSerial
                             }
                             plate.drawRenderNode(node)
                         }else{

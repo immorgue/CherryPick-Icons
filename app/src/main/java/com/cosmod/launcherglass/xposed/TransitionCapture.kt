@@ -70,6 +70,9 @@ internal object TransitionCapture {
         val bounds=Rect(drawable.bounds);val alpha=drawable.alpha
         if(bounds.isEmpty)return false
         NativeSurfaceLive.capture(canvas,scene.width,scene.height){renderScene(scene,overlay,it,bounds,alpha)}
+        // The BitmapDrawable already contains the complete material snapshot.
+        // The OEM scales its single buffer for the entire static flight.
+        if(PrefsHelper.staticAnimationBlur)return false
         renderScene(scene,overlay,canvas,bounds,alpha)
         return true
     }
@@ -181,7 +184,7 @@ internal object TransitionCapture {
         }
         val scene=Scene(view.width,view.height)
         scene.guardCorners=view.javaClass.name.contains("GridRecyclerView")
-        scene.materialClip=MultiIconMaterialHook.contour(view)?.path(view)
+        scene.materialClip=MultiIconMaterialHook.contour(view)?.takeIf {it.template==null}?.path(view)
         recording.set(true);pending.set(scene)
         android.os.Trace.beginSection("CherryPick.transitionScene")
         try {

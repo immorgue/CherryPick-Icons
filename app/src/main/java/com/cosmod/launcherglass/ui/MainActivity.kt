@@ -26,6 +26,7 @@ import androidx.transition.AutoTransition
 import androidx.transition.TransitionManager
 import com.cosmod.launcherglass.BuildConfig
 import com.cosmod.launcherglass.R
+import com.cosmod.launcherglass.util.DesktopSizing
 import com.cosmod.launcherglass.util.GlassLogger
 import com.cosmod.launcherglass.util.SuUtil
 import com.cosmod.launcherglass.util.LsposedScopeStatus
@@ -373,7 +374,7 @@ class MainActivity : AppCompatActivity() {
         SettingsScreen.DOCK -> getString(R.string.ui_nav_dock)
         SettingsScreen.WIDGETS -> getString(R.string.ui_widgets)
         SettingsScreen.DESKTOP -> getString(R.string.ui_desktop_title)
-        SettingsScreen.POSITIONS -> getString(R.string.ui_desktop_positions)
+        SettingsScreen.POSITIONS -> getString(R.string.ui_desktop_title)
         SettingsScreen.WALLPAPERS -> getString(R.string.ui_nav_wallpapers)
         SettingsScreen.BEHAVIOR -> getString(R.string.ui_nav_behavior)
         SettingsScreen.DEVELOPER -> getString(R.string.ui_developer_mode)
@@ -472,7 +473,7 @@ class MainActivity : AppCompatActivity() {
             SettingsScreen.DOCK -> dockSection(body)
             SettingsScreen.WIDGETS -> buildWidgetSettings(body)
             SettingsScreen.DESKTOP -> desktopDesignerSection(body)
-            SettingsScreen.POSITIONS -> desktopPositionEditor(body)
+            SettingsScreen.POSITIONS -> desktopDesignerSection(body)
             SettingsScreen.WALLPAPERS -> buildWallpaperSettings(body)
             SettingsScreen.BEHAVIOR -> buildBehaviorSettings(body)
             SettingsScreen.DEVELOPER -> buildDeveloperSettings(body)
@@ -602,7 +603,7 @@ class MainActivity : AppCompatActivity() {
         add(statusLabels,statusHint!!,6)
         status.addView(statusLabels,LinearLayout.LayoutParams(0,-2,1f))
         status.addView(actions(listOf(reset(SettingsProvider.KEY_ENABLED),toggle(getString(R.string.ui_module),SettingsProvider.KEY_ENABLED))))
-        add(body,card(status),bottom=24)
+        add(body,card(status),bottom=16)
         val warning=column().apply {setPadding(dp(20),dp(16),dp(20),dp(16))}
         add(warning,text(getString(R.string.ui_flux_only_title),16f,bold=true).apply {
             setTextColor(color(M.attr.colorOnTertiaryContainer))
@@ -614,11 +615,13 @@ class MainActivity : AppCompatActivity() {
         fluxWarning=warningCard
         add(body,warningCard,bottom=16)
         updateFluxWarning()
-        add(body,com.google.android.material.button.MaterialButton(this).apply {
-            text=getString(R.string.ui_restart_launcher);isAllCaps=false;setIconResource(R.drawable.ic_restart)
+        val shortcuts=column().apply {setPadding(dp(16),dp(8),dp(16),dp(8))}
+        add(shortcuts,com.google.android.material.button.MaterialButton(this,null,M.attr.materialButtonOutlinedStyle).apply {
+            text=getString(R.string.ui_restart_launcher);isAllCaps=false;minHeight=dp(48);setIconResource(R.drawable.ic_restart)
             setOnClickListener {haptic(it);restart(it)}
-        },bottom=12)
-        add(body,supportButton(),bottom=12)
+        },bottom=4)
+        add(shortcuts,supportButton())
+        add(body,card(shortcuts),bottom=16)
         val about=column().apply { setPadding(dp(20),dp(20),dp(20),dp(12)) }
         add(about,text("v${BuildConfig.VERSION_NAME}",12f,true))
         add(about,text("by @immorgue",14f).apply {
@@ -738,6 +741,10 @@ class MainActivity : AppCompatActivity() {
         refreshers.add { modeIds[number(SettingsProvider.KEY_BLUR_MODE)]?.let { radioGroup.check(it) } }
         add(modes,radioGroup)
         val modeCard=card(modes);gate(modeCard,::blur);add(body,modeCard,bottom=12)
+        val animationBlur=card(switchRow(getString(R.string.ui_static_animation_blur),SettingsProvider.KEY_STATIC_ANIMATION_BLUR,
+            getString(R.string.ui_static_animation_blur_hint)))
+        gate(animationBlur,::blur)
+        add(body,animationBlur,bottom=12)
         val idle=card(switchRow(getString(R.string.ui_energy_saving),SettingsProvider.KEY_IDLE_PAUSE,
             getString(R.string.ui_energy_saving_description)))
         gate(idle) { blur() && number(SettingsProvider.KEY_BLUR_MODE)==SettingsProvider.BLUR_MODE_LIVE }
@@ -745,12 +752,12 @@ class MainActivity : AppCompatActivity() {
     }
     private fun desktopPositionEditor(body:LinearLayout) {
         val names=linkedMapOf(
-            com.cosmod.launcherglass.util.DesktopSizing.GRID_Y to getString(R.string.ui_desktop_grid_y),
-            com.cosmod.launcherglass.util.DesktopSizing.INDICATOR_Y to getString(R.string.ui_desktop_indicator_y),
-            com.cosmod.launcherglass.util.DesktopSizing.DOCK_Y to getString(R.string.ui_desktop_dock_y))
+            DesktopSizing.GRID_Y to getString(R.string.ui_desktop_grid_y),
+            DesktopSizing.INDICATOR_Y to getString(R.string.ui_desktop_indicator_y),
+            DesktopSizing.DOCK_Y to getString(R.string.ui_desktop_dock_y))
         add(body,text(getString(R.string.ui_desktop_positions_hint),14f,true),bottom=12)
         val content=column().apply {setPadding(dp(16),dp(16),dp(16),dp(16))}
-        val preview=DesktopPositionPreview(this).apply {positions=names.keys.associateWith {number(it)}}
+        val preview=DesktopPositionPreview(this)
         content.addView(preview,LinearLayout.LayoutParams(-1,dp(260)))
         val choices=column()
         val buttons=linkedMapOf<String,com.google.android.material.button.MaterialButton>()
@@ -768,25 +775,25 @@ class MainActivity : AppCompatActivity() {
         fun formatted(n:Int)="${if(n>0)"+" else ""}$n dp"
         fun updatePreview(){
             preview.positions=names.keys.associateWith {number(it)}
-            preview.cellWidthPercent=number(com.cosmod.launcherglass.util.DesktopSizing.CELL_WIDTH)
-            preview.cellHeightPercent=number(com.cosmod.launcherglass.util.DesktopSizing.CELL_HEIGHT)
+            preview.cellWidthPercent=number(DesktopSizing.CELL_WIDTH)
+            preview.cellHeightPercent=number(DesktopSizing.CELL_HEIGHT)
         }
         updatePreview()
         val cellControls=column()
         add(cellControls,text(getString(R.string.ui_desktop_grid_cells),18f,bold=true),top=20,bottom=8)
         add(cellControls,text(getString(R.string.ui_desktop_grid_cells_hint),14f,true),bottom=8)
-        for((title,key) in listOf(R.string.ui_desktop_cell_width to com.cosmod.launcherglass.util.DesktopSizing.CELL_WIDTH,
-            R.string.ui_desktop_cell_height to com.cosmod.launcherglass.util.DesktopSizing.CELL_HEIGHT))
+        for((title,key) in listOf(R.string.ui_desktop_cell_width to DesktopSizing.CELL_WIDTH,
+            R.string.ui_desktop_cell_height to DesktopSizing.CELL_HEIGHT))
             add(cellControls,slider(getString(title),key,80,120,"%",onPreview={updatePreview()}))
         add(controls,cellControls)
         refreshers.add {updatePreview()}
-        fun select(key:String){
+        fun select(key:String,animate:Boolean=true){
             selected=key;preview.selected=key
-            cellControls.visibility=if(key==com.cosmod.launcherglass.util.DesktopSizing.GRID_Y)View.VISIBLE else View.GONE
+            cellControls.visibility=if(key==DesktopSizing.GRID_Y)View.VISIBLE else View.GONE
             changing=true;slider.value=number(key).coerceIn(-120,120).toFloat();changing=false
             label.text=names[key];value.text=formatted(number(key));slider.contentDescription=names[key]
             buttons.forEach {(id,button)->button.isChecked=id==key}
-            reveal(controls,true)
+            if(animate)reveal(controls,true)else controls.visibility=View.VISIBLE
         }
         preview.onSelect={key -> haptic(preview);select(key)}
         for((key,name) in names){
@@ -810,42 +817,41 @@ class MainActivity : AppCompatActivity() {
         })
         add(controls,com.google.android.material.button.MaterialButton(this,null,M.attr.materialButtonOutlinedStyle).apply {
             text=getString(R.string.ui_reset_defaults);isAllCaps=false;minHeight=dp(48)
-            setOnClickListener {selected?.let {key -> save(key,0);updatePreview();select(key)}}
+            setOnClickListener {
+                val key=selected ?: return@setOnClickListener
+                haptic(it)
+                val keys=if(key==DesktopSizing.GRID_Y)listOf(key,DesktopSizing.CELL_WIDTH,DesktopSizing.CELL_HEIGHT)else listOf(key)
+                resetToDefaults(keys)
+                select(key,animate=false)
+            }
         })
         // The position slider sits immediately below the diagram; the named
         // buttons remain available for screen readers and overlapping elements.
         add(content,controls)
         add(content,choices,top=12)
         add(body,card(content))
+        select(DesktopSizing.GRID_Y,animate=false)
     }
 
     private fun desktopDesignerSection(body:LinearLayout) {
-        val content=column().apply {setPadding(dp(20),dp(20),dp(20),dp(12))}
-        add(content,text(getString(R.string.ui_desktop_title),19f,bold=true))
-        add(content,text(getString(R.string.ui_desktop_hint),14f,true),top=8,bottom=12)
-        val sizing=column().apply {visibility=View.GONE}
-        for((label,key,hint) in listOf(
-            Triple(R.string.ui_desktop_icon_size,com.cosmod.launcherglass.util.DesktopSizing.ICON_SCALE,R.string.ui_desktop_icon_size_hint),
-            Triple(R.string.ui_desktop_widget_gaps,com.cosmod.launcherglass.util.DesktopSizing.WIDGET_GAPS,R.string.ui_desktop_widget_gaps_hint),
-            Triple(R.string.ui_desktop_bottom_bias,com.cosmod.launcherglass.util.DesktopSizing.BOTTOM_BIAS,R.string.ui_desktop_bottom_bias_hint))) {
-            val range=com.cosmod.launcherglass.util.DesktopSizing.ranges.getValue(key)
+        desktopPositionEditor(body)
+        val content=column().apply {setPadding(dp(16),dp(16),dp(16),dp(8))}
+        add(content,text(getString(R.string.ui_desktop_sizing),18f,bold=true),bottom=8)
+        val sizing=column()
+        val sizes=listOf(
+            Triple(R.string.ui_desktop_icon_size,DesktopSizing.ICON_SCALE,R.string.ui_desktop_icon_size_hint),
+            Triple(R.string.ui_desktop_widget_gaps,DesktopSizing.WIDGET_GAPS,R.string.ui_desktop_widget_gaps_hint),
+            Triple(R.string.ui_desktop_bottom_bias,DesktopSizing.BOTTOM_BIAS,R.string.ui_desktop_bottom_bias_hint))
+        for((label,key,hint) in sizes) {
+            val range=DesktopSizing.ranges.getValue(key)
             add(sizing,slider(getString(label),key,range.first,range.last,"%",getString(hint)))
         }
         add(sizing,text(getString(R.string.ui_desktop_sizing_restart),13f,true),top=8,bottom=12)
         add(sizing,com.google.android.material.button.MaterialButton(this,null,M.attr.materialButtonOutlinedStyle).apply {
             text=getString(R.string.ui_reset_defaults);isAllCaps=false;minHeight=dp(48)
-            setOnClickListener {haptic(it);resetToDefaults(com.cosmod.launcherglass.util.DesktopSizing.defaults.keys.toList())}
+            setOnClickListener {haptic(it);resetToDefaults(sizes.map {size -> size.second})}
         },bottom=12)
-        var sizingOpen=false
-        add(content,com.google.android.material.button.MaterialButton(this,null,M.attr.materialButtonOutlinedStyle).apply {
-            text=getString(R.string.ui_desktop_sizing);isAllCaps=false;minHeight=dp(48)
-            setOnClickListener {haptic(it);sizingOpen=!sizingOpen;reveal(sizing,sizingOpen)}
-        },bottom=8)
         add(content,sizing)
-        add(content,com.google.android.material.button.MaterialButton(this,null,M.attr.materialButtonOutlinedStyle).apply {
-            text=getString(R.string.ui_desktop_positions_open);isAllCaps=false;minHeight=dp(48)
-            setOnClickListener {haptic(it);navigate(SettingsScreen.POSITIONS)}
-        },bottom=8)
         add(content,com.google.android.material.button.MaterialButton(this,null,M.attr.materialButtonOutlinedStyle).apply {
             text=getString(R.string.ui_desktop_open);isAllCaps=false;minHeight=dp(48)
             setOnClickListener {
@@ -1484,9 +1490,9 @@ class MainActivity : AppCompatActivity() {
         add(parent,text(getString(R.string.ui_artwork_icons_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
     }
 
-    /** Filled tertiary support button: two lines, readable on the tertiary container. */
     private fun supportButton() = com.google.android.material.button.MaterialButton(this).apply {
-        text=getString(R.string.ui_support_project_button);isAllCaps=false;maxLines=2
+        text=getString(R.string.ui_support_project);isAllCaps=false;setSingleLine(true)
+        androidx.core.widget.TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(this,12,14,1,android.util.TypedValue.COMPLEX_UNIT_SP)
         gravity=Gravity.CENTER;textAlignment=View.TEXT_ALIGNMENT_CENTER
         textSize=14f;minHeight=dp(48);insetTop=0;insetBottom=0;cornerRadius=dp(16)
         setPadding(dp(16),dp(6),dp(16),dp(6))
@@ -1507,18 +1513,8 @@ class MainActivity : AppCompatActivity() {
         add(body,com.google.android.material.button.MaterialButton(this).apply {
             text=getString(R.string.ui_language);isAllCaps=false;setOnClickListener {showLanguageDialog(it)}
         },bottom=12)
-        category(body,R.string.ui_developer_mode,R.string.ui_nav_developer_hint,SettingsScreen.DEVELOPER)
-        val bootRestart=column()
-        add(bootRestart,switchRow(getString(R.string.ui_boot_restart),SettingsProvider.KEY_BOOT_RESTART))
-        add(bootRestart,text(getString(R.string.ui_boot_restart_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(12))})
-        divider(bootRestart)
-        val bootToast=switchRow(getString(R.string.ui_boot_restart_toast),SettingsProvider.KEY_BOOT_RESTART_TOAST)
-        gate(bootToast){bool(SettingsProvider.KEY_BOOT_RESTART)}
-        add(bootRestart,bootToast)
-        add(body,card(bootRestart),bottom=12)
-        settingsTransferSection(body)
         val logs=com.google.android.material.button.MaterialButton(this,null,M.attr.materialButtonOutlinedStyle).apply {
-            text=getString(R.string.ui_logs);minHeight=dp(48)
+            text=getString(R.string.ui_logs);isAllCaps=false;minHeight=dp(48)
             setOnClickListener { button ->
                 haptic(button);button.isEnabled=false
                 (button as? android.widget.TextView)?.setText(R.string.ui_report_creating)
@@ -1550,7 +1546,17 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
-        add(body,logs)
+        add(body,logs,bottom=16)
+        category(body,R.string.ui_developer_mode,R.string.ui_nav_developer_hint,SettingsScreen.DEVELOPER)
+        val bootRestart=column()
+        add(bootRestart,switchRow(getString(R.string.ui_boot_restart),SettingsProvider.KEY_BOOT_RESTART))
+        add(bootRestart,text(getString(R.string.ui_boot_restart_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(12))})
+        divider(bootRestart)
+        val bootToast=switchRow(getString(R.string.ui_boot_restart_toast),SettingsProvider.KEY_BOOT_RESTART_TOAST)
+        gate(bootToast){bool(SettingsProvider.KEY_BOOT_RESTART)}
+        add(bootRestart,bootToast)
+        add(body,card(bootRestart),bottom=12)
+        settingsTransferSection(body)
     }
     private fun buildDeveloperSettings(body:LinearLayout){
         val developer=column()
@@ -1590,8 +1596,6 @@ class MainActivity : AppCompatActivity() {
         add(developerOptions,text(getString(R.string.ui_compact_dock_effects_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
         add(developerOptions,switchRow(getString(R.string.ui_reuse_static_wallpaper),SettingsProvider.KEY_REUSE_STATIC_WALLPAPER))
         add(developerOptions,text(getString(R.string.ui_reuse_static_wallpaper_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
-        add(developerOptions,switchRow(getString(R.string.ui_static_animation_blur),SettingsProvider.KEY_STATIC_ANIMATION_BLUR))
-        add(developerOptions,text(getString(R.string.ui_static_animation_blur_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
         add(developerOptions,switchRow(getString(R.string.ui_scene_drag_backdrop),SettingsProvider.KEY_SCENE_DRAG_BACKDROP))
         add(developerOptions,text(getString(R.string.ui_scene_drag_backdrop_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
         divider(developerOptions)

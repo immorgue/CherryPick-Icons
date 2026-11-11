@@ -117,7 +117,7 @@ object IconGlassHook {
             }
             if(current!=null && PrefsHelper.enabled && PrefsHelper.backdropEnabled &&
                 PrefsHelper.blurMode==com.cosmod.launcherglass.ui.SettingsProvider.BLUR_MODE_LIVE &&
-                current.isShown) {
+                current.isShown && !(PrefsHelper.staticAnimationBlur && LiveBlurEngine.isAppLaunchInProgress)) {
                 // Animation/scroll transforms are final now; sample the same
                 // position that this frame will present, not the previous tick.
                 android.os.Trace.beginSection("CherryPick.sampleBeforeDraw")
@@ -229,12 +229,12 @@ object IconGlassHook {
     fun invalidateShaders(){IconMaterialRenderer.clear();ParentBackdrop.clear();GlyphMaterialRenderer.clear();revision++}
     private data class RepaintStamp(val x:Int,val y:Int,val w:Int,val h:Int,val scroll:Int,val wallpaper:Bitmap?,val revision:Long)
     private val repaintStamps=WeakHashMap<View,RepaintStamp>()
-    fun onNativeIconReturned(view:View?) {
+    internal fun onNativeIconReturned(view:View?,fadeFromStatic:Boolean,backdrop:NativeSurfaceLive.StaticBackdrop?) {
         if(view==null)return
         val refresh=Runnable {
             repaintStamps.remove(view)
             fun prepare(child:View) {
-                val needsRecording=IconMaterialRenderer.prepareReturn(child)
+                val needsRecording=IconMaterialRenderer.prepareReturn(child,fadeFromStatic,if(child===view)backdrop else null)
                 // Final transforms are available in pre-draw. Do not build
                 // the effects here and then repeat that work in the same frame.
                 if(needsRecording)child.invalidate()
@@ -440,8 +440,11 @@ object IconGlassHook {
         val source=compatible?.let {sourceRect(it,a,footprint)}
         val plateColor=if(compatible!=null)PrefsHelper.plateColor(parts.bgColor)else parts.bgColor
         val plateOpacity=if(PrefsHelper.colorOnly)100 else PrefsHelper.bgOpacity
+        val style=GlassStyle.icons().copy(extendedLens=width!=height)
+        if(binding==null && compatible!=null && source!=null)
+            NativeSurfaceLive.rememberStaticBackdrop(compatible,source,plateMask,style)
         IconMaterialRenderer.draw(canvas,bounds,plateMask,parts.glyphBitmap,plateColor,
-            plateOpacity*255/100,false,compatible,source,binding,style=GlassStyle.icons().copy(extendedLens=width!=height)){target,local,blurred ->
+            plateOpacity*255/100,false,compatible,source,binding,style=style){target,local,blurred ->
             if(!blurred){
                 val save=target.saveLayer(RectF(local),null)
                 val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply {colorFilter=PorterDuffColorFilter((plateOpacity*255/100 shl 24) or (plateColor and 0xffffff),PorterDuff.Mode.SRC_IN)}

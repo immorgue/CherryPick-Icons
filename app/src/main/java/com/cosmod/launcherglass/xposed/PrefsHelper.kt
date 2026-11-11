@@ -316,7 +316,7 @@ object PrefsHelper {
             compactDockEffects=newCompactDockEffects
             reuseStaticWallpaper=newReuseStaticWallpaper
             sceneDragBackdrop=developer && bundle.getBoolean(SettingsProvider.KEY_SCENE_DRAG_BACKDROP,false)
-            staticAnimationBlur=developer && bundle.getBoolean(SettingsProvider.KEY_STATIC_ANIMATION_BLUR,false)
+            staticAnimationBlur=bundle.getBoolean(SettingsProvider.KEY_STATIC_ANIMATION_BLUR,false)
             bgOpacity = newBgOpacity
             blurEnabled = newBlurEnabled
             colorDepthBits=newColorDepth
