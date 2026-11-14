@@ -56,7 +56,7 @@ object NativeSurfaceLive {
         val id=(NativeIconAccess.field(info,"id") as? Number)?.toLong()?.takeIf {it>=0} ?: return null
         return FlightSourceIdentity(id,NativeIconAccess.field(info,"user"))
     }
-    internal data class StaticBackdrop(val wallpaper:Bitmap,val source:RectF,val mask:Bitmap,val style:GlassStyle)
+    internal data class StaticBackdrop(val wallpaper:Bitmap,val source:RectF,val mask:Bitmap,val style:GlassStyle,val parentRevision:Long=0L)
     private data class Capture(val surface: Surface, val source: View?, val identity:FlightSourceIdentity?,
         val lease: Lease?, val recordId: Int?, val token: Any, val draws: MutableList<Draw> = ArrayList(),
         var canvasWidth:Int=1,var canvasHeight:Int=1,var materialWidth:Int=210,var materialHeight:Int=210,var backdrop:StaticBackdrop?=null)
@@ -147,13 +147,14 @@ object NativeSurfaceLive {
     }
 
     fun rememberFlightBackdrop(wallpaper:Bitmap,source:RectF,mask:Bitmap,style:GlassStyle){
+        val parentRevision=DockMaterial.nativeParentBackdrop(materialSource)?.revision ?: 0L
         val sample=sampling.get()
         if(sample!=null){
             if(PrefsHelper.appWindowTilt && PrefsHelper.appGenie && PrefsHelper.appGenieStrength>0 && sample.backdrop==null)
-                sample.backdrop=StaticBackdrop(wallpaper,RectF(source),mask,style)
+                sample.backdrop=StaticBackdrop(wallpaper,RectF(source),mask,style,parentRevision)
         }else if(PrefsHelper.staticAnimationBlur){
             val capture=recording.get() ?: return
-            capture.backdrop=StaticBackdrop(wallpaper,RectF(source),mask,style)
+            capture.backdrop=StaticBackdrop(wallpaper,RectF(source),mask,style,parentRevision)
         }
     }
 
@@ -167,7 +168,10 @@ object NativeSurfaceLive {
         hasLiveFlight=flying.any {!it.staticFlight}
         animatedSources=flying.mapNotNull {it.capture.source}.toSet()
         if(wasStatic && !next)staticFlightReturn++
-        if(active!=next){active=next;main.post {LiveBlurEngine.onNativeSurfacesChanged()}}
+        if(active!=next){active=next;main.post {
+            if(next)HomeGestureBar.nativeReturnStarted()else HomeGestureBar.nativeReturnFinished()
+            LiveBlurEngine.onNativeSurfacesChanged()
+        }}
     }
     private fun hasNativePose(capture:Capture)=capture.lease?.pose?.get()?.let {it.positioned && it.transformed}==true
     /** Read stock transforms; never write native positions, matrices or alpha. */
@@ -224,7 +228,7 @@ object NativeSurfaceLive {
         lease.restScale=rest
         // The same surface can reverse without returning to the desktop.
         // Its resting size is independent of the direction of the gesture.
-        val progress=((scale/rest-1.55f)/.40f).coerceIn(0f,1f)
+        val progress=((scale/rest-PrefsHelper.flightIconReveal*.01f)/.40f).coerceIn(0f,1f)
         val alpha=if(limit)1f-progress*progress*(3f-2f*progress) else 1f
         if(lease.flightAlpha==alpha)return
         lease.flightAlpha=alpha

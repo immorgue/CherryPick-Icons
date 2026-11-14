@@ -244,7 +244,7 @@ object LauncherWallpaperCapture {
                         val frame = args?.firstOrNull { it is Bitmap } as? Bitmap
                         val time = SystemClock.uptimeMillis()
                         val interval = 1000L / PrefsHelper.liveFps.coerceIn(1, 30)
-                        if (epoch == motionEpoch && frame != null && !frame.isRecycled &&
+                        if (!LiveBlurEngine.freezeAnimationWallpaper && epoch == motionEpoch && frame != null && !frame.isRecycled &&
                             time - lastFrameMs >= interval && frameBusy.compareAndSet(false, true)) {
                             if(lastFrameMs==0L)GlassLogger.i("WallpaperCapture","First motion frame received in ${time-watchStartedMs}ms")
                             lastFrameMs = time

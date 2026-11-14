@@ -64,6 +64,20 @@ object LiveBlurEngine {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val isTickerRunning = AtomicBoolean(false)
     private var transitionRefreshUntilMs = 0L
+    private var appReturnUntilMs=0L
+    val freezeAnimationWallpaper:Boolean get()=PrefsHelper.staticAnimationBlur &&
+        (isAppLaunchInProgress || com.cosmod.launcherglass.xposed.NativeSurfaceLive.hasStaticFlight ||
+            SystemClock.uptimeMillis()<appReturnUntilMs)
+    private fun holdReturningWallpaper(){
+        if(!isAppLaunchInProgress || !PrefsHelper.staticAnimationBlur)return
+        appReturnUntilMs=SystemClock.uptimeMillis()+600L
+        mainHandler.postDelayed({
+            if(!isAppLaunchInProgress && SystemClock.uptimeMillis()>=appReturnUntilMs){
+                LauncherWallpaperCapture.startMotionWatch()
+                IconGlassHook.requestLiveFrame()
+            }
+        },600L)
+    }
 
     @Volatile
     var isAppLaunchInProgress: Boolean = false
@@ -135,7 +149,10 @@ object LiveBlurEngine {
         if(transitionVisible()){
             transitionRefreshUntilMs=maxOf(transitionRefreshUntilMs,SystemClock.uptimeMillis()+600L)
             startTickerIfNeeded()
-        }else if(isResumed && !isAppLaunchInProgress)IconGlassHook.requestLiveFrame()
+        }else if(isResumed && !isAppLaunchInProgress){
+            LauncherWallpaperCapture.startMotionWatch()
+            IconGlassHook.requestLiveFrame()
+        }
     }
     private fun stopFrameLoop() {
         if(transitionVisible() && PrefsHelper.enabled){
@@ -153,13 +170,16 @@ object LiveBlurEngine {
     fun onAppLaunchStarted() = onMainThread {
         clearWorkspaceScroll()
         isAppLaunchInProgress = true
+        com.cosmod.launcherglass.xposed.HomeGestureBar.leaving()
         com.cosmod.launcherglass.xposed.NativeSurfaceLive.onFlightStarted(opening=true)
         stopFrameLoop()
     }
 
     fun onHomeReturnStarted() = onMainThread {
         val wasSuspended = isAppLaunchInProgress || !isResumed
+        holdReturningWallpaper()
         isAppLaunchInProgress = false
+        com.cosmod.launcherglass.xposed.HomeGestureBar.refresh()
         isResumed = true
         lastMotionTimeMs = SystemClock.uptimeMillis()
         com.cosmod.launcherglass.xposed.NativeSurfaceLive.onFlightStarted(opening=false)
@@ -396,6 +416,7 @@ object LiveBlurEngine {
     }
 
     fun onActivityResumed() = onMainThread {
+        holdReturningWallpaper()
         isAppLaunchInProgress = false
         isResumed = true
         com.cosmod.launcherglass.xposed.NativeSurfaceLive.onFlightStarted(opening=false)

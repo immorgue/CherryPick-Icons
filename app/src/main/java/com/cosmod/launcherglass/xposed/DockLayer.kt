@@ -54,8 +54,7 @@ internal class DockLayer private constructor(owner:ViewGroup,root:ViewGroup,
         // dock is painted in it. Keep horizontal room for expanded docks,
         // but do not allocate/filter a screen-high transparent input.
         val bounds=dockBounds()
-        if(!PrefsHelper.compactDockEffects)cropTop=0
-        else if(!bounds.isEmpty && root.width>0 && root.height>0 && !retainWhenHidden){
+        if(!bounds.isEmpty && root.width>0 && root.height>0 && !retainWhenHidden){
             var restingTop=bounds.top
             var ancestor:View?=owner
             while(ancestor!=null && ancestor!==root){

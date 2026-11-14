@@ -18,7 +18,7 @@ internal object ThemeCatalog {
     fun load(context:Context):List<Theme> {
         val backend=source(context)
         return try {backend.load(context)}catch(t:Throwable){
-            android.util.Log.w("ColorOSGlass","OEM theme catalogue unavailable; using public Android wallpaper capabilities",t)
+            com.cosmod.launcherglass.util.GlassLogger.e("Themes","OEM theme catalogue unavailable; using public Android wallpaper capabilities",t)
             if(backend===AndroidWallpaperSource)emptyList()else AndroidWallpaperSource.load(context)
         }
     }

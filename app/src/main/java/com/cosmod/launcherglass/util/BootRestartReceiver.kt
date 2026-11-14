@@ -54,7 +54,11 @@ internal object BootRestart {
 
     class Boot(val id: String?, val count: Int, val wall: Long)
 
-    fun log(message: String) { Log.i(TAG, "[BootRestart] $message") }
+    fun logging(context:Context){
+        GlassLogger.enabled=try {context.getSharedPreferences(SettingsProvider.PREFS_NAME,Context.MODE_PRIVATE)
+            .getBoolean(SettingsProvider.KEY_MODULE_LOGGING,false)}catch(_:Exception){false}
+    }
+    fun log(message: String) { GlassLogger.i("BootRestart",message) }
     fun uptime(): Long = SystemClock.elapsedRealtime()
     fun inWindow(): Boolean = uptime() <= WINDOW_MS
     private fun state(context: Context) = context.getSharedPreferences(STATE, Context.MODE_PRIVATE)
@@ -146,7 +150,7 @@ internal object BootRestart {
                 listener = receiver
             } catch (error: Exception) {
                 listener = null
-                Log.w(TAG, "[BootRestart] Unlock listener unavailable; relying on the fallback alarm", error)
+                GlassLogger.e("BootRestart","Unlock listener unavailable; relying on the fallback alarm",error)
             }
         }
         if (expiry == null) {
@@ -173,6 +177,7 @@ internal object BootRestart {
 
 class BootRestartReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        BootRestart.logging(context)
         if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
         val uptime = BootRestart.uptime()
         if (!BootRestart.systemUser(context)) { BootRestart.log("Boot completed for a secondary user; ignored"); return }
@@ -190,6 +195,7 @@ class BootRestartReceiver : BroadcastReceiver() {
 
 class LauncherRestartReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        BootRestart.logging(context)
         if (!BootRestart.systemUser(context)) { BootRestart.cancel(context); return }
         if (!BootRestart.enabled(context)) { BootRestart.cancel(context); BootRestart.log("Cancelled: restart is disabled"); return }
         val boot = BootRestart.current(context)
@@ -220,7 +226,7 @@ class LauncherRestartReceiver : BroadcastReceiver() {
                 if (!finished) failure = "Restart timed out" else if (process.exitValue() != 0) failure = "Restart failed: exit ${process.exitValue()}"
             } catch (error: Exception) {
                 failure = "Restart failed: ${error.javaClass.simpleName}"
-                Log.e("ColorOSGlass", "[BootRestart] Launcher restart failed", error)
+                GlassLogger.e("BootRestart","Launcher restart failed",error)
             } finally {
                 failure?.let { BootRestart.record(app, it) }
                 if (failure != null && showToast)

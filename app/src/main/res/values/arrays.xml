@@ -6,5 +6,6 @@
         <item>com.coloros.launcher</item>
         <item>com.android.launcher3</item>
         <item>com.cosmod.launcherglass</item>
+        <item>com.android.systemui</item>
     </string-array>
 </resources>

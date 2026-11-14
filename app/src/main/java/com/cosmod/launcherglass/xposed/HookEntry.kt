@@ -32,6 +32,13 @@ class HookEntry : IXposedHookLoadPackage {
             return
         }
 
+        if(packageName=="com.android.systemui"){
+            HomeGestureBar.installSystemUi(lpparam.classLoader)
+            try {MusicIslandExpansion.install(lpparam.classLoader)}
+            catch(t:Throwable){GlassLogger.e("MusicIsland","Cannot install native island expansion",t)}
+            return
+        }
+
         // 2. Target ColorOS / OxygenOS Launcher
         val launcherPackages = setOf(
             "com.android.launcher",
@@ -47,6 +54,8 @@ class HookEntry : IXposedHookLoadPackage {
             catch(t:Throwable){GlassLogger.e("DesktopDesigner","Cannot install desktop editor",t)}
             try {DesktopGeometry.install(lpparam.classLoader)}
             catch(t:Throwable){GlassLogger.e("DesktopGeometry","Cannot install native desktop sizing",t)}
+
+            HomeGestureBar.installLauncher(lpparam.classLoader)
 
             var initialized = false
             fun ensureInit(context: Context, source: String) {

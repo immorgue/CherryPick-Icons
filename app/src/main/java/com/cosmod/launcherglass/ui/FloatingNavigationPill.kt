@@ -39,6 +39,7 @@ internal class FloatingNavigationPill(
     private var candidate=false
     private var downX=0f
     private var downPosition=0f
+    private var detent=-1
     private val slop=ViewConfiguration.get(context).scaledTouchSlop
     private val slot get()=((width-2*inset)/3f).coerceAtLeast(1f)
     private fun visual(index:Int)=if(layoutDirection==LAYOUT_DIRECTION_RTL)2-index else index
@@ -90,7 +91,7 @@ internal class FloatingNavigationPill(
     override fun onInterceptTouchEvent(event:MotionEvent):Boolean {
         when(event.actionMasked){
             MotionEvent.ACTION_DOWN -> {
-                downX=event.x;downPosition=position
+                downX=event.x;downPosition=position;detent=position.roundToInt()
                 candidate=event.x>=inset+position*slot && event.x<=inset+(position+1)*slot
             }
             MotionEvent.ACTION_MOVE -> if(candidate && abs(event.x-downX)>slop){
@@ -105,12 +106,27 @@ internal class FloatingNavigationPill(
     override fun onTouchEvent(event:MotionEvent):Boolean {
         if(!dragging)return super.onTouchEvent(event)
         when(event.actionMasked){
-            MotionEvent.ACTION_MOVE -> {position=(downPosition+(event.x-downX)/slot).coerceIn(0f,2f);place()}
+            MotionEvent.ACTION_MOVE -> {
+                val raw=(downPosition+(event.x-downX)/slot).coerceIn(0f,2f)
+                val center=raw.roundToInt()
+                val distance=abs(raw-center)
+                // A shallow magnetic well preserves continuous finger control.
+                val attraction=(1f-distance/.36f).coerceIn(0f,1f)
+                position=raw+(center-raw)*attraction*.65f
+                if(distance<.08f && detent!=center){
+                    performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+                    detent=center
+                }else if(distance>.20f)detent=-1
+                place()
+            }
             MotionEvent.ACTION_UP,MotionEvent.ACTION_CANCEL -> {
                 val index=if(event.actionMasked==MotionEvent.ACTION_UP)logical(position.roundToInt())else selected
                 dragging=false;candidate=false;parent?.requestDisallowInterceptTouchEvent(false)
                 select(index)
-                if(event.actionMasked==MotionEvent.ACTION_UP){performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK);choose(index)}
+                if(event.actionMasked==MotionEvent.ACTION_UP){
+                    if(detent!=visual(index))performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+                    choose(index)
+                }
             }
         }
         return true

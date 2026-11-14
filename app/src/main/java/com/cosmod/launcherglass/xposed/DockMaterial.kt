@@ -43,6 +43,11 @@ internal object DockMaterial {
     private class Dock {
         val renderer=DockRenderer()
         val iconRenderer=DockRenderer()
+        val parentIdentity=android.graphics.drawable.ColorDrawable()
+        val parentProbeIdentity=android.graphics.drawable.ColorDrawable()
+        @Volatile var parentSample:ParentBackdrop.Sample?=null
+        var parentMask:Bitmap?=null
+        var parentGeometry:List<Any?>?=null
         var iconKey:List<Any?>?=null
         var iconWallpaper:Bitmap?=null
         var iconSource:Bitmap?=null
@@ -76,6 +81,7 @@ internal object DockMaterial {
     // Event-driven gate: the composite backdrop and the hotseat signature are
     // rebuilt only when the wallpaper, the dock layout or the settings change.
     private var layoutRevision=0L
+    private var lastFrameWallpaper:Bitmap?=null
     private var lastStamp=Long.MIN_VALUE
     private var lastLayout=-1L
     fun noteLayout(){layoutRevision++}
@@ -90,36 +96,19 @@ internal object DockMaterial {
     fun onFrame(){
         if(!enabled() || DockSettings.style().colorOnly || docks.isEmpty())return
         val context=WallpaperHelper.appContext ?: return
-        // Live frames have their own publication cadence. Until the composite
-        // has a smaller live update path, retain its existing refresh behaviour;
-        // a source/layout-only stamp must never freeze video under dock icons.
-        if(!PrefsHelper.dockEventDriven || WallpaperHelper.isLiveWallpaper(context)){
-            prepareIconWallpaper(WallpaperHelper.getBlurredWallpaper(context))
-            for(dock in docks.values){
-                val layer=dock.layer ?: continue
-                if(!layer.isAttachedToWindow)continue
-                layer.active=enabled();layer.sync();layer.invalidate()
-            }
-            return
-        }
-        // Static wallpaper changes only on content/layout/settings events.
+        val wallpaper=WallpaperHelper.getBlurredWallpaper(context)
         val stamp=WallpaperHelper.stamp()
-        if(stamp==lastStamp && layoutRevision==lastLayout)return
-        // Wait for publication rather than consuming a new stamp with old pixels.
+        // A live frame is an event too. Never invalidate the layer merely
+        // because pre-draw ran: that schedules another pre-draw indefinitely.
+        if(stamp==lastStamp && layoutRevision==lastLayout &&
+            wallpaper===lastFrameWallpaper)return
         if(!WallpaperHelper.sourceReady())return
-        // A launch/return animation already owns the frame budget. The plate is
-        // cheap to refresh; the full-screen icon composite waits for the first
-        // settled frame instead of being rebuilt mid-transition.
-        if(LiveBlurEngine.isAppLaunchInProgress || NativeSurfaceLive.active){
-            for(dock in docks.values){
-                val layer=dock.layer ?: continue
-                if(!layer.isAttachedToWindow)continue
-                layer.active=enabled();layer.sync();layer.invalidate()
-            }
-            return
-        }
+        // Keep the pending publication for the handoff frame. Do not enqueue
+        // more draws while the OEM owns the launch/return animation.
+        if(LiveBlurEngine.isAppLaunchInProgress || NativeSurfaceLive.active)return
+        lastFrameWallpaper=wallpaper
         lastStamp=stamp;lastLayout=layoutRevision
-        prepareIconWallpaper(WallpaperHelper.getBlurredWallpaper(context))
+        prepareIconWallpaper(wallpaper)
         // The plate lives in its own full-screen layer. Refresh it once here
         // instead of invalidating it on every hotseat draw.
         for(dock in docks.values){
@@ -137,6 +126,23 @@ internal object DockMaterial {
             if(!hotseat.isAttachedToWindow || !hotseat.isShown)continue
             try {
                 val rect=geometry(hotseat) ?: continue
+                if(PrefsHelper.gpuEffects && android.os.Build.VERSION.SDK_INT>=33){
+                    // Compose the parent plate in the child shader, like folder
+                    // plates. No full-screen bitmap/readback per live frame.
+                    val r=radius(rect)
+                    val maskKey=listOf(Rect(rect),r,SurfaceMaterial.geometryRevision,DockSettings.style().kyant!=null)
+                    if(dock.parentGeometry!=maskKey || dock.parentMask==null){
+                        val mask=Bitmap.createBitmap(rect.width(),rect.height(),Bitmap.Config.ARGB_8888)
+                        val c=Canvas(mask);c.translate(-rect.left.toFloat(),-rect.top.toFloat())
+                        val outline=path(hotseat,rect,r,dock) ?: Path().apply {addRoundRect(RectF(rect),r,r,Path.Direction.CW)}
+                        c.drawPath(outline,Paint(Paint.ANTI_ALIAS_FLAG).apply {color=android.graphics.Color.WHITE})
+                        dock.parentMask=mask;dock.parentGeometry=maskKey
+                    }
+                    ParentBackdrop.record(hotseat,dock.parentIdentity,RectF(rect),dock.parentMask!!,r,DockSettings.style(),true)
+                    dock.parentSample=ParentBackdrop.resolve(hotseat,dock.parentProbeIdentity,wallpaper)
+                    dock.iconSource=wallpaper
+                    continue
+                }
                 val dm=hotseat.resources.displayMetrics
                 val scale=maxOf(dm.widthPixels.toFloat()/wallpaper.width,dm.heightPixels.toFloat()/wallpaper.height)
                 val offset=(wallpaper.width-dm.widthPixels/scale).coerceAtLeast(0f)*LiveBlurEngine.wallpaperScrollRatio
@@ -176,8 +182,18 @@ internal object DockMaterial {
         }
     }
 
+    fun nativeParentBackdrop(view:View?):ParentBackdrop.Sample? {
+        var current=view
+        repeat(16){
+            val owner=current ?: return null
+            docks[owner]?.let {return if(enabled())it.parentSample else null}
+            current=owner.parent as? View
+        }
+        return null
+    }
+
     fun iconWallpaper(view:View?,wallpaper:Bitmap):Bitmap {
-        if(!enabled() || view==null)return wallpaper
+        if(!enabled() || view==null || (PrefsHelper.gpuEffects && android.os.Build.VERSION.SDK_INT>=33))return wallpaper
         var current:View?=view
         repeat(16){
             val owner=current ?: return wallpaper
@@ -384,7 +400,6 @@ internal object DockMaterial {
             // a frame; an empty display list would otherwise stay empty until
             // an unrelated invalidation arrived.
             if(!dock.plateReady)layer.invalidate()
-            if(!PrefsHelper.dockEventDriven)layer.invalidate()
             return true
         }
         if(!dock.attaching){
@@ -455,8 +470,9 @@ internal object DockMaterial {
         val cell=(NativeIconAccess.call(hotseat,"getCellWidth") as? Number)?.toFloat() ?: size.toFloat()
         val half=DockGeometry.halfWidth(PrefsHelper.dockAutoLength,center,icons.left,icons.right,
             hotseat.width.toFloat(),cell,size.toFloat(),side)
-        val height=DockGeometry.vertical(icons.top,icons.bottom,vertical)
-        return Rect((center-half).roundToInt(),height.first,(center+half).roundToInt(),height.second)
+        val height=DockGeometry.vertical(icons.top,icons.bottom,vertical,PrefsHelper.dockBlurHeight)
+        val shift=(PrefsHelper.dockBlurY*hotseat.resources.displayMetrics.density).roundToInt()
+        return Rect((center-half).roundToInt(),height.first+shift,(center+half).roundToInt(),height.second+shift)
     }
 
     /** The visible icon square of a hotseat item, in its own coordinates. */
@@ -481,6 +497,9 @@ internal object DockMaterial {
 
     /** ColorOS continuous ("smooth") corners like the icons; a plain round rect otherwise. */
     private fun path(view:View,rect:Rect,radius:Float,dock:Dock):Path? {
+        // Kyant's edge distance/highlight use a circular rounded rectangle.
+        // Clip and contour must use that same silhouette, not OEM smooth corners.
+        if(DockSettings.style().kyant!=null)return null
         if(smoothUnavailable)return null
         if(dock.path!=null && dock.pathRect==rect && dock.pathRadius==radius)return dock.path
         return try {

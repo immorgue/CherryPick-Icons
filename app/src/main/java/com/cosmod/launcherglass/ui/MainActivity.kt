@@ -74,9 +74,15 @@ class MainActivity : AppCompatActivity() {
     private var statusHint:TextView?=null
     private var fluxWarning:View?=null
     private val supportListener=SharedPreferences.OnSharedPreferenceChangeListener { _,key ->
+        if(key==SettingsProvider.KEY_MODULE_LOGGING)com.cosmod.launcherglass.util.GlassLogger.enabled=bool(SettingsProvider.KEY_MODULE_LOGGING)
         if(key==SettingsProvider.KEY_NATIVE_FLUX_SUPPORT)runOnUiThread {updateFluxWarning()}
     }
     private var scopeState:LsposedScopeStatus.State?=null
+    private var moduleToggle:View?=null
+    private var moduleBlink:ValueAnimator?=null
+    private var moduleBlinkTarget:View?=null
+    private var overviewResumed=false
+    private var creditsTicker:CreditsTicker?=null
     private var statusEpoch=0
     private var restartBusy = false
     private var updatingUi = false
@@ -96,8 +102,12 @@ class MainActivity : AppCompatActivity() {
     // A scoped (folder/dock) key that was never saved inherits the current icon value.
     private fun bool(key:String):Boolean = ScopedSettingsKeys.baseOf(key)?.let {base -> prefs.getBoolean(key,prefs.getBoolean(base,SettingsDefaults.boolean(base)))}
         ?: prefs.getBoolean(key,SettingsDefaults.boolean(key))
-    private fun number(key:String):Int = ScopedSettingsKeys.baseOf(key)?.let {base -> prefs.getInt(key,prefs.getInt(base,SettingsDefaults.integer(base)))}
-        ?: prefs.getInt(key,SettingsDefaults.integer(key))
+    private fun number(key:String):Int {
+        val base=ScopedSettingsKeys.baseOf(key)
+        val value=base?.let {prefs.getInt(key,prefs.getInt(it,SettingsDefaults.integer(it)))}
+            ?: prefs.getInt(key,SettingsDefaults.integer(key))
+        return if((base ?: key)==SettingsProvider.KEY_BLUR_STYLE)com.cosmod.launcherglass.util.MaterialMode.normalize(value)else value
+    }
     private fun darkIcons() = prefs.getBoolean(SettingsProvider.KEY_NATIVE_ICON_DARK, com.cosmod.launcherglass.util.IconPalette.isSystemDark(this))
     private fun master() = bool(SettingsProvider.KEY_ENABLED)
     private fun colorOnly() = number(SettingsProvider.KEY_BLUR_STYLE)==SettingsProvider.BLUR_STYLE_COLOR
@@ -114,6 +124,7 @@ class MainActivity : AppCompatActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         prefs = getSharedPreferences(SettingsProvider.PREFS_NAME, MODE_PRIVATE)
         SettingsDefaults.initialize(this, prefs)
+        com.cosmod.launcherglass.util.GlassLogger.enabled=bool(SettingsProvider.KEY_MODULE_LOGGING)
         if(!prefs.getBoolean("settings_cards_v2",false))prefs.edit()
             .putBoolean(SettingsProvider.KEY_MD3_UI,true).putBoolean("settings_cards_v2",true).apply()
         prefs.registerOnSharedPreferenceChangeListener(supportListener)
@@ -142,6 +153,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        overviewResumed=true
+        creditsTicker?.setRunning(true)
         if(::prefs.isInitialized) {
             refreshControls()
             updateStatus()
@@ -158,7 +171,7 @@ class MainActivity : AppCompatActivity() {
         outState.putBoolean("designExpanded", designExpanded)
         super.onSaveInstanceState(outState)
     }
-    override fun onPause() { cancelHolds.toList().forEach { it() };super.onPause() }
+    override fun onPause() { overviewResumed=false;stopModuleBlink();creditsTicker?.setRunning(false);cancelHolds.toList().forEach { it() };super.onPause() }
     override fun onDestroy() { if(::prefs.isInitialized)prefs.unregisterOnSharedPreferenceChangeListener(supportListener);executor.shutdown(); super.onDestroy() }
     private fun refreshControls() {
         updatingUi = true
@@ -451,6 +464,7 @@ class MainActivity : AppCompatActivity() {
         currentScroll?.let {scrollOffsets[visibleScreen]=it.scrollY}
         cancelHolds.toList().forEach {it()};cancelHolds.clear()
         gates.clear();resets.clear();refreshers.clear();toggleViews.clear();switches.clear();md3Resets.clear()
+        stopModuleBlink();moduleToggle=null;creditsTicker?.setRunning(false);creditsTicker=null
         statusText=null;statusDot=null;lsposedText=null;statusHint=null;fluxWarning=null
         md3=md3Requested();if(md3)Md3Guard.install(applicationContext)
         val old=activeShell
@@ -562,7 +576,7 @@ class MainActivity : AppCompatActivity() {
         })
         add(body,carousel,bottom=16)
         executor.execute {
-            val themes=try {ThemeCatalog.load(this)}catch(t:Throwable){android.util.Log.w("ColorOSGlass","Theme catalogue load failed",t);emptyList()}
+            val themes=try {ThemeCatalog.load(this)}catch(t:Throwable){com.cosmod.launcherglass.util.GlassLogger.e("Themes","Theme catalogue load failed",t);emptyList()}
             runOnUiThread {if(!isDestroyed && navigation.current==SettingsScreen.WALLPAPERS){
                 loading.text=getString(when {
                     themes.isEmpty() ->R.string.ui_theme_unavailable
@@ -605,7 +619,9 @@ class MainActivity : AppCompatActivity() {
         statusHint=text("",12f,true).apply { visibility=View.GONE }
         add(statusLabels,statusHint!!,6)
         status.addView(statusLabels,LinearLayout.LayoutParams(0,-2,1f))
-        status.addView(actions(listOf(reset(SettingsProvider.KEY_ENABLED),toggle(getString(R.string.ui_module),SettingsProvider.KEY_ENABLED))))
+        val activation=toggle(getString(R.string.ui_module),SettingsProvider.KEY_ENABLED)
+        moduleToggle=activation
+        status.addView(actions(listOf(reset(SettingsProvider.KEY_ENABLED),activation)))
         add(body,card(status),bottom=16)
         val warning=column().apply {setPadding(dp(20),dp(16),dp(20),dp(16))}
         add(warning,text(getString(R.string.ui_flux_only_title),16f,bold=true).apply {
@@ -623,6 +639,7 @@ class MainActivity : AppCompatActivity() {
             text=getString(R.string.ui_restart_launcher);isAllCaps=false;minHeight=dp(48);setIconResource(R.drawable.ic_restart)
             setOnClickListener {haptic(it);restart(it)}
         },bottom=4)
+        add(shortcuts,telegramButton(),bottom=4)
         add(shortcuts,supportButton())
         add(body,card(shortcuts),bottom=16)
         val about=column().apply { setPadding(dp(20),dp(20),dp(20),dp(12)) }
@@ -637,19 +654,18 @@ class MainActivity : AppCompatActivity() {
             }
         })
         add(about,text(getString(R.string.ui_credits_title),16f,bold=true),top=12)
-        for((label,url) in listOf(
+        val credits=listOf(
             "PixelLauncherEnhanced — Mahmud0808" to "https://github.com/Mahmud0808/PixelLauncherEnhanced",
             "@anime_killer2009" to "https://t.me/anime_killer2009",
-            "Kostubet Topics" to "https://t.me/KostubetTopics")) {
-            add(about,text(label,14f).apply {
-                setTextColor(primary);minHeight=dp(48);gravity=Gravity.CENTER_VERTICAL
-                setOnClickListener {
-                    haptic(it)
-                    try {startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(url)))}
-                    catch(_:Exception){Toast.makeText(context,getString(R.string.ui_link_error),Toast.LENGTH_SHORT).show()}
-                }
-            })
+            "Kostubet Topics" to "https://t.me/KostubetTopics",
+            getString(R.string.ui_ios_animation_author) to "https://t.me/bazik1337")
+        val ticker=CreditsTicker(this,credits,primary) {view,url ->
+            haptic(view)
+            try {startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(url)))}
+            catch(_:Exception){Toast.makeText(this,R.string.ui_link_error,Toast.LENGTH_SHORT).show()}
         }
+        creditsTicker=ticker;ticker.setRunning(overviewResumed)
+        add(about,ticker)
         add(body,card(about),top=24)
     }
     private fun buildBlurSettings(body:LinearLayout){
@@ -664,9 +680,7 @@ class MainActivity : AppCompatActivity() {
                     val quality=slider(getString(R.string.ui_blur_quality),SettingsProvider.KEY_BLUR_QUALITY,0,100,"%",getString(R.string.ui_blur_quality_hint))
                     gate(quality,::blur);add(details,quality)
                 }
-                val fps=slider(getString(R.string.ui_live_blur_fps),SettingsProvider.KEY_LIVE_FPS,1,60," FPS")
-                gate(fps) { blur() && number(SettingsProvider.KEY_BLUR_MODE)==SettingsProvider.BLUR_MODE_LIVE }
-                add(details,fps)
+
             }
             blurToneGroup(content)
             val locations=column()
@@ -704,13 +718,6 @@ class MainActivity : AppCompatActivity() {
             val tint=switchRow(getString(R.string.ui_photo_widget_tint),SettingsProvider.KEY_PHOTO_WIDGET_TINT,getString(R.string.ui_photo_widget_tint_hint))
             gate(tint){master() && blur() && bool(SettingsProvider.KEY_PHOTO_WIDGET_BLUR)}
             add(details,tint)
-            val liquid=column()
-            add(liquid,slider(getString(R.string.ui_liquid_width),SettingsProvider.KEY_PHOTO_WIDGET_LIQUID_WIDTH,0,100,"%"))
-            add(liquid,slider(getString(R.string.ui_liquid_distortion),SettingsProvider.KEY_PHOTO_WIDGET_LIQUID_DISTORTION,0,300,"%"))
-            gate(liquid){blur() && bool(SettingsProvider.KEY_PHOTO_WIDGET_BLUR) && number(SettingsProvider.KEY_BLUR_STYLE)==1}
-            liquid.visibility=if(number(SettingsProvider.KEY_BLUR_STYLE)==1)View.VISIBLE else View.GONE
-            refreshers.add {liquid.visibility=if(number(SettingsProvider.KEY_BLUR_STYLE)==1)View.VISIBLE else View.GONE}
-            add(details,liquid)
         }
     }
     private fun buildBehaviorSettings(body:LinearLayout){
@@ -752,6 +759,9 @@ class MainActivity : AppCompatActivity() {
             getString(R.string.ui_swipe_blur_fps_hint)))
         gate(swipe){blur() && number(SettingsProvider.KEY_BLUR_MODE)==SettingsProvider.BLUR_MODE_LIVE}
         add(body,swipe,bottom=12)
+        val liveFps=card(slider(getString(R.string.ui_live_blur_fps),SettingsProvider.KEY_LIVE_FPS,1,60," FPS"))
+        gate(liveFps){blur() && number(SettingsProvider.KEY_BLUR_MODE)==SettingsProvider.BLUR_MODE_LIVE}
+        add(body,liveFps,bottom=12)
         val lead=card(switchRow(getString(R.string.ui_swipe_blur_lead),SettingsProvider.KEY_SWIPE_LEAD,
             getString(R.string.ui_swipe_blur_lead_hint)))
         gate(lead){blur() && number(SettingsProvider.KEY_BLUR_MODE)==SettingsProvider.BLUR_MODE_LIVE}
@@ -1049,7 +1059,7 @@ class MainActivity : AppCompatActivity() {
     private fun styleCards(parent:LinearLayout,key:String,scoped:Boolean,allowed:()->Boolean) {
         val labels=listOf(R.string.ui_mode_frosted,R.string.ui_mode_liquid,R.string.ui_mode_color,R.string.ui_mode_kyant)
         val hints=listOf(R.string.ui_mode_frosted_hint,R.string.ui_mode_liquid_hint,R.string.ui_mode_color_hint,R.string.ui_mode_kyant_hint)
-        val modes=listOf(SettingsProvider.BLUR_STYLE_FROSTED,SettingsProvider.BLUR_STYLE_LIQUID,
+        val modes=listOf(SettingsProvider.BLUR_STYLE_FROSTED,
             SettingsProvider.BLUR_STYLE_KYANT,SettingsProvider.BLUR_STYLE_COLOR).filterNot {scoped && it==SettingsProvider.BLUR_STYLE_COLOR}
         val choices=modes.associateWith {index ->
             ModeChoiceCard(this,getString(labels[index]),getString(hints[index])).apply {
@@ -1067,49 +1077,13 @@ class MainActivity : AppCompatActivity() {
         refreshers.add {choices.forEach {(index,choice) -> choice.chosen=number(key)==index}}
     }
     private fun lensControls(parent:LinearLayout,key:(String)->String,allowed:()->Boolean) {
-        val controls=column()
-        collapsibleGroup(controls,getString(R.string.ui_refraction_settings),key(SettingsProvider.KEY_LIQUID_WIDTH),expanded=true) {details ->
-            add(details,slider(getString(R.string.ui_liquid_width),key(SettingsProvider.KEY_LIQUID_WIDTH),0,100,"%"))
-            add(details,slider(getString(R.string.ui_liquid_distortion),key(SettingsProvider.KEY_LIQUID_DISTORTION),0,300,"%"))
-        }
-        fun selected()=number(key(SettingsProvider.KEY_BLUR_STYLE))==SettingsProvider.BLUR_STYLE_LIQUID
-        controls.visibility=if(selected())View.VISIBLE else View.GONE
-        refreshers.add {controls.visibility=if(selected())View.VISIBLE else View.GONE}
-        gate(controls){allowed() && selected()};add(parent,controls,bottom=8)
         val kyant=column()
         collapsibleGroup(kyant,getString(R.string.ui_mode_kyant),key(SettingsProvider.KEY_KYANT_WIDTH),expanded=true) {details ->
-            val magnifier=key(SettingsProvider.KEY_KYANT_MAGNIFIER)
-            val controlCenter=key(SettingsProvider.KEY_KYANT_CONTROL_CENTER)
-            val group=RadioGroup(this).apply {setPadding(dp(16),0,dp(16),0)}
-            val lenses=listOf(R.string.ui_kyant_basic,R.string.ui_kyant_magnifier,R.string.ui_kyant_control_center).map {label ->
-                com.google.android.material.radiobutton.MaterialRadioButton(this).apply {
-                    id=View.generateViewId()
-                    text=getString(label)
-                    minHeight=dp(48)
-                    group.addView(this)
-                }
-            }
-            fun syncLens(){group.check(lenses[if(bool(controlCenter))2 else if(bool(magnifier))1 else 0].id)}
-            syncLens()
-            refreshers.add(::syncLens)
-            group.setOnCheckedChangeListener { _,id ->
-                val index=lenses.indexOfFirst {it.id==id}
-                if(!updatingUi && index>=0){
-                    haptic(lenses[index])
-                    prefs.edit().putBoolean(magnifier,index==1).putBoolean(controlCenter,index==2).apply()
-                    contentResolver.notifyChange(SettingsProvider.CONTENT_URI,null)
-                    updateGates()
-                }
-            }
-            add(details,group)
-            add(details,slider(getString(R.string.ui_liquid_width),key(SettingsProvider.KEY_KYANT_WIDTH),0,100,"%"))
-            add(details,slider(getString(R.string.ui_liquid_distortion),key(SettingsProvider.KEY_KYANT_DISTORTION),0,100,"%"))
-            add(details,slider(getString(R.string.ui_kyant_highlight),key(SettingsProvider.KEY_KYANT_HIGHLIGHT),0,100,"%"))
-            add(details,slider(getString(R.string.ui_kyant_dispersion),key(SettingsProvider.KEY_KYANT_DISPERSION),0,100,"%"))
-            val zoomSlider=slider(getString(R.string.ui_kyant_zoom),key(SettingsProvider.KEY_KYANT_ZOOM),0,100,"%")
-            gate(zoomSlider){bool(magnifier)}
-            add(details,zoomSlider)
-            add(details,slider(getString(R.string.ui_kyant_vibrancy),key(SettingsProvider.KEY_KYANT_VIBRANCY),0,200,"%"))
+            add(details,slider(getString(R.string.ui_liquid_width),key(SettingsProvider.KEY_KYANT_WIDTH),0,300,"%"))
+            add(details,slider(getString(R.string.ui_liquid_distortion),key(SettingsProvider.KEY_KYANT_DISTORTION),0,300,"%"))
+            add(details,slider(getString(R.string.ui_kyant_highlight),key(SettingsProvider.KEY_KYANT_HIGHLIGHT),0,300,"%"))
+            add(details,slider(getString(R.string.ui_kyant_dispersion),key(SettingsProvider.KEY_KYANT_DISPERSION),0,300,"%"))
+            add(details,slider(getString(R.string.ui_kyant_vibrancy),key(SettingsProvider.KEY_KYANT_VIBRANCY),0,400,"%"))
         }
         fun kyantSelected()=number(key(SettingsProvider.KEY_BLUR_STYLE))==SettingsProvider.BLUR_STYLE_KYANT
         fun showKyant(){kyant.visibility=if(kyantSelected())View.VISIBLE else View.GONE}
@@ -1283,7 +1257,6 @@ class MainActivity : AppCompatActivity() {
         toggleViews.add(this to key)
     }
     private fun resetKeys(key: String): List<String> = when (key) {
-        SettingsProvider.KEY_COLOR_DEPTH_ENABLED -> listOf(key,SettingsProvider.KEY_COLOR_DEPTH_BITS,SettingsProvider.KEY_COLOR_DEPTH_STAGE)
         SettingsProvider.KEY_COLOR_MODE -> listOf(key,
             SettingsProvider.KEY_ICON_APPEARANCE, SettingsProvider.KEY_CLEAR_BRIGHTNESS,
             SettingsProvider.KEY_COLOR_HUE, SettingsProvider.KEY_COLOR_SATURATION, SettingsProvider.KEY_COLOR_BRIGHTNESS) +
@@ -1547,33 +1520,6 @@ class MainActivity : AppCompatActivity() {
         add(parent,card(group,true),top=8,bottom=4)
     }
 
-    private fun colorDepthStages(parent:LinearLayout){
-        add(parent,text(getString(R.string.ui_color_depth_stage),16f,true).apply {setPadding(dp(20),dp(12),dp(20),0)})
-        val group=RadioGroup(this).apply {setPadding(dp(20),0,dp(20),dp(8))}
-        val ids=mutableMapOf<Int,Int>()
-        for((stage,label) in listOf(0 to R.string.ui_depth_before_blur,1 to R.string.ui_depth_after_blur,
-            2 to R.string.ui_depth_after_refraction,3 to R.string.ui_depth_finished)){
-            val button=com.google.android.material.radiobutton.MaterialRadioButton(this).apply {
-                id=View.generateViewId();text=getString(label);textSize=14f;minHeight=dp(48);tag=stage
-            }
-            group.addView(button);ids[stage]=button.id
-        }
-        var refreshing=false
-        fun refresh(){refreshing=true;ids[number(SettingsProvider.KEY_COLOR_DEPTH_STAGE)]?.let(group::check);refreshing=false}
-        refresh()
-        group.setOnCheckedChangeListener { _,id ->
-            if(!refreshing && !updatingUi){
-                val button=group.findViewById<View>(id)
-                val stage=button?.tag as? Int
-                if(stage!=null){haptic(button);save(SettingsProvider.KEY_COLOR_DEPTH_STAGE,stage)}
-            }
-        }
-        refreshers.add(::refresh)
-        gate(group){bool(SettingsProvider.KEY_DEVELOPER_MODE) && bool(SettingsProvider.KEY_COLOR_DEPTH_ENABLED)}
-        add(parent,group)
-        add(parent,text(getString(R.string.ui_material_order),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
-    }
-
     /** Experimental variants for plate-less picture icons (games, photos, gradients). */
     private fun artworkIcons(parent:LinearLayout){
         add(parent,text(getString(R.string.ui_artwork_icons),16f,true).apply {setPadding(dp(20),dp(12),dp(20),0)})
@@ -1581,6 +1527,19 @@ class MainActivity : AppCompatActivity() {
         gate(control){bool(SettingsProvider.KEY_DEVELOPER_MODE)}
         add(parent,control)
         add(parent,text(getString(R.string.ui_artwork_icons_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
+    }
+
+    private fun telegramButton()=com.google.android.material.button.MaterialButton(this).apply {
+        text="CherryPick TG";isAllCaps=false;setSingleLine(true)
+        minHeight=dp(48);insetTop=0;insetBottom=0;cornerRadius=dp(16)
+        setIconResource(R.drawable.ic_telegram);iconSize=dp(24)
+        backgroundTintList=ColorStateList.valueOf(Color.rgb(34,158,217))
+        setTextColor(Color.WHITE);iconTint=ColorStateList.valueOf(Color.WHITE)
+        setOnClickListener {
+            haptic(it)
+            try {startActivity(Intent(Intent.ACTION_VIEW,Uri.parse("https://t.me/CherryPickIcons")))}
+            catch(_:Exception){Toast.makeText(context,R.string.ui_telegram_error,Toast.LENGTH_SHORT).show()}
+        }
     }
 
     private fun supportButton() = com.google.android.material.button.MaterialButton(this).apply {
@@ -1649,34 +1608,32 @@ class MainActivity : AppCompatActivity() {
         gate(bootToast){bool(SettingsProvider.KEY_BOOT_RESTART)}
         add(bootRestart,bootToast)
         add(body,card(bootRestart),bottom=12)
+        add(body,card(column().apply {
+            add(this,switchRow(getString(R.string.ui_hide_home_gesture_bar),SettingsProvider.KEY_HIDE_HOME_GESTURE_BAR))
+            add(this,text(getString(R.string.ui_hide_home_gesture_bar_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
+        }),bottom=12)
         settingsTransferSection(body)
     }
     private fun buildDeveloperSettings(body:LinearLayout){
         val developer=column()
         add(developer,switchRow(getString(R.string.ui_developer_mode),SettingsProvider.KEY_DEVELOPER_MODE))
         val developerOptions=column()
+        add(developerOptions,switchRow(getString(R.string.ui_music_island_expansion),SettingsProvider.KEY_MUSIC_ISLAND_EXPANSION,
+            getString(R.string.ui_music_island_expansion_hint)))
+        divider(developerOptions)
+        add(developerOptions,slider(getString(R.string.ui_dock_blur_y),SettingsProvider.KEY_DOCK_BLUR_Y,-120,120,"dp"))
+        add(developerOptions,slider(getString(R.string.ui_dock_blur_height),SettingsProvider.KEY_DOCK_BLUR_HEIGHT,50,200,"%"))
+        divider(developerOptions)
+        add(developerOptions,slider(getString(R.string.ui_flight_icon_reveal),SettingsProvider.KEY_FLIGHT_ICON_REVEAL,100,400,"%"))
         divider(developerOptions)
         add(developerOptions,switchRow(getString(R.string.ui_module_logging),SettingsProvider.KEY_MODULE_LOGGING,
             getString(R.string.ui_module_logging_hint)))
         divider(developerOptions)
         add(developerOptions,switchRow(getString(R.string.ui_gpu_effects),SettingsProvider.KEY_GPU_EFFECTS))
         add(developerOptions,text(getString(R.string.ui_gpu_effects_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
-        add(developerOptions,switchRow(getString(R.string.ui_experimental_liquid),SettingsProvider.KEY_EXPERIMENTAL_LIQUID))
-        add(developerOptions,text(getString(R.string.ui_experimental_liquid_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
         divider(developerOptions)
-        add(developerOptions,switchRow(getString(R.string.ui_color_depth),SettingsProvider.KEY_COLOR_DEPTH_ENABLED))
-        add(developerOptions,text(getString(R.string.ui_color_depth_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
-        val colorDepth=slider(getString(R.string.ui_color_depth_bits),SettingsProvider.KEY_COLOR_DEPTH_BITS,8,24," bit")
-        gate(colorDepth){bool(SettingsProvider.KEY_DEVELOPER_MODE) && bool(SettingsProvider.KEY_COLOR_DEPTH_ENABLED)}
-        add(developerOptions,colorDepth)
-        colorDepthStages(developerOptions)
-        divider(developerOptions)
-        add(developerOptions,switchRow(getString(R.string.ui_haze_test),SettingsProvider.KEY_HAZE_ENABLED))
-        add(developerOptions,text(getString(R.string.ui_haze_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
         add(developerOptions,switchRow(getString(R.string.ui_smooth_swipe_lead),SettingsProvider.KEY_SMOOTH_SWIPE_LEAD))
         add(developerOptions,text(getString(R.string.ui_smooth_swipe_lead_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
-        add(developerOptions,switchRow(getString(R.string.ui_haze_bloom),SettingsProvider.KEY_HAZE_BLOOM))
-        add(developerOptions,text(getString(R.string.ui_haze_bloom_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
         divider(developerOptions)
         add(developerOptions,switchRow(getString(R.string.ui_disable_edge_optimization),SettingsProvider.KEY_DISABLE_EDGE_OPTIMIZATION))
         add(developerOptions,text(getString(R.string.ui_disable_edge_optimization_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
@@ -1686,12 +1643,6 @@ class MainActivity : AppCompatActivity() {
         divider(developerOptions)
         add(developerOptions,switchRow(getString(R.string.ui_limit_closing_blur),SettingsProvider.KEY_LIMIT_CLOSING_BLUR))
         add(developerOptions,text(getString(R.string.ui_limit_closing_blur_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
-        add(developerOptions,switchRow(getString(R.string.ui_dock_event_driven),SettingsProvider.KEY_DOCK_EVENT_DRIVEN))
-        add(developerOptions,text(getString(R.string.ui_dock_event_driven_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
-        add(developerOptions,switchRow(getString(R.string.ui_compact_dock_effects),SettingsProvider.KEY_COMPACT_DOCK_EFFECTS))
-        add(developerOptions,text(getString(R.string.ui_compact_dock_effects_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
-        add(developerOptions,switchRow(getString(R.string.ui_reuse_static_wallpaper),SettingsProvider.KEY_REUSE_STATIC_WALLPAPER))
-        add(developerOptions,text(getString(R.string.ui_reuse_static_wallpaper_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
         add(developerOptions,switchRow(getString(R.string.ui_scene_drag_backdrop),SettingsProvider.KEY_SCENE_DRAG_BACKDROP))
         add(developerOptions,text(getString(R.string.ui_scene_drag_backdrop_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})
         divider(developerOptions)
@@ -1708,12 +1659,30 @@ class MainActivity : AppCompatActivity() {
     private fun updateFluxWarning() {
         fluxWarning?.visibility=if(::prefs.isInitialized && prefs.getInt(SettingsProvider.KEY_NATIVE_FLUX_SUPPORT,0)==2)View.VISIBLE else View.GONE
     }
+    private fun stopModuleBlink(){
+        moduleBlink?.cancel();moduleBlink=null
+        moduleBlinkTarget?.alpha=1f;moduleBlinkTarget=null
+    }
+    private fun updateModuleBlink(blink:Boolean){
+        val target=moduleToggle?.let {if(it is SquareAction)it.glyph else it}
+        if(!blink || target==null){stopModuleBlink();return}
+        if(moduleBlinkTarget===target && moduleBlink!=null)return
+        stopModuleBlink();moduleBlinkTarget=target
+        moduleBlink=ValueAnimator.ofFloat(1f,.25f,1f).apply {
+            duration=1300L;repeatCount=ValueAnimator.INFINITE
+            addUpdateListener {target.alpha=it.animatedValue as Float}
+            start()
+        }
+    }
     private fun updateStatus() {
         updateFluxWarning()
         val lspActive=scopeState?.enabled ?: isModuleActive()
         val missing=lspActive && scopeState?.launcherSelected==false
         val unverified=lspActive && scopeState==null
         val active=lspActive && !missing && master()
+        val ready=scopeState?.let {it.enabled && it.launcherSelected}==true
+        val prompt=ready && !master()
+        updateModuleBlink(prompt && overviewResumed && navigation.current==SettingsScreen.HOME)
         lsposedText?.text=if(lspActive)getString(R.string.ui_lsposed_enabled) else getString(R.string.ui_lsposed_disabled)
         statusText?.text=if(active)getString(R.string.ui_cherrypick_enabled) else getString(R.string.ui_cherrypick_disabled)
         val dot=when {
@@ -1723,10 +1692,11 @@ class MainActivity : AppCompatActivity() {
         }
         statusDot?.backgroundTintList=ColorStateList.valueOf(dot)
         statusHint?.apply {
-            visibility=if(missing || unverified)View.VISIBLE else View.GONE
-            text=if(missing)getString(R.string.ui_scope_missing) else getString(R.string.ui_scope_unknown)
+            visibility=if(missing || unverified || prompt)View.VISIBLE else View.GONE
+            text=if(missing)getString(R.string.ui_scope_missing) else if(unverified)getString(R.string.ui_scope_unknown)
+                else getString(R.string.ui_enable_module_hint)
         }
-        statusText?.contentDescription="${lsposedText?.text}. ${statusText?.text}. ${statusHint?.text.takeIf { missing || unverified } ?: ""}"
+        statusText?.contentDescription="${lsposedText?.text}. ${statusText?.text}. ${statusHint?.text.takeIf { missing || unverified || prompt } ?: ""}"
     }
     private fun restartButton(): View {
         val shape=GradientDrawable().apply {

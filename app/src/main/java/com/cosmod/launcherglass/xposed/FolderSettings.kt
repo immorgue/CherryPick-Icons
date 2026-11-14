@@ -32,6 +32,8 @@ internal open class ScopedGlassSettings(private val keys:ScopedSettingsKeys,priv
         signature.add(bundle.getBoolean(keys.own,false))
         signature.add(bundle.getBoolean(SettingsProvider.KEY_DEVELOPER_MODE,false))
         signature.add(PrefsHelper.iconPalette)
+        signature.add(PrefsHelper.kyantGlass)
+        signature.add(PrefsHelper.kyant)
         keys.integers.forEach {signature.add(bundle.getInt(keys.key(it),SettingsDefaults.integer(it)))}
         keys.booleans.forEach {signature.add(bundle.getBoolean(keys.key(it),SettingsDefaults.boolean(it)))}
         if(stamp==signature)return false
@@ -43,9 +45,9 @@ internal open class ScopedGlassSettings(private val keys:ScopedSettingsKeys,priv
         val tone=bool(SettingsProvider.KEY_BLUR_TONE_ENABLED)
         val radius=if(bool(SettingsProvider.KEY_BLUR_RADIUS_ENABLED))number(SettingsProvider.KEY_BLUR_RADIUS,50)else 0
         val quality=if(developer)number(SettingsProvider.KEY_BLUR_QUALITY,100)else 0
-        val mode=number(SettingsProvider.KEY_BLUR_STYLE,SettingsProvider.BLUR_STYLE_KYANT)
-        val kyant=mode==SettingsProvider.BLUR_STYLE_KYANT && Build.VERSION.SDK_INT>=33
-        val liquid=kyant || (mode==SettingsProvider.BLUR_STYLE_LIQUID && Build.VERSION.SDK_INT>=33)
+        val mode=com.cosmod.launcherglass.util.MaterialMode.normalize(number(SettingsProvider.KEY_BLUR_STYLE,SettingsProvider.BLUR_STYLE_KYANT))
+        val kyant=(mode!=SettingsProvider.BLUR_STYLE_COLOR) && Build.VERSION.SDK_INT>=33
+        val liquid=kyant && mode!=SettingsProvider.BLUR_STYLE_FROSTED
         val vibrancy=if(tone)number(SettingsProvider.KEY_BLUR_VIBRANCY,200)else 0
         processing=Processing(radius,quality,vibrancy,if(tone)number(SettingsProvider.KEY_BLUR_LIGHTENING,100)else 50,liquid,kyant)
         saturation=if(tone)number(SettingsProvider.KEY_BLUR_SATURATION,200)else 100
@@ -53,7 +55,7 @@ internal open class ScopedGlassSettings(private val keys:ScopedSettingsKeys,priv
             number(SettingsProvider.KEY_LIQUID_DISTORTION,300),radius,if(tone)number(SettingsProvider.KEY_BG_OPACITY,100)else 0,
             PrefsHelper.backdropFilter(vibrancy,PrefsHelper.iconPalette),folder,
             PrefsHelper.plateColor(PrefsHelper.iconPalette.background,saturation),
-            kyant=if(kyant)KyantOptics.read(bundle,keys::key)else null)
+            kyant=if(kyant)KyantOptics.read(bundle,keys::key).forMode(mode)else null)
         return true
     }
 }

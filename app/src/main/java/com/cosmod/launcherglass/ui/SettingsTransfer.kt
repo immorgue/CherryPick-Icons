@@ -69,14 +69,18 @@ internal object SettingsTransfer {
         com.cosmod.launcherglass.util.DesktopSizing.ranges[base]?.let {return it.first.toLong()..it.last.toLong()}
         SettingsProvider.APP_ANIMATION_RANGES[base]?.let {return it.first.toLong()..it.last.toLong()}
         return when (base) {
+            SettingsProvider.KEY_DOCK_BLUR_HEIGHT -> 50L..200L
+            SettingsProvider.KEY_DOCK_BLUR_Y -> -120L..120L
+            SettingsProvider.KEY_FLIGHT_ICON_REVEAL -> 100L..400L
+            SettingsProvider.KEY_KYANT_WIDTH, SettingsProvider.KEY_KYANT_DISTORTION,
+            SettingsProvider.KEY_KYANT_HIGHLIGHT, SettingsProvider.KEY_KYANT_DISPERSION -> 0L..300L
+            SettingsProvider.KEY_KYANT_VIBRANCY -> 0L..400L
             SettingsProvider.KEY_COLOR_HUE, SettingsProvider.KEY_LIGHT_HUE, SettingsProvider.KEY_DARK_HUE -> 0L..360L
             SettingsProvider.KEY_BLUR_SATURATION, SettingsProvider.KEY_BLUR_VIBRANCY -> 0L..200L
             SettingsProvider.KEY_LIQUID_DISTORTION, SettingsProvider.KEY_PHOTO_WIDGET_LIQUID_DISTORTION -> 0L..300L
             SettingsProvider.KEY_BLUR_RADIUS -> 0L..50L
             SettingsProvider.KEY_LIVE_FPS -> 1L..60L
             SettingsProvider.KEY_SWIPE_FPS -> 1L..120L
-            SettingsProvider.KEY_COLOR_DEPTH_BITS -> 8L..24L
-            SettingsProvider.KEY_COLOR_DEPTH_STAGE -> 0L..3L
             SettingsProvider.KEY_DOCK_SIDE_PADDING, SettingsProvider.KEY_DOCK_VERTICAL_PADDING -> 0L..SettingsProvider.DOCK_PADDING_MAX.toLong()
             SettingsProvider.KEY_BLUR_STYLE -> 0L..SettingsProvider.BLUR_STYLE_KYANT.toLong()
             SettingsProvider.KEY_BLUR_MODE,

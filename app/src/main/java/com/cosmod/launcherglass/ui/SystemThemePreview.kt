@@ -44,6 +44,6 @@ object SystemThemePreview {
             val result=start.invoke(service,*parameters) as Number
             check(result.toInt()>=0){"System theme launch failed: $result"}
             kotlin.system.exitProcess(0)
-        }catch(t:Throwable){t.printStackTrace();kotlin.system.exitProcess(1)}
+        }catch(t:Throwable){com.cosmod.launcherglass.util.GlassLogger.e("Themes","System theme preview failed",t);kotlin.system.exitProcess(1)}
     }
 }

@@ -24,7 +24,7 @@ PR #2 Liquid optics have a separate developer switch, off by default. The deskto
 
 ### Возможности
 
-\- Матовые подложки Frosted и резкое преломление Liquid Glass без размытия, с мягким свечением и дымкой.<br>
+\- Frosted на базе Kyant без преломления и Liquid Glass Kyant с настраиваемым преломлением и бликом по краям.<br>
 \- Конструктор рабочего стола: сетка 4–6 столбцов и 5–8 строк, предпросмотр страниц и размеров элементов, штатное перетаскивание иконок и виджетов. Проверка размещения и запрет удаления элементов при переносе. Нестандартные сетки экспериментальны; смена сетки может переставить элементы.<br>
 \- Общие размеры иконок и папок, отступы индикатора, внешние поля совместимых виджетов и выравнивание рабочего стола ближе к доку. Применяются после перезапуска лаунчера без переноса элементов по ячейкам.<br>
 \- Живое и статичное размытие обоев, общий лимит обновлений материала до 60 FPS.<br>
@@ -104,7 +104,7 @@ and creating the interface.
 
 ### Features
 
-\- Frosted backgrounds and sharp Liquid Glass refraction without blur, with soft bloom and haze.<br>
+\- Kyant-based Frosted without refraction and Liquid Glass Kyant with adjustable refraction and edge highlights.<br>
 \- Desktop designer: 4–6 columns and 5–8 rows, page and item-footprint previews, and native icon/widget dragging. Placement validation and item deletion protection during migration. Custom grids are experimental; changing the grid can rearrange items.<br>
 \- Shared icon/folder size, page-indicator spacing, supported widget exterior padding and workspace alignment towards the dock. Applied after restarting the launcher without changing item cell positions.<br>
 \- Live and static wallpaper blur, with a shared material update limit of up to 60 FPS.<br>
@@ -162,6 +162,7 @@ validation artifacts and are not included in the published source.
 
 Thanks to [PixelLauncherEnhanced](https://github.com/Mahmud0808/PixelLauncherEnhanced) / Mahmud0808 for permission to use the files.
 Thanks to [@anime_killer2009](https://t.me/anime_killer2009) and [Kostubet Topics](https://t.me/KostubetTopics) for their help.
+iOS animation physics author: [@bazik1337](https://t.me/bazik1337).
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for adaptation details.
 License: [GNU GPL v3](COPYING).
 

@@ -84,12 +84,12 @@
     <string name="ui_report_creating">Creating ZIP report…</string>
     <string name="ui_limit_closing_blur">Closing icon blur: 30 FPS limit</string>
     <string name="ui_limit_closing_blur_hint">Limits blur updates while an icon or multi-icon folder flies back to the desktop. Turn off to use the global blur FPS setting. The icon motion keeps the launcher’s native frame rate. Outside developer mode the 30 FPS limit applies.</string>
-    <string name="ui_dock_event_driven">Dock and blur: event-driven refresh</string>
-    <string name="ui_compact_dock_effects">Dock: compact effects buffer (experimental)</string>
-    <string name="ui_compact_dock_effects_hint">Processes dock effects in the lower screen region instead of a full-screen buffer, with padding for motion and blur. Compare app closing smoothness; turn off if the dock clips during animation. Developer mode only.</string>
-    <string name="ui_reuse_static_wallpaper">Reuse static wallpaper (experimental)</string>
-    <string name="ui_reuse_static_wallpaper_hint">Checks the system wallpaper ID on app return and reuses the processed static background. Wallpaper and processing settings changes still invalidate the cache. Not applied to live wallpapers or system wallpaper effects. Developer mode only.</string>
-    <string name="ui_dock_event_driven_hint">Refreshes the dock plate and the icon blur only when something actually changed, and lands deferred blur samples on the next frame instead of a timer. Turn off to compare with the previous per-frame behaviour. Outside developer mode this stays on.</string>
+
+
+
+
+
+
     <string name="ui_support_project">Support the project</string>
     <string name="ui_author_profile">by @immorgue — Telegram profile</string>
     <string name="ui_telegram_error">Could not open Telegram</string>
@@ -133,13 +133,13 @@
     <string name="ui_folder_mode_icons">Same as icons</string>
     <string name="ui_folder_mode_own">Currently using custom settings</string>
     <string name="ui_photo_widget_tint">Use icon color</string>
-    <string name="ui_color_depth">Limit blur color depth</string>
+
     <string name="ui_optimize_mini_icons">Folder mini-icons: 30 FPS</string>
     <string name="ui_optimize_mini_icons_hint">Limits small icons in 1×1 folders and tiny previews in large folders to 30 FPS. Blur stays enabled; refraction is disabled for these miniatures. Large icons follow the global blur limit; limits below 30 FPS also apply to miniatures.</string>
     <string name="ui_artwork_icons">Icons without a plate (experimental)</string>
     <string name="ui_artwork_transparency">Tint transparency</string>
     <string name="ui_artwork_icons_hint">For icons that are a full picture without a single-colour plate (games, photos, gradients): the picture is recoloured into the palette tones and the glass shows through it. Works in developer mode.</string>
-    <string name="ui_color_depth_bits">Color depth</string>
+
     <string name="ui_md3_interface">Material 3 interface (experimental)</string>
     <string name="ui_md3_interface_hint">Standard Material 3 layout for this settings app: top app bar, list rows with switches and supporting text, reset with confirmation. Changes only this screen; the classic interface stays the default. Active while developer mode is on; if the app crashes with it, it switches itself off.</string>
     <string name="ui_reset_defaults">Reset to defaults</string>
@@ -148,15 +148,15 @@
     <string name="ui_cancel">Cancel</string>
     <string name="ui_disable_edge_optimization">Disable icon edge optimization</string>
     <string name="ui_disable_edge_optimization_hint">Force icon blur updates at and beyond the screen edges during motion.</string>
-    <string name="ui_color_depth_hint">Limits color levels at the selected processing stage. 24 bits preserves full color; 8 bits gives strong color bands (RGB 3:3:2).</string>
-    <string name="ui_color_depth_stage">Color depth processing stage</string>
+
+
     <string name="ui_depth_before_blur">Before blur</string>
     <string name="ui_depth_after_blur">After blur · before refraction</string>
     <string name="ui_depth_after_refraction">After refraction · before plate</string>
     <string name="ui_depth_finished">Finished plate · previous behavior</string>
     <string name="ui_material_order">Order: blur → refraction → plate and shading → logo and contour. Above blur and below refraction refer to the same stage.</string>
-    <string name="ui_haze_test">iOS haze · experimental</string>
-    <string name="ui_haze_hint">An experimental approximation: reduced contrast and a broad luminous veil on the glass. Blur radius works as usual, including 0. Logo and contour are preserved. Independent of color depth.</string>
+
+
     <string name="ui_photo_widget_tint_hint">Off: original photo colors. On: match icon color.</string>
     <string name="ui_presets">Settings presets</string>
     <string name="ui_gpu_effects">GPU effects</string>
@@ -217,6 +217,7 @@
     <string name="ui_theme_system_apply_hint">Browse your saved themes. The checkmark opens the selected theme in the system editor; its Apply button preserves the full system theme.</string>
     <string name="ui_theme_android_hint">Saved system themes are not exposed on this firmware. Showing the current wallpaper and installed live wallpaper services; their system preview handles application.</string>
     <string name="ui_static_animation_blur">Static blur during animations</string>
+    <string name="ui_flight_icon_reveal">Flying icon reveal size</string>
     <string name="ui_module_logging">Module logging</string>
     <string name="ui_module_logging_hint">Write CherryPick diagnostics from the launcher to logcat and LSPosed.</string>
     <string name="ui_app_animation_title">App animations</string>
@@ -231,8 +232,8 @@
     <string name="ui_app_animation_slowdown">Transition slowdown</string>
     <string name="ui_app_animation_timing_hint">Spring settings apply on compatible launcher versions. A shorter response opens apps faster.</string>
     <string name="ui_static_animation_blur_hint">Keeps the blur snapshot for the entire open and close animation. Live blur fades in after the icon returns.</string>
-    <string name="ui_haze_bloom">Haze: colored glow · experimental</string>
-    <string name="ui_haze_bloom_hint">Intensifies bright colors already spread by the blur and deepens shadows. Requires iOS haze. No additional texture samples or blur passes; at radius 0 there is no broad halo. Off by default.</string>
+
+
     <string name="ui_smooth_swipe_lead">Smooth swipe anticipation · experimental</string>
     <string name="ui_smooth_swipe_lead_hint">Smooths only the predictive offset while swiping. Uses the selected blur FPS; no separate 120 Hz update loop. Off by default.</string>
     <string name="ui_desktop_positions">Vertical positions</string>
@@ -244,7 +245,7 @@
     <string name="ui_desktop_positions_hint">Tap the grid, page dots or dock in the diagram, then move the slider below. The named buttons select the same elements.</string>
     <string name="ui_material_mode">Appearance mode</string>
     <string name="ui_material_mode_hint">Choose color, frosted glass or liquid glass.</string>
-    <string name="ui_mode_frosted">Frosted glass</string>
+    <string name="ui_mode_frosted">Frosted (Kyant)</string>
     <string name="ui_mode_frosted_hint">Soft blurred background with your icon colors.</string>
     <string name="ui_mode_liquid">Liquid glass</string>
     <string name="ui_mode_liquid_hint">Glass with refraction and a live background.</string>
@@ -278,4 +279,12 @@
     <string name="ui_swipe_blur_lead">Blur anticipation while swiping</string>
     <string name="ui_swipe_blur_lead_hint">Turn off to sample the background at its current position. The swipe FPS limit still applies.</string>
     <string name="ui_swipe_blur_fps_hint">Applies while swiping between home screens. App animations use the regular limit.</string>
+    <string name="ui_hide_home_gesture_bar">Transparent home gesture bar</string>
+    <string name="ui_hide_home_gesture_bar_hint">Hides only the gesture handle on the home screen. Gestures and spacing stay unchanged. Requires System UI in the module’s LSPosed scope and a System UI restart.</string>
+    <string name="ui_ios_animation_author">iOS animations — @bazik1337</string>
+    <string name="ui_enable_module_hint">Ready to go. Tap the cross to enable CherryPick.</string>
+    <string name="ui_dock_blur_height">Dock blur height</string>
+    <string name="ui_dock_blur_y">Dock blur vertical position</string>
+    <string name="ui_music_island_expansion">Music island: expand in place</string>
+    <string name="ui_music_island_expansion_hint">Expands the native music card from its island over the status bar. Tap outside to collapse. Experimental ColorOS integration; requires System UI in LSPosed scope.</string>
 </resources>

@@ -12,12 +12,11 @@ import android.graphics.Shader
 import android.hardware.HardwareBuffer
 import android.media.ImageReader
 import android.os.SystemClock
-import com.cosmod.launcherglass.xposed.ColorDepthEffect
 import com.cosmod.launcherglass.xposed.PrefsHelper
 
 /** Accessed only by CosmodWallpaper's single worker, never by the UI thread. */
 object GpuWallpaperBlur {
-    private class Target(private val name: String, private val material: Boolean = false) {
+    private class Target(private val name: String) {
         private var reader: ImageReader? = null
         private var renderer: HardwareRenderer? = null
         private val node = RenderNode(name)
@@ -25,8 +24,6 @@ object GpuWallpaperBlur {
         private var effectRadius = -1f
         private var effectTone = Int.MIN_VALUE
         private var effectVibrancy = -1
-        private var effectDepthBits = -1
-        private var effectDepthStage = -1
         private var outputWidth = 0
         private var outputHeight = 0
 
@@ -76,18 +73,16 @@ object GpuWallpaperBlur {
 
         private fun record(source: Bitmap, width: Int, height: Int, radius: Float,level:Int,vibrancy:Int) {
             val actualRadius=radius
-            val bits=if(material)PrefsHelper.colorDepthBits else 24
-            val stage=if(material)PrefsHelper.colorDepthStage else ColorDepthEffect.FINISHED_PLATE
-            if (effectRadius != actualRadius || effectTone != level || effectVibrancy != vibrancy || effectDepthBits!=bits || effectDepthStage!=stage) {
+            if (effectRadius != actualRadius || effectTone != level || effectVibrancy != vibrancy) {
                 val vivid=BackdropVibrancy.effect(vibrancy)
-                val color=if(material)ColorDepthEffect.at(vivid,ColorDepthEffect.BEFORE_BLUR)else vivid
+                val color=vivid
                 val blur=if(actualRadius>0f){
                     if(color!=null)RenderEffect.createBlurEffect(actualRadius,actualRadius,color,Shader.TileMode.CLAMP)
                     else RenderEffect.createBlurEffect(actualRadius,actualRadius,Shader.TileMode.CLAMP)
                 }else color
                 val toned=ShadowTone.effect(blur,level)
-                node.setRenderEffect(if(material)ColorDepthEffect.at(toned,ColorDepthEffect.AFTER_BLUR)else toned)
-                effectRadius = actualRadius;effectTone=level;effectVibrancy=vibrancy;effectDepthBits=bits;effectDepthStage=stage
+                node.setRenderEffect(toned)
+                effectRadius = actualRadius;effectTone=level;effectVibrancy=vibrancy
             }
             val canvas = node.beginRecording(width, height)
             try {
@@ -111,9 +106,9 @@ object GpuWallpaperBlur {
         HardwareRenderer::class.java.getDeclaredMethod("createHardwareBitmap",
             RenderNode::class.java, Int::class.javaPrimitiveType, Int::class.javaPrimitiveType).apply { isAccessible = true }
     } catch (_: Throwable) { null }
-    private val blurTarget = Target("CosmodBlur",true)
-    private val folderTarget = Target("CherryPickFolderBlur",true)
-    private val dockTarget = Target("CherryPickDockBlur",true)
+    private val blurTarget = Target("CosmodBlur")
+    private val folderTarget = Target("CherryPickFolderBlur")
+    private val dockTarget = Target("CherryPickDockBlur")
     private val sampleTarget = Target("CosmodMotionSample")
     private var count = 0
     private var elapsedMs = 0L

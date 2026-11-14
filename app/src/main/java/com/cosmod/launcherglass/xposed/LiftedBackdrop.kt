@@ -183,7 +183,7 @@ internal object LiftedBackdrop {
     fun allowed()=installed && prepared && !broken && !lockedOut && Build.VERSION.SDK_INT>=33 &&
         PrefsHelper.sceneDragBackdrop &&
         PrefsHelper.enabled && PrefsHelper.blurEnabled && PrefsHelper.gpuEffects &&
-        ModuleHooks.isActive && !ColorDepthEffect.finalPlate
+        ModuleHooks.isActive
 
     /** The DragView was observed from construction without a hook gap and never drawn foreign. */
     fun permits(dragView:View)=main && dragViews[dragView]==ModuleHooks.epoch && !poisoned.containsKey(dragView)

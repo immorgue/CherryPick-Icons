@@ -16,11 +16,10 @@ object IconMaterialRenderer {
     private data class Key(
         val mask: Bitmap, val contourMask:Bitmap, val glyph: Bitmap, val width: Int, val height: Int,
         val color: Int, val opacity: Int, val hideGlyph: Boolean, val blurred: Boolean,
-        val gradient: Int, val stroke: Int, val shadow: Int, val glyphStroke: Int, val glyphStrokeWidth: Int, val glyphStrokeBrightness: Int,
-        val depthBits:Int,val depthStage:Int
+        val gradient: Int, val stroke: Int, val shadow: Int, val glyphStroke: Int, val glyphStrokeWidth: Int, val glyphStrokeBrightness: Int
     )
 
-    private class Material(val overlay: Bitmap, val foreground:Bitmap?,val mask: BitmapShader?,val rounding:Float,val maskImage:Bitmap) {
+    private class Material(val overlay: Bitmap, val mask: BitmapShader?,val rounding:Float,val maskImage:Bitmap) {
         var wallpaperComposite:Shader?=null
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
         val matrix = Matrix()
@@ -32,16 +31,13 @@ object IconMaterialRenderer {
         var appliedStyle:GlassStyle?=null
         var appliedHardware:Boolean?=null
         val clock=SampleFrameClock()
-        var backgroundNode:RenderNode?=null
-        var backgroundEffectKey=-1
-        var shaderSerial=0L
-        var backgroundSerial=-1L
+        var parentRevision=-1L
     }
 
     // Eviction only drops Java references: recorded display lists can still own
     // textures, so never recycle a bitmap that has been submitted for drawing.
     private val cache = object : LruCache<Key, Material>(24 * 1024 * 1024) {
-        override fun sizeOf(key: Key, value: Material) = value.overlay.allocationByteCount + (value.foreground?.allocationByteCount ?: 0) + 512
+        override fun sizeOf(key: Key, value: Material) = value.overlay.allocationByteCount + 512
     }
     // The long-lived material submitter owns its shaders and nodes. OEM helper
     // threads keep using the shared cache: some launchers replace those threads
@@ -49,7 +45,7 @@ object IconMaterialRenderer {
     private class RecordingCache {
         var revision=-1
         val materials=object:LruCache<Key,Material>(4*1024*1024){
-            override fun sizeOf(key:Key,value:Material)=value.overlay.allocationByteCount+(value.foreground?.allocationByteCount ?: 0)+512
+            override fun sizeOf(key:Key,value:Material)=value.overlay.allocationByteCount+512
         }
     }
     @Volatile private var recordingRevision=0
@@ -64,7 +60,6 @@ object IconMaterialRenderer {
         var wallpaper:Bitmap?=null
         var source:RectF?=null
         var style:GlassStyle?=null
-        var finish=-1
         val clock=SampleFrameClock()
     }
     private data class CpuFrameKey(val material:Key,val owner:CpuFrameOwner?,val source:RectF?)
@@ -96,8 +91,7 @@ object IconMaterialRenderer {
         var returnStartedNs=0L
         var returnFromLive=false
         var staticReturn=NativeSurfaceLive.staticFlightReturn
-        var staticReturnSource:RectF?=null
-        var staticReturnStartedNs=0L
+        var staticHeld=false
         private val predictedSource=RectF()
         private val smoothLead=SmoothSwipeLead()
         private var leadFrame=-1L
@@ -134,7 +128,6 @@ object IconMaterialRenderer {
         var mini=false
         var lastUpdateNs=0L
         val clock=SampleFrameClock()
-        var finishKey=-1
         var backdropRevision=0L
         var lift:Lift?=null
         var origin:WeakReference<View>?=null
@@ -166,7 +159,6 @@ object IconMaterialRenderer {
             }
             // source may already match the final crop while the node still
             // holds a blend effect. Force one fresh effect, not a view redraw.
-            sampler.finishKey=-1
         }
         // The native parent can reuse its list when only nested node properties
         // changed. Record the owner only if its retained material was lost.
@@ -201,7 +193,6 @@ object IconMaterialRenderer {
         var usedFrame=0L
         var topW=0
         var topH=0
-        var finishKey=Int.MIN_VALUE
         var blurKey:List<Any?>?=null
         var effectKey:List<Any?>?=null
         var sceneStamp:Stamp?=null
@@ -244,7 +235,7 @@ object IconMaterialRenderer {
         pendingFrames[root]=refresh
         // While the workspace moves, the next frame has to carry the new crop.
         // A timer would add a whole display frame of visible lag.
-        if(!cadenceOnly && PrefsHelper.dockEventDriven && com.cosmod.launcherglass.util.LiveBlurEngine.hasRecentMotion) root.postOnAnimation(refresh)
+        if(!cadenceOnly && com.cosmod.launcherglass.util.LiveBlurEngine.hasRecentMotion) root.postOnAnimation(refresh)
         else mainHandler.postDelayed(refresh,((remainingNs+999_999L)/1_000_000L).coerceAtLeast(1L))
     }
     private val outputPaint = Paint(Paint.FILTER_BITMAP_FLAG)
@@ -335,37 +326,44 @@ object IconMaterialRenderer {
         for(sampler in entries.values)if(!sampler.node.hasDisplayList() || sampler.plateNode?.hasDisplayList()==false)return true
         return false
     }
+    private fun holdWorkspaceSample(view:View?,sampler:Sampler):Boolean =
+        view!=null && PrefsHelper.staticAnimationBlur && !NativeSurfaceLive.isSampling && !sampler.style.folder &&
+        !com.cosmod.launcherglass.util.LiveBlurEngine.isWorkspaceScrolling &&
+        !com.cosmod.launcherglass.util.LiveBlurEngine.isEditing &&
+        com.cosmod.launcherglass.util.LiveBlurEngine.freezeAnimationWallpaper &&
+        sampler.appliedStyle==sampler.style && sampler.source!=null && sampler.presentedEffect!=null
+
     private fun samplerEffect(sampler:Sampler,wallpaper:Bitmap,rawSource:RectF,nowNs:Long=System.nanoTime(),view:View?=null,
         parent:ParentBackdrop.Sample?=null,correctWorkspacePose:Boolean=false):Boolean {
         val style=sampler.style
         val filter=style.filter
-        val finishKey=MaterialFinish.key()
         if(sampler.appliedStyle!=style){
             sampler.returnEffect=null
             sampler.returnBackdrop=null
-            sampler.staticReturnSource=null
+            sampler.staticHeld=false
         }
         val workspaceMaterial=view!=null && !NativeSurfaceLive.isSampling && !style.folder &&
             !com.cosmod.launcherglass.util.LiveBlurEngine.isWorkspaceScrolling &&
             !com.cosmod.launcherglass.util.LiveBlurEngine.isEditing
-        if(workspaceMaterial && NativeSurfaceLive.hasStaticFlight && !sampler.returnPending &&
-            sampler.appliedStyle==style && sampler.source!=null && sampler.presentedEffect!=null)return true
+        if(holdWorkspaceSample(view,sampler)){
+            sampler.staticHeld=true
+            // Do not acknowledge the animated world matrix: the retained crop
+            // still belongs to the last resting desktop frame.
+            return false
+        }
         val returnEpoch=NativeSurfaceLive.staticFlightReturn
-        if(sampler.staticReturn!=returnEpoch){
+        if(sampler.staticHeld || sampler.staticReturn!=returnEpoch){
             sampler.staticReturn=returnEpoch
-            sampler.staticReturnSource=null
-            if(workspaceMaterial && sampler.appliedStyle==style && !sampler.returnPending){
-                if(sampler.wallpaper===wallpaper && sampler.source!=rawSource){
-                    sampler.staticReturnSource=sampler.source
-                    sampler.staticReturnStartedNs=nowNs
-                }else if(sampler.wallpaper!==wallpaper && sampler.presentedEffect!=null){
-                    sampler.returnEffect=sampler.presentedEffect
-                    sampler.returnStartedNs=nowNs
-                    sampler.returnFromLive=false
-                }
+            sampler.staticHeld=false
+            if(workspaceMaterial && sampler.appliedStyle==style && !sampler.returnPending &&
+                (sampler.wallpaper!==wallpaper || sampler.source!=rawSource) && sampler.presentedEffect!=null){
+                // Dissolve complete images; interpolating their crop moves the
+                // refracted background visibly when the OEM removes home zoom.
+                sampler.returnEffect=sampler.presentedEffect
+                sampler.returnStartedNs=nowNs
+                sampler.returnFromLive=false
             }
         }
-        if(!workspaceMaterial || sampler.returnPending)sampler.staticReturnSource=null
         val blending=sampler.returnEffect!=null || sampler.returnBackdrop!=null
         if(blending && sampler.returnStartedNs==0L)sampler.returnStartedNs=nowNs
         val fade=if(blending)StaticBlurTiming.returnProgress(nowNs-sampler.returnStartedNs,sampler.returnFromLive)else 1f
@@ -380,27 +378,17 @@ object IconMaterialRenderer {
         val finalPose=correctWorkspacePose && view?.rootView?.let {
             com.cosmod.launcherglass.util.LiveBlurEngine.finalWorkspaceFrame(it)
         }==true
-        val start=sampler.staticReturnSource
-        val source=if(start!=null){
-            val p=StaticBlurTiming.returnProgress(nowNs-sampler.staticReturnStartedNs,live=true)
-            if(p>=1f){sampler.staticReturnSource=null;rawSource}
-            else {
-                scheduleSampleRefresh(view,1_000_000_000L/fps)
-                RectF(start.left+(rawSource.left-start.left)*p,start.top+(rawSource.top-start.top)*p,
-                    start.right+(rawSource.right-start.right)*p,start.bottom+(rawSource.bottom-start.bottom)*p)
-            }
-        }else if(finalPose)rawSource else sampler.predict(rawSource,swipe && compatible,nowNs,allowTail)
+        val source=if(finalPose)rawSource else sampler.predict(rawSource,swipe && compatible,nowNs,allowTail)
         // Correct the retained lead immediately when motion ends. Never
         // leave a predicted crop on a stationary icon.
         val settlePrediction=sampler.predictionApplied && source==rawSource
-        val contentMatches=sampler.wallpaper===wallpaper && sampler.filter===filter && sampler.appliedStyle==style && sampler.finishKey==finishKey
-        if(!blending && contentMatches && sampler.source==source && sampler.backdropRevision==(parent?.revision ?: 0L)){sampler.returnPending=false;return true}
-        // These nodes belong to visible workspace views, not to the opening
-        // surface snapshot. Follow the OEM view transform even while launching:
-        // freezing here made an interrupted launch jump when HOME resumed it.
+        val contentMatches=sampler.wallpaper===wallpaper && sampler.filter===filter && sampler.appliedStyle==style
+        if(!sampler.returnPending && !blending && contentMatches && sampler.source==source && sampler.backdropRevision==(parent?.revision ?: 0L)){sampler.returnPending=false;return true}
+        // With static flight enabled the retained resting crop survives the
+        // OEM home transform. Resume sampling only after the return hold.
         // The global blur limit applies to every material. Mini previews may
         // lower that limit to 30; neither draw path bypasses the same clock.
-        if(sampler.source!=null && sampler.appliedStyle==style && sampler.finishKey==finishKey){
+        if(sampler.source!=null && sampler.appliedStyle==style){
             val remaining=sampler.clock.remainingNs(nowNs,fps)
             val correct=finalPose || (correctWorkspacePose && fps>60)
             if(remaining>0L && !correct && !NativeSurfaceLive.isSampling && !settlePrediction && !sampler.returnPending && !(blending && fade>=1f)){scheduleSampleRefresh(view,remaining,smoothTail);return false}
@@ -412,8 +400,8 @@ object IconMaterialRenderer {
         if(sampler.returnPending && sampler.returnStartedNs==nowNs){
             val flight=sampler.returnBackdrop?.takeUnless {it.wallpaper.isRecycled}
             if(flight!=null){
-                sampler.returnEffect=if(flight.wallpaper===wallpaper && flight.source==source && parent==null)
-                    null else backdropEffect(sampler,flight.wallpaper,flight.source,null)
+                sampler.returnEffect=if(flight.wallpaper===wallpaper && flight.source==source && flight.parentRevision==(parent?.revision ?: 0L))
+                    null else backdropEffect(sampler,flight.wallpaper,flight.source,parent)
             }
             sampler.returnBackdrop=null
             if(sampler.returnEffect!=null)GlassLogger.animationLimited("LiveSurface","return-dissolve",100){
@@ -426,11 +414,10 @@ object IconMaterialRenderer {
         else if(sampler.returnEffect!=null)scheduleSampleRefresh(view,1_000_000_000L/fps)
         sampler.wallpaper=wallpaper;sampler.source=RectF(source);sampler.filter=filter;sampler.appliedStyle=style
         sampler.previousSource=RectF(rawSource);sampler.previousSourceFrame=frameSerial
-        sampler.predictionApplied=start==null && source!=rawSource
+        sampler.predictionApplied=source!=rawSource
         if(smoothTail && sampler.predictionApplied)
             scheduleSampleRefresh(view,1_000_000_000L/fps,cadenceOnly=true)
         sampler.lastUpdateNs=nowNs
-        sampler.finishKey=finishKey
         sampler.backdropRevision=parent?.revision ?: 0L
         sampler.returnPending=false
         // A correction after native computeScroll belongs to the slot that
@@ -441,7 +428,7 @@ object IconMaterialRenderer {
     private fun backdropEffect(sampler:Sampler,wallpaper:Bitmap,source:RectF,parent:ParentBackdrop.Sample?):RenderEffect {
         val style=sampler.style
         val filter=style.filter
-        val refracted=if(android.os.Build.VERSION.SDK_INT>=33 && style.liquid) {
+        val refracted=if(android.os.Build.VERSION.SDK_INT>=33 && style.kyant!=null) {
             // createShaderEffect() snapshots the shader, so every sampler can
             // share one compiled lens instead of compiling SkSL per icon.
             LiquidGlassShader.shared()?.update(wallpaper,sampler.material.mask!!,source,sampler.node.width,sampler.node.height,filter,sampler.material.rounding,style,parent?.shader)
@@ -454,7 +441,7 @@ object IconMaterialRenderer {
             }
         var effect=RenderEffect.createShaderEffect(background)
         if(filter!=null && refracted==null)effect=RenderEffect.createColorFilterEffect(filter,effect)
-        return MaterialFinish.effect(effect,sampler.node.width,sampler.node.height) ?: effect
+        return effect
     }
 
     private fun sampleFps(workspace:Boolean,mini:Boolean):Int {
@@ -492,12 +479,13 @@ object IconMaterialRenderer {
         var folderImage:Bitmap?=null
         for((drawable,sampler) in entries){
             restored=restoreSample(sampler) || restored
+            if(holdWorkspaceSample(view,sampler)){sampler.staticHeld=true;continue}
             val scope=sampler.origin?.get() ?: view
             val image=if(sampler.style.folder){
                 folderImage ?: (com.cosmod.launcherglass.util.WallpaperHelper.getFolderWallpaper(view.context) ?: wallpaper).also {folderImage=it}
             }else DockMaterial.iconWallpaper(scope,wallpaper)
             val parent=ParentBackdrop.resolve(scope,drawable,image,includeHidden=sampler.origin?.get()!=null)
-            if(sampler.returnEffect==null && sampler.staticReturnSource==null && !sampler.predictionApplied && sampler.worldValid && sampler.world==world && sampler.scroll==scroll && sampler.wallpaper===image && sampler.appliedStyle==sampler.style && sampler.finishKey==MaterialFinish.key() && sampler.backdropRevision==(parent?.revision ?: 0L)){
+            if(sampler.returnEffect==null && !sampler.staticHeld && sampler.staticReturn==NativeSurfaceLive.staticFlightReturn && !sampler.predictionApplied && sampler.worldValid && sampler.world==world && sampler.scroll==scroll && sampler.wallpaper===image && sampler.appliedStyle==sampler.style && sampler.backdropRevision==(parent?.revision ?: 0L)){
                 sampler.staticReturn=NativeSurfaceLive.staticFlightReturn
                 continue
             }
@@ -535,7 +523,7 @@ object IconMaterialRenderer {
         // Mini folder previews retain blur/tint, but do not run a separate
         // refraction shader for each tiny tile. The same policy applies to
         // GPU samplers, CPU fallback and transition recordings.
-        val style=if(!MiniIconRefresh.refraction(style.liquid,binding?.mini==true,PrefsHelper.optimizeMiniIcons))style.copy(liquid=false,kyant=null)else style
+        val style=if(style.liquid && !MiniIconRefresh.refraction(style.liquid,binding?.mini==true,PrefsHelper.optimizeMiniIcons))style.copy(liquid=false,kyant=null)else style
         // Frosted radius 0 needs no wallpaper sample. Liquid keeps its sharp
         // backdrop for refraction even when its blur radius is zero.
         val clear = clearGlass(style)
@@ -548,7 +536,7 @@ object IconMaterialRenderer {
             if (PrefsHelper.glyphShadow) PrefsHelper.shadowOpacity else 0,
             if (PrefsHelper.glyphStroke) PrefsHelper.glyphStrokeOpacity else 0,
             if (PrefsHelper.glyphStroke) PrefsHelper.glyphStrokeWidth else 0,
-            if (PrefsHelper.glyphStroke) PrefsHelper.glyphStrokeBrightness else 0,PrefsHelper.colorDepthBits,PrefsHelper.colorDepthStage)
+            if (PrefsHelper.glyphStroke) PrefsHelper.glyphStrokeBrightness else 0)
         if(!PrefsHelper.gpuEffects && canvas.isHardwareAccelerated){
             // Identical icons can occupy different wallpaper regions and need independent FPS clocks.
             val frameKey=CpuFrameKey(key,binding?.let {CpuFrameOwner(it.view,it.drawable)},
@@ -565,7 +553,7 @@ object IconMaterialRenderer {
                     footprint=WallpaperFootprint.source(wallpaper,binding.screenW,binding.screenH,rect)
                 }catch(_:Throwable){}
             }
-            val changed=frame.bitmap==null || frame.wallpaper!==wallpaper || frame.source!=footprint || frame.style!=style || frame.finish!=MaterialFinish.key()
+            val changed=frame.bitmap==null || frame.wallpaper!==wallpaper || frame.source!=footprint || frame.style!=style
             val now=System.nanoTime()
             val fps=sampleFps(binding)
             val remaining=frame.clock.remainingNs(now,fps)
@@ -573,7 +561,7 @@ object IconMaterialRenderer {
                 val bitmap=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888)
                 val software=wallpaper?.let {com.cosmod.launcherglass.util.WallpaperHelper.forCanvas(it,Canvas(bitmap))}
                 draw(Canvas(bitmap),Rect(0,0,width,height),mask,glyph,color,tintAlpha,hideGlyph,software,footprint,null,volume,style,contourMask,buildOverlay)
-                frame.bitmap=bitmap;frame.wallpaper=wallpaper;frame.source=footprint?.let(::RectF);frame.style=style;frame.finish=MaterialFinish.key();frame.clock.record(now,fps)
+                frame.bitmap=bitmap;frame.wallpaper=wallpaper;frame.source=footprint?.let(::RectF);frame.style=style;frame.clock.record(now,fps)
             }else if(changed)scheduleSampleRefresh(binding?.view,remaining)
             frame.bitmap?.let {canvas.drawBitmap(it,null,bounds,outputPaint)}
             return
@@ -603,25 +591,15 @@ object IconMaterialRenderer {
                     target.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
                 }
             }
-            // Quantize the completed plate while preserving foreground artwork.
-            val foreground=if(blurred && ColorDepthEffect.finalPlate && !hideGlyph)Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888)else null
-            buildOverlay(foreground?.let {Canvas(it)} ?: target, Rect(0, 0, width, height), blurred)
-            material = Material(overlay,foreground,maskShader,GlassGeometry.rounding(mask),mask)
+            buildOverlay(target, Rect(0, 0, width, height), blurred)
+            material = Material(overlay,maskShader,GlassGeometry.rounding(mask),mask)
             cache.put(key, material)
             builds++
         }
         val save = canvas.save()
         try {
             canvas.translate(bounds.left.toFloat(), bounds.top.toFloat())
-            val finalDepth=blurred && ColorDepthEffect.finalPlate
-            val depthNode=if(finalDepth && canvas.isHardwareAccelerated)
-                RenderNode("CherryPick.colorDepth").apply {
-                    setPosition(0,0,width,height)
-                    if(android.os.Build.VERSION.SDK_INT>=33)setRenderEffect(ColorDepthEffect.effect(PrefsHelper.colorDepthBits))
-                } else null
-            val softwarePlate=if(finalDepth && !canvas.isHardwareAccelerated)Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888)else null
-            val plate=depthNode?.beginRecording(width,height) ?: softwarePlate?.let(::Canvas) ?: canvas
-            try {
+            val plate=canvas
             if (wallpaper != null && source != null && material.mask != null) {
                 val borrowed=if(binding?.foreign==true && canvas.isHardwareAccelerated)foreignSampler(binding,material,width,height)else null
                 if(borrowed!=null){
@@ -659,7 +637,7 @@ object IconMaterialRenderer {
                         sampler.screenW=binding.screenW;sampler.screenH=binding.screenH
                         sampler.source=null;sampler.worldValid=false
                     }
-                    sampler.style=style;sampler.plateNode=depthNode;sampler.mini=binding.mini;sampler.bound=frameSerial
+                    sampler.style=style;sampler.plateNode=null;sampler.mini=binding.mini;sampler.bound=frameSerial
                     if(sampler.origin?.get()!==binding.origin){
                         sampler.origin=binding.origin?.let {WeakReference(it)};sampler.worldValid=false
                     }
@@ -683,7 +661,8 @@ object IconMaterialRenderer {
                     val nowNs=System.nanoTime()
                     val fps=sampleFps(binding)
                     val hardware=canvas.isHardwareAccelerated
-                    val changed=material.wallpaper!==wallpaper || material.source!=source || material.appliedStyle!=style || material.appliedHardware!=hardware
+                    val parent=if(hardware)DockMaterial.nativeParentBackdrop(NativeSurfaceLive.materialSource)else null
+                    val changed=material.wallpaper!==wallpaper || material.source!=source || material.appliedStyle!=style || material.appliedHardware!=hardware || material.parentRevision!=(parent?.revision ?: 0L)
                     // Software canvases are often one-shot launcher snapshots:
                     // there may be no later draw on which to repair a stale
                     // crop. Apply the current source immediately. This does
@@ -692,11 +671,11 @@ object IconMaterialRenderer {
                     // A second clock here could submit a new buffer with the
                     // preceding crop, causing visible steps even at 60 FPS.
                     if(changed && (NativeSurfaceLive.isSampling || !hardware || material.paint.shader==null || material.appliedStyle!=style || material.appliedHardware!=hardware || material.clock.remainingNs(nowNs,fps)==0L)){
-                    val refracted=if(style.liquid && !canvas.isHardwareAccelerated){
+                    val refracted=if(style.kyant!=null && !canvas.isHardwareAccelerated){
                         CpuLiquidGlass.shader(wallpaper,mask,width,height,source,material.rounding,style)
-                    }else if(android.os.Build.VERSION.SDK_INT>=33 && style.liquid && canvas.isHardwareAccelerated){
+                    }else if(android.os.Build.VERSION.SDK_INT>=33 && style.kyant!=null && canvas.isHardwareAccelerated){
                         val lens=material.liquid ?: LiquidGlassShader.create().also {material.liquid=it}
-                        lens?.update(wallpaper,material.mask!!,source,width,height,style.filter,material.rounding,style)
+                        lens?.update(wallpaper,material.mask!!,source,width,height,style.filter,material.rounding,style,parent?.shader)
                     }else null
                     if(refracted!=null){
                         material.paint.shader=refracted
@@ -707,52 +686,22 @@ object IconMaterialRenderer {
                             material.wallpaperShader = GlassGeometry.wallpaperShader(wallpaper)
                         }
                         material.matrix.setRectToRect(RectF(source), RectF(0f,0f,width.toFloat(),height.toFloat()), Matrix.ScaleToFit.FILL)
-                        material.wallpaperShader!!.setLocalMatrix(material.matrix)
-                        material.wallpaperComposite = ComposeShader(material.wallpaperShader!!, material.mask!!, PorterDuff.Mode.DST_IN)
+                        val texture=parent?.shader?.let {
+                            ComposeShader(it,LinearGradient(0f,0f,1f,0f,Color.TRANSPARENT,Color.TRANSPARENT,Shader.TileMode.CLAMP),PorterDuff.Mode.SRC_OVER)
+                        } ?: material.wallpaperShader!!
+                        texture.setLocalMatrix(material.matrix)
+                        material.wallpaperComposite = ComposeShader(texture, material.mask!!, PorterDuff.Mode.DST_IN)
                     material.paint.shader=material.wallpaperComposite
                     material.paint.colorFilter = style.filter
                     }
                     material.wallpaper=wallpaper;material.source=RectF(source);material.appliedStyle=style
-                    material.appliedHardware=hardware
+                    material.appliedHardware=hardware;material.parentRevision=parent?.revision ?: 0L
                     material.clock.record(nowNs,fps)
-                    material.shaderSerial++
                     }
-                    if(MaterialFinish.needed()){
-                        if(canvas.isHardwareAccelerated){
-                            val node=material.backgroundNode ?: RenderNode("CherryPick.opticalFinish").apply {
-                                setPosition(0,0,width,height);material.backgroundNode=this
-                            }
-                            val finishKey=MaterialFinish.key()
-                            if(material.backgroundEffectKey!=finishKey){
-                                node.setRenderEffect(MaterialFinish.effect(null,width,height));material.backgroundEffectKey=finishKey
-                            }
-                            if(!node.hasDisplayList() || material.backgroundSerial!=material.shaderSerial){
-                                val recording=node.beginRecording(width,height)
-                                try {recording.drawRect(0f,0f,width.toFloat(),height.toFloat(),material.paint)}finally{node.endRecording()}
-                                material.backgroundSerial=material.shaderSerial
-                            }
-                            plate.drawRenderNode(node)
-                        }else{
-                            val bitmap=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888)
-                            Canvas(bitmap).drawRect(0f,0f,width.toFloat(),height.toFloat(),material.paint)
-                            val finished=MaterialFinish.applyCpu(bitmap)
-                            plate.drawBitmap(finished,0f,0f,outputPaint)
-                            if(finished!==bitmap)finished.recycle()
-                            bitmap.recycle()
-                        }
-                    }else plate.drawRect(0f,0f,width.toFloat(),height.toFloat(),material.paint)
+                    plate.drawRect(0f,0f,width.toFloat(),height.toFloat(),material.paint)
                 }
             }
             plate.drawBitmap(material.overlay, 0f, 0f, outputPaint)
-            } finally {depthNode?.endRecording()}
-            depthNode?.let {canvas.drawRenderNode(it)}
-            softwarePlate?.let {
-                val processed=ColorDepthEffect.applyCpu(it,PrefsHelper.colorDepthBits)
-                canvas.drawBitmap(processed,0f,0f,outputPaint)
-                if(processed!==it)processed.recycle()
-                it.recycle()
-            }
-            material.foreground?.let {canvas.drawBitmap(it,0f,0f,outputPaint)}
         } finally { canvas.restoreToCount(save) }
         draws++
         if (draws == 1 || draws % 2000 == 0) {
@@ -761,7 +710,7 @@ object IconMaterialRenderer {
     }
 
     /** Liquid always needs a backdrop for refraction, even with the blur switch off. */
-    fun clearGlass(style:GlassStyle)=style.colorOnly || (style.kyant?.needsBackdrop!=true && !com.cosmod.launcherglass.util.LiquidOptics.needsBackdrop(style.radius,style.liquid,style.experimentalOptics))
+    fun clearGlass(style:GlassStyle)=style.colorOnly || (style.kyant?.needsBackdrop!=true && style.radius<=0)
 
     /** The sampler an element's own draw bound for [material], preferring its latest. */
     private fun foreignSampler(binding:Binding,material:Material,width:Int,height:Int):Sampler? {
@@ -941,10 +890,10 @@ object IconMaterialRenderer {
         // sampler survives the preference transition for one frame.
         if(clearGlass(style))return false
         val scale=toNode.mapRadius(1f).coerceIn(.05f,20f)
-        val screenRadius=com.cosmod.launcherglass.util.LiquidOptics.blurRadius(style.radius.coerceIn(0,50),sampler.screenH,style.liquid,style.experimentalOptics)
+        val screenRadius=com.cosmod.launcherglass.util.LiquidOptics.blurRadius(style.radius.coerceIn(0,50),sampler.screenH,style.liquid)
         val radius=kotlin.math.round(screenRadius*scale*4f)/4f
         val edge=minOf(w,h).toFloat()
-        val liquid=style.liquid && material.mask!=null
+        val liquid=style.kyant!=null && material.mask!=null
         val lens=if(liquid)minOf(edge*.15f*maxOf(style.distortion/50f,.2f),edge*.5f)else 0f
         val margin=kotlin.math.round(1.5f*radius+lens+2f).toInt().coerceIn(4,256)
         val wrapperW=w+2*margin
@@ -959,14 +908,14 @@ object IconMaterialRenderer {
         val processing=if(style.folder && FolderSettings.own)FolderSettings.processing else null
         val vibrancy=processing?.vibrancy ?: PrefsHelper.blurVibrancy
         val lightening=processing?.lightening ?: PrefsHelper.blurLightening
-        val blurKey=listOf<Any?>(radius,vibrancy,lightening,PrefsHelper.colorDepthBits,PrefsHelper.colorDepthStage)
+        val blurKey=listOf<Any?>(radius,vibrancy,lightening)
         if(lift.blurKey!=blurKey){
-            val vivid=ColorDepthEffect.at(com.cosmod.launcherglass.util.BackdropVibrancy.effect(vibrancy),ColorDepthEffect.BEFORE_BLUR)
+            val vivid=com.cosmod.launcherglass.util.BackdropVibrancy.effect(vibrancy)
             val blur=if(radius>0f){
                 if(vivid!=null)RenderEffect.createBlurEffect(radius,radius,vivid,Shader.TileMode.DECAL)
                 else RenderEffect.createBlurEffect(radius,radius,Shader.TileMode.DECAL)
             }else vivid
-            lift.scene.setRenderEffect(ColorDepthEffect.at(com.cosmod.launcherglass.util.ShadowTone.effect(blur,lightening),ColorDepthEffect.AFTER_BLUR))
+            lift.scene.setRenderEffect(com.cosmod.launcherglass.util.ShadowTone.effect(blur,lightening))
             lift.blurKey=blurKey
         }
         val sceneNumbers=ArrayList<Float>()
@@ -1043,12 +992,7 @@ object IconMaterialRenderer {
         }
 
         // Top: plate-sized optical finish, alpha of the element.
-        val finishKey=if(MaterialFinish.needed())MaterialFinish.key()else -1
-        if(lift.finishKey!=finishKey || lift.topW!=w || lift.topH!=h){
-            lift.top.setPosition(0,0,w,h)
-            lift.top.setRenderEffect(if(finishKey>=0)MaterialFinish.effect(null,w,h)else null)
-            lift.finishKey=finishKey
-        }
+        if(lift.topW!=w || lift.topH!=h)lift.top.setPosition(0,0,w,h)
         if(lift.topW!=w || lift.topH!=h || !lift.top.hasDisplayList()){
             val canvas=lift.top.beginRecording(w,h)
             try {canvas.drawRenderNode(lift.wrapper)}finally{lift.top.endRecording()}

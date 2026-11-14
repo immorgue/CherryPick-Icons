@@ -35,7 +35,6 @@ import android.graphics.Matrix
 import android.graphics.Shader
 
 import com.cosmod.launcherglass.xposed.PrefsHelper
-import com.cosmod.launcherglass.xposed.ColorDepthEffect
 
 import java.io.File
 
@@ -96,6 +95,7 @@ object WallpaperHelper {
     }
     private fun publishFolder(candidate:Bitmap){
         for(own in listOf(folderOwn,dockOwn))own.published=synchronized(own.candidates){own.candidates.remove(candidate)}
+        if(appContext?.let {!isLiveWallpaper(it)}==true && !LiveBlurEngine.freezeAnimationWallpaper)staticDockWallpaper=null
     }
     private fun withFolder(candidate:Bitmap,raw:Bitmap):Bitmap {
         for(own in listOf(folderOwn,dockOwn))if(own.active())withOwn(own,candidate,raw)
@@ -114,7 +114,7 @@ object WallpaperHelper {
         val options=own.settings.processing
         val h=minOf(600+options.quality*12,raw.height)
         val w=(raw.width.toFloat()*h/raw.height).roundToInt().coerceAtLeast(1)
-        val radius=LiquidOptics.blurRadius(options.radius,h,options.liquid,PrefsHelper.experimentalLiquid && !options.kyant)
+        val radius=LiquidOptics.blurRadius(options.radius,h,options.liquid)
         val gpuImage=if(PrefsHelper.gpuEffects)try {
             val input=if(android.os.Build.VERSION.SDK_INT<33)BackdropVibrancy.applyCpu(raw,options.vibrancy)else raw
             val gpu=try {
@@ -130,11 +130,11 @@ object WallpaperHelper {
             val scaled=Bitmap.createScaledBitmap(raw,w,h,true)
             val software=if(scaled.config==Bitmap.Config.HARDWARE)scaled.copy(Bitmap.Config.ARGB_8888,false) ?: return else scaled
             val vivid=BackdropVibrancy.applyCpu(software,options.vibrancy)
-            val input=ColorDepthEffect.atCpu(vivid,ColorDepthEffect.BEFORE_BLUR)
+            val input=vivid
             val actualRadius=radius
             val blurred=if(actualRadius>0f)FastBlur.blur(input,actualRadius.roundToInt().coerceAtLeast(1))else input.copy(Bitmap.Config.ARGB_8888,false)
             val toned=ShadowTone.applyCpu(blurred,options.lightening)
-            val output=ColorDepthEffect.atCpu(toned,ColorDepthEffect.AFTER_BLUR)
+            val output=toned
             if(toned!==blurred && output!==toned)toned.recycle()
             if(output!==blurred)blurred.recycle()
             if(input!==vivid)input.recycle()
@@ -181,7 +181,7 @@ object WallpaperHelper {
     @Synchronized fun onStaticCaptureSettled() {
         if(!PrefsHelper.enabled || !PrefsHelper.backdropEnabled)return
         snapshotTimeMs=0L
-        invalidate(preserveStaticDock=true)
+        invalidate(preserveStaticDock=false)
     }
 
     private var cachedRevision = -1L
@@ -223,7 +223,7 @@ object WallpaperHelper {
 
             try {
 
-                if (!valid() || !PrefsHelper.enabled || !PrefsHelper.backdropEnabled || (!LiveBlurEngine.isResumed && !com.cosmod.launcherglass.xposed.NativeSurfaceLive.active) ||
+                if (LiveBlurEngine.freezeAnimationWallpaper || !valid() || !PrefsHelper.enabled || !PrefsHelper.backdropEnabled || (!LiveBlurEngine.isResumed && !com.cosmod.launcherglass.xposed.NativeSurfaceLive.active) ||
 
                     (LiveBlurEngine.isAppLaunchInProgress && !com.cosmod.launcherglass.xposed.NativeSurfaceLive.active)) return@execute
 
@@ -241,7 +241,7 @@ object WallpaperHelper {
 
                     if (candidate != null) synchronized(this) {
 
-                        if (valid() && revision == sourceRevision && radius == (if(PrefsHelper.colorOnly)0 else PrefsHelper.blurRadius).coerceIn(0, 50) &&
+                        if (!LiveBlurEngine.freezeAnimationWallpaper && valid() && revision == sourceRevision && radius == (if(PrefsHelper.colorOnly)0 else PrefsHelper.blurRadius).coerceIn(0, 50) &&
 
                             PrefsHelper.enabled && ((LiveBlurEngine.isResumed && !LiveBlurEngine.isAppLaunchInProgress) || com.cosmod.launcherglass.xposed.NativeSurfaceLive.active)) {
 
@@ -452,16 +452,14 @@ object WallpaperHelper {
         // Resume after an app hands back the same wallpaper as a new wrapper.
         // Re-blurring identical content is a full-screen burst in the middle of
         // the return animation, so only a real content change invalidates.
-        val staticId=if(PrefsHelper.reuseStaticWallpaper)try {
+        val staticId=try {
             appContext?.takeIf {!isLiveWallpaper(it) && !hasSystemWallpaperEffect(it)}?.let {
                 WallpaperManager.getInstance(it).getWallpaperId(WallpaperManager.FLAG_SYSTEM)
             } ?: -1
-        }catch(_:Throwable){-1}else -1
-        val sameContent = if(PrefsHelper.reuseStaticWallpaper)
-            staticId>=0 && staticId==launcherStaticWallpaperId && launcherWallpaper?.get()!=null
-        else launcherWallpaperGeneration == bitmap.generationId &&
-            launcherWallpaperWidth == bitmap.width && launcherWallpaperHeight == bitmap.height &&
-            launcherWallpaper?.get() != null
+        }catch(_:Throwable){-1}
+        val sameContent = if(staticId>=0)staticId==launcherStaticWallpaperId && launcherWallpaper?.get()!=null
+        else launcherWallpaperGeneration==bitmap.generationId && launcherWallpaperWidth==bitmap.width &&
+            launcherWallpaperHeight==bitmap.height && launcherWallpaper?.get()!=null
         launcherWallpaper = WeakReference(bitmap)
         launcherWallpaperGeneration = bitmap.generationId
         launcherWallpaperWidth = bitmap.width
@@ -684,7 +682,7 @@ object WallpaperHelper {
 
             val targetW = ((rawBitmap.width.toFloat() / rawBitmap.height.toFloat()) * targetH).roundToInt().coerceAtLeast(1)
 
-            val effectRadius = LiquidOptics.blurRadius(radius,targetH,PrefsHelper.liquidGlass,PrefsHelper.experimentalLiquid && !PrefsHelper.kyantGlass)
+            val effectRadius = LiquidOptics.blurRadius(radius,targetH,PrefsHelper.liquidGlass)
 
             if(PrefsHelper.gpuEffects)try {
 
@@ -720,7 +718,7 @@ object WallpaperHelper {
             } else scaled
 
             val vibrant=BackdropVibrancy.applyCpu(software,PrefsHelper.blurVibrancy)
-            val input=ColorDepthEffect.atCpu(vibrant,ColorDepthEffect.BEFORE_BLUR)
+            val input=vibrant
             val actualRadius=effectRadius
 
             val blurred = try {
@@ -752,7 +750,7 @@ object WallpaperHelper {
             }
 
             val toned=ShadowTone.applyCpu(blurred,PrefsHelper.blurLightening)
-            val processed=ColorDepthEffect.atCpu(toned,ColorDepthEffect.AFTER_BLUR)
+            val processed=toned
             if(toned!==blurred && processed!==toned)toned.recycle()
             if(processed!==blurred)blurred.recycle()
             return withFolder(processed,rawBitmap)

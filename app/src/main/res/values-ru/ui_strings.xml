@@ -84,12 +84,12 @@
     <string name="ui_report_creating">Собирается ZIP-репорт…</string>
     <string name="ui_limit_closing_blur">Блюр при закрытии: лимит 30 FPS</string>
     <string name="ui_limit_closing_blur_hint">Ограничивает обновления блюра летящей обратно иконки или мультипапки. Выключи, чтобы использовать общий лимит FPS блюра. Движение иконки сохраняет штатную частоту лаунчера. Вне режима разработчика действует лимит 30 FPS.</string>
-    <string name="ui_dock_event_driven">Док и блюр: обновление по событиям</string>
-    <string name="ui_compact_dock_effects">Док: компактный буфер эффектов (эксперимент)</string>
-    <string name="ui_compact_dock_effects_hint">Обрабатывает эффекты дока в нижней области экрана вместо полноэкранного буфера. Сохраняет отступ для движения и размытия. Сравни плавность закрытия; если док обрезается при анимации, выключи. Только в режиме разработчика.</string>
-    <string name="ui_reuse_static_wallpaper">Повторное использование статичных обоев (эксперимент)</string>
-    <string name="ui_reuse_static_wallpaper_hint">При возврате приложения проверяет системный ID статичных обоев и повторно использует обработанный фон. Смена обоев и настроек по-прежнему сбрасывает кэш. Для живых и системных эффектных обоев не применяется. Только в режиме разработчика.</string>
-    <string name="ui_dock_event_driven_hint">Обновляет плашку дока и блюр иконок только при реальных изменениях, а отложенные сэмплы ставит на ближайший кадр вместо таймера. Выключи, чтобы сравнить с прежним покадровым поведением. Вне режима разработчика остаётся включённым.</string>
+
+
+
+
+
+
     <string name="ui_support_project">Поддержать проект</string>
     <string name="ui_author_profile">by @immorgue — профиль в Telegram</string>
     <string name="ui_telegram_error">Не удалось открыть Telegram</string>
@@ -133,13 +133,13 @@
     <string name="ui_folder_mode_icons">Как у иконок</string>
     <string name="ui_folder_mode_own">Сейчас используются свои настройки</string>
     <string name="ui_photo_widget_tint">Цвет иконок</string>
-    <string name="ui_color_depth">Ограничение глубины цвета блюра</string>
+
     <string name="ui_optimize_mini_icons">Мини-иконки в папках: 30 FPS</string>
     <string name="ui_optimize_mini_icons_hint">Ограничивает обновление маленьких иконок в папках 1×1 и мелких миниатюр в больших папках до 30 FPS. Блюр сохраняется, преломление для этих миниатюр отключается. Крупные иконки соблюдают общий лимит блюра; если он ниже 30 FPS, миниатюры тоже соблюдают его.</string>
     <string name="ui_artwork_icons">Иконки без подложки (эксперимент)</string>
     <string name="ui_artwork_transparency">Прозрачность окраски</string>
     <string name="ui_artwork_icons_hint">Для иконок-картинок без однотонной подложки (игры, фото, градиенты): рисунок перекрашивается в тона палитры, а сквозь него видно стекло. Работает в режиме разработчика.</string>
-    <string name="ui_color_depth_bits">Глубина цвета</string>
+
     <string name="ui_md3_interface">Интерфейс Material 3 (эксперимент)</string>
     <string name="ui_md3_interface_hint">Стандартная компоновка Material 3 для приложения настроек: верхняя панель, строки списка с переключателями и пояснениями, сброс с подтверждением. Меняет только этот экран; классический интерфейс остаётся по умолчанию. Действует, пока включён режим разработчика; если приложение с ним упадёт, он выключится сам.</string>
     <string name="ui_reset_defaults">Сбросить к значениям по умолчанию</string>
@@ -148,15 +148,15 @@
     <string name="ui_cancel">Отмена</string>
     <string name="ui_disable_edge_optimization">Отключить оптимизацию иконок у края</string>
     <string name="ui_disable_edge_optimization_hint">Принудительно обновляет блюр иконок у края и за пределами экрана во время движения.</string>
-    <string name="ui_color_depth_hint">Ограничивает количество оттенков на выбранном этапе. 24 бита — полный цвет, 8 бит — выраженные цветовые полосы (RGB 3:3:2).</string>
-    <string name="ui_color_depth_stage">Этап ограничения глубины цвета</string>
+
+
     <string name="ui_depth_before_blur">До блюра</string>
     <string name="ui_depth_after_blur">После блюра · до рефракции</string>
     <string name="ui_depth_after_refraction">После рефракции · до подложки</string>
     <string name="ui_depth_finished">Готовая подложка · как раньше</string>
     <string name="ui_material_order">Порядок: блюр → рефракция → подложка и объём → логотип и контур. «Над блюром» и «под рефракцией» — один этап.</string>
-    <string name="ui_haze_test">Дымка iOS · тест</string>
-    <string name="ui_haze_hint">Пробное приближение: сниженный контраст и широкая светлая вуаль на стекле. Радиус размытия работает как обычно, включая 0. Логотип и контур сохраняются. Работает независимо от глубины цвета.</string>
+
+
     <string name="ui_photo_widget_tint_hint">Выключено — исходные цвета фото. Включено — цвет иконок.</string>
     <string name="ui_presets">Наборы настроек</string>
     <string name="ui_gpu_effects">Эффекты на GPU</string>
@@ -217,6 +217,7 @@
     <string name="ui_theme_system_apply_hint">Листай сохранённые темы. Галочка открывает выбранную тему в системном редакторе; его кнопка применения сохраняет все настройки системной темы.</string>
     <string name="ui_theme_android_hint">Сохранённые системные темы на этой прошивке недоступны. Показаны текущие обои и установленные сервисы живых обоев; применение выполняет их системный предпросмотр.</string>
     <string name="ui_static_animation_blur">Статичный блюр в анимациях</string>
+    <string name="ui_flight_icon_reveal">Размер появления летящей иконки</string>
     <string name="ui_module_logging">Логирование модуля</string>
     <string name="ui_module_logging_hint">Записывать диагностику CherryPick из лаунчера в logcat и LSPosed.</string>
     <string name="ui_app_animation_title">Анимации приложений</string>
@@ -231,8 +232,8 @@
     <string name="ui_app_animation_slowdown">Замедление переходов</string>
     <string name="ui_app_animation_timing_hint">Настройки пружин применяются в совместимых версиях лаунчера. Чем меньше отклик, тем быстрее открывается приложение.</string>
     <string name="ui_static_animation_blur_hint">Блюр статичен на протяжении всего открытия и закрытия. После возвращения иконки плавно включается живой блюр.</string>
-    <string name="ui_haze_bloom">Дымка: цветное свечение · тест</string>
-    <string name="ui_haze_bloom_hint">Мягко усиливает яркие цвета, уже рассеянные блюром. Требует включённой дымки iOS. Без дополнительных выборок текстуры и проходов размытия; при радиусе 0 широкого ореола нет. По умолчанию выключено.</string>
+
+
     <string name="ui_smooth_swipe_lead">Плавное опережение свайпа · тест</string>
     <string name="ui_smooth_swipe_lead_hint">Сглаживает только опережение при свайпе. Использует выбранный FPS блюра, без отдельного цикла обновления на 120 Гц. По умолчанию выключено.</string>
     <string name="ui_desktop_positions">Положение по вертикали</string>
@@ -244,7 +245,7 @@
     <string name="ui_desktop_positions_hint">Нажмите сетку, точки страниц или док на схеме, затем двигайте ползунок под ней. Элемент также можно выбрать кнопкой с его названием.</string>
     <string name="ui_material_mode">Режим оформления</string>
     <string name="ui_material_mode_hint">Перекраска, матовое или жидкое стекло.</string>
-    <string name="ui_mode_frosted">Матовое стекло</string>
+    <string name="ui_mode_frosted">Матовое стекло (Kyant)</string>
     <string name="ui_mode_frosted_hint">Мягко размытый фон и выбранные цвета иконок.</string>
     <string name="ui_mode_liquid">Жидкое стекло</string>
     <string name="ui_mode_liquid_hint">Стекло с преломлением и живым фоном.</string>
@@ -278,4 +279,12 @@
     <string name="ui_swipe_blur_lead">Опережение блюра при свайпе</string>
     <string name="ui_swipe_blur_lead_hint">Выключите, чтобы блюр брал фон по текущим координатам. Лимит FPS при свайпе сохраняется.</string>
     <string name="ui_swipe_blur_fps_hint">Для перелистывания рабочего стола. В анимациях приложений действует обычный лимит.</string>
+    <string name="ui_hide_home_gesture_bar">Прозрачная полоска жестов на рабочем столе</string>
+    <string name="ui_hide_home_gesture_bar_hint">Скрывает только полоску на рабочем столе. Жесты и отступы сохраняются. Нужны «Системный интерфейс» в области действия LSPosed и перезапуск системного интерфейса.</string>
+    <string name="ui_ios_animation_author">Автор iOS-анимаций — @bazik1337</string>
+    <string name="ui_enable_module_hint">Всё готово. Нажми на крестик, чтобы включить модуль.</string>
+    <string name="ui_dock_blur_height">Высота блюра дока</string>
+    <string name="ui_dock_blur_y">Положение блюра дока по вертикали</string>
+    <string name="ui_music_island_expansion">Музыкальный островок: раскрытие на месте</string>
+    <string name="ui_music_island_expansion_hint">Раскрывает музыкальную карточку из островка поверх статус-бара. Нажатие снаружи сворачивает её. Экспериментальная функция ColorOS; нужен System UI в области LSPosed.</string>
 </resources>

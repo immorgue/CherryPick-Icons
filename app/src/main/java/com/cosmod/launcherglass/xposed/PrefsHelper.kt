@@ -12,8 +12,6 @@ import com.cosmod.launcherglass.util.LiveBlurEngine
 import com.cosmod.launcherglass.util.WallpaperHelper
 
 object PrefsHelper {
-    @Volatile var experimentalLiquid=false
-        private set
     @Volatile var limitClosingBlur=true
         private set
 
@@ -22,15 +20,8 @@ object PrefsHelper {
         private set
     @Volatile var bgOpacity: Int = SettingsDefaults.integer(SettingsProvider.KEY_BG_OPACITY)
     @Volatile var blurEnabled: Boolean = SettingsDefaults.boolean(SettingsProvider.KEY_BLUR_ENABLED)
-    @Volatile var colorDepthBits=24
-        private set
-    @Volatile var colorDepthStage=ColorDepthEffect.FINISHED_PLATE
-        private set
-    @Volatile var hazeEnabled=false
-        private set
-    @Volatile var hazeBloomEnabled=false
-        private set
     @Volatile var smoothSwipeLead=false
+    @Volatile var flightIconReveal=155
     @Volatile var appWindowTilt=false
     @Volatile var appGenie=true
     @Volatile var appDroplet=true
@@ -49,6 +40,8 @@ object PrefsHelper {
         private set
     @Volatile var dockSidePadding=SettingsDefaults.integer(SettingsProvider.KEY_DOCK_SIDE_PADDING)
         private set
+    @Volatile var dockBlurHeight=100
+    @Volatile var dockBlurY=0
     @Volatile var dockVerticalPadding=SettingsDefaults.integer(SettingsProvider.KEY_DOCK_VERTICAL_PADDING)
         private set
     @Volatile var dockRadius=SettingsDefaults.integer(SettingsProvider.KEY_DOCK_RADIUS)
@@ -78,15 +71,12 @@ object PrefsHelper {
     val iconBackdropEnabled:Boolean get()=com.cosmod.launcherglass.util.MaterialMode.needsBackdrop(blurStyle,blurEnabled)
     val backdropEnabled:Boolean get()=com.cosmod.launcherglass.util.MaterialMode.needsBackdrop(blurStyle,blurEnabled,
         FolderSettings.own && folderBlurEnabled,DockSettings.own && dockEnabled)
-    val kyantGlass:Boolean get()=blurStyle==SettingsProvider.BLUR_STYLE_KYANT && android.os.Build.VERSION.SDK_INT>=33
-    val liquidGlass:Boolean get()=kyantGlass || (blurStyle==SettingsProvider.BLUR_STYLE_LIQUID && android.os.Build.VERSION.SDK_INT>=33)
+    val kyantGlass:Boolean get()=blurStyle!=SettingsProvider.BLUR_STYLE_COLOR && android.os.Build.VERSION.SDK_INT>=33
+    val liquidGlass:Boolean get()=blurStyle!=SettingsProvider.BLUR_STYLE_FROSTED && kyantGlass
     @Volatile var kyant=KyantOptics.read()
     @Volatile var swipeFps=SettingsDefaults.integer(SettingsProvider.KEY_SWIPE_FPS)
     @Volatile var liveFps: Int = SettingsDefaults.integer(SettingsProvider.KEY_LIVE_FPS)
     /** Event-driven dock refresh and frame-aligned material sampling (developer comparison switch). */
-    @Volatile var dockEventDriven: Boolean = true
-    @Volatile var compactDockEffects=false
-    @Volatile var reuseStaticWallpaper=false
     @Volatile var staticAnimationBlur=false
     @Volatile var sceneDragBackdrop=false
     @Volatile var idlePause: Boolean = SettingsDefaults.boolean(SettingsProvider.KEY_IDLE_PAUSE)
@@ -198,23 +188,10 @@ object PrefsHelper {
             val newPhotoWidgetTint=bundle.getBoolean(SettingsProvider.KEY_PHOTO_WIDGET_TINT,false)
             val developer=bundle.getBoolean(SettingsProvider.KEY_DEVELOPER_MODE,false)
             val newGpuEffects=!developer || bundle.getBoolean(SettingsProvider.KEY_GPU_EFFECTS,true)
-            val newExperimentalLiquid=developer && bundle.getBoolean(SettingsProvider.KEY_EXPERIMENTAL_LIQUID,false)
             val newLimitClosingBlur=!developer || bundle.getBoolean(SettingsProvider.KEY_LIMIT_CLOSING_BLUR,true)
-            val newDockEventDriven=!developer || bundle.getBoolean(SettingsProvider.KEY_DOCK_EVENT_DRIVEN,true)
-            val newCompactDockEffects=developer && bundle.getBoolean(SettingsProvider.KEY_COMPACT_DOCK_EFFECTS,false)
-            val newReuseStaticWallpaper=developer && bundle.getBoolean(SettingsProvider.KEY_REUSE_STATIC_WALLPAPER,false)
-            val opticsChanged=newExperimentalLiquid!=experimentalLiquid
             val backendChanged=newGpuEffects!=gpuEffects
-            val newColorDepth=if(developer && android.os.Build.VERSION.SDK_INT>=33 && bundle.getBoolean(SettingsProvider.KEY_COLOR_DEPTH_ENABLED,false))bundle.getInt(SettingsProvider.KEY_COLOR_DEPTH_BITS,8).coerceIn(8,24)else 24
-            val newDepthStage=bundle.getInt(SettingsProvider.KEY_COLOR_DEPTH_STAGE,ColorDepthEffect.FINISHED_PLATE).coerceIn(0,3)
-            val newHaze=developer && android.os.Build.VERSION.SDK_INT>=33 && bundle.getBoolean(SettingsProvider.KEY_HAZE_ENABLED,false)
-            val newHazeBloom=newHaze && bundle.getBoolean(SettingsProvider.KEY_HAZE_BLOOM,false)
             val newSmoothSwipeLead=developer && bundle.getBoolean(SettingsProvider.KEY_SMOOTH_SWIPE_LEAD,false)
             val newSwipeLead=bundle.getBoolean(SettingsProvider.KEY_SWIPE_LEAD,SettingsDefaults.boolean(SettingsProvider.KEY_SWIPE_LEAD))
-            val depthChanged=newColorDepth!=colorDepthBits || newDepthStage!=colorDepthStage
-            val processingDepthChanged=depthChanged && ((colorDepthBits<24 && colorDepthStage<=ColorDepthEffect.AFTER_BLUR) ||
-                (newColorDepth<24 && newDepthStage<=ColorDepthEffect.AFTER_BLUR))
-            val hazeChanged=newHaze!=hazeEnabled || newHazeBloom!=hazeBloomEnabled
             val newDisableEdgeOptimization=bundle.getBoolean(SettingsProvider.KEY_DISABLE_EDGE_OPTIMIZATION,SettingsDefaults.boolean(SettingsProvider.KEY_DISABLE_EDGE_OPTIMIZATION))
             val newOptimizeMiniIcons=bundle.getBoolean(SettingsProvider.KEY_OPTIMIZE_MINI_ICONS,SettingsDefaults.boolean(SettingsProvider.KEY_OPTIMIZE_MINI_ICONS))
             val defaultArtwork=SettingsDefaults.integer(SettingsProvider.KEY_ARTWORK_TRANSPARENCY)
@@ -226,11 +203,12 @@ object PrefsHelper {
             fun dockValue(key:String,max:Int)=bundle.getInt(key,SettingsDefaults.integer(key)).coerceIn(0,max)
             val newDockSide=dockValue(SettingsProvider.KEY_DOCK_SIDE_PADDING,SettingsProvider.DOCK_PADDING_MAX)
             val newDockVertical=dockValue(SettingsProvider.KEY_DOCK_VERTICAL_PADDING,SettingsProvider.DOCK_PADDING_MAX)
+            val newDockHeight=if(developer)bundle.getInt(SettingsProvider.KEY_DOCK_BLUR_HEIGHT,100).coerceIn(50,200)else 100
+            val newDockY=if(developer)bundle.getInt(SettingsProvider.KEY_DOCK_BLUR_Y,0).coerceIn(-120,120)else 0
             val newDockRadius=dockValue(SettingsProvider.KEY_DOCK_RADIUS,100)
             val newDockAutoLength=bundle.getBoolean(SettingsProvider.KEY_DOCK_AUTO_LENGTH,SettingsDefaults.boolean(SettingsProvider.KEY_DOCK_AUTO_LENGTH))
-            val dockChanged=newDockEnabled!=dockEnabled || newDockSide!=dockSidePadding || newDockVertical!=dockVerticalPadding || newDockRadius!=dockRadius ||
+            val dockChanged=newDockY!=dockBlurY || newDockHeight!=dockBlurHeight || newDockEnabled!=dockEnabled || newDockSide!=dockSidePadding || newDockVertical!=dockVerticalPadding || newDockRadius!=dockRadius ||
                 newDockAutoLength!=dockAutoLength
-            val dockEventDrivenChanged=newDockEventDriven!=dockEventDriven || newCompactDockEffects!=compactDockEffects
             val newPhotoWidgetWidth=bundle.getInt(SettingsProvider.KEY_PHOTO_WIDGET_LIQUID_WIDTH,SettingsDefaults.integer(SettingsProvider.KEY_PHOTO_WIDGET_LIQUID_WIDTH)).coerceIn(0,100)
             val newPhotoWidgetDistortion=bundle.getInt(SettingsProvider.KEY_PHOTO_WIDGET_LIQUID_DISTORTION,50).coerceIn(0,300)
             val widgetChanged=newPhotoWidgetBlur!=photoWidgetBlur || newPhotoWidgetOpacity!=photoWidgetOpacity || newPhotoWidgetTint!=photoWidgetTint ||
@@ -238,7 +216,7 @@ object PrefsHelper {
             val newBlurRadius = if (bundle.getBoolean(SettingsProvider.KEY_BLUR_RADIUS_ENABLED,true))
                 bundle.getInt(SettingsProvider.KEY_BLUR_RADIUS, SettingsDefaults.integer(SettingsProvider.KEY_BLUR_RADIUS)).coerceIn(0,50) else 0
             val newBlurMode = bundle.getInt(SettingsProvider.KEY_BLUR_MODE, SettingsDefaults.integer(SettingsProvider.KEY_BLUR_MODE))
-            val newBlurStyle = bundle.getInt(SettingsProvider.KEY_BLUR_STYLE, SettingsDefaults.integer(SettingsProvider.KEY_BLUR_STYLE)).coerceIn(0,SettingsProvider.BLUR_STYLE_KYANT)
+            val newBlurStyle = com.cosmod.launcherglass.util.MaterialMode.normalize(bundle.getInt(SettingsProvider.KEY_BLUR_STYLE, SettingsDefaults.integer(SettingsProvider.KEY_BLUR_STYLE)))
             val blurStyleChanged=newBlurStyle!=blurStyle
             val newBlurQuality=if(developer)bundle.getInt(SettingsProvider.KEY_BLUR_QUALITY,SettingsDefaults.integer(SettingsProvider.KEY_BLUR_QUALITY)).coerceIn(0,100)else 0
             val newLiquidWidth=bundle.getInt(SettingsProvider.KEY_LIQUID_WIDTH,SettingsDefaults.integer(SettingsProvider.KEY_LIQUID_WIDTH)).coerceIn(0,100)
@@ -309,12 +287,12 @@ object PrefsHelper {
                 LiveBlurEngine.invalidate()
             }
             val folderEnabledChanged=newFolderBlurEnabled!=folderBlurEnabled
-            val materialChanged=opticsChanged || backendChanged || newBgOpacity!=bgOpacity || newBlurEnabled!=blurEnabled || newBlurRadius!=blurRadius ||
+            val materialChanged=backendChanged || newBgOpacity!=bgOpacity || newBlurEnabled!=blurEnabled || newBlurRadius!=blurRadius ||
                 newFolderBlurEnabled!=folderBlurEnabled || newFolderIconsBlurEnabled!=folderIconsBlurEnabled || newDrawerBlurEnabled!=drawerBlurEnabled ||
                 newIconStroke != iconStroke || newStrokeOpacity != strokeOpacity ||
                 newGlyphShadow != glyphShadow || newShadowOpacity != shadowOpacity ||
                 newGradientOpacity != gradientOpacity || glyphOutlineChanged || paletteChanged ||
-                blurColorsChanged || blurStyleChanged || geometryChanged || vibrancyChanged || widgetChanged || depthChanged || hazeChanged ||
+                blurColorsChanged || blurStyleChanged || geometryChanged || vibrancyChanged || widgetChanged ||
                 newSwipeLead!=swipeLead || newSmoothSwipeLead!=smoothSwipeLead || newDisableEdgeOptimization!=disableEdgeOptimization ||
                 newOptimizeMiniIcons!=optimizeMiniIcons || artworkChanged
 
@@ -326,14 +304,11 @@ object PrefsHelper {
             iconPalette = newPalette
             enabled = newEnabled
             gpuEffects=newGpuEffects
-            experimentalLiquid=newExperimentalLiquid
             limitClosingBlur=newLimitClosingBlur
-            dockEventDriven=newDockEventDriven
-            compactDockEffects=newCompactDockEffects
-            reuseStaticWallpaper=newReuseStaticWallpaper
             sceneDragBackdrop=developer && bundle.getBoolean(SettingsProvider.KEY_SCENE_DRAG_BACKDROP,false)
             staticAnimationBlur=bundle.getBoolean(SettingsProvider.KEY_STATIC_ANIMATION_BLUR,false)
             GlassLogger.enabled=bundle.getBoolean(SettingsProvider.KEY_MODULE_LOGGING,SettingsDefaults.boolean(SettingsProvider.KEY_MODULE_LOGGING))
+            flightIconReveal=bundle.getInt(SettingsProvider.KEY_FLIGHT_ICON_REVEAL,155).coerceIn(100,400)
             appWindowTilt=bundle.getBoolean(SettingsProvider.KEY_APP_WINDOW_TILT,false)
             appGenie=bundle.getBoolean(SettingsProvider.KEY_APP_GENIE,true)
             appDroplet=bundle.getBoolean(SettingsProvider.KEY_APP_DROPLET,true)
@@ -346,13 +321,12 @@ object PrefsHelper {
             appAnimationSlowdown=animationValue(SettingsProvider.KEY_APP_ANIMATION_SLOWDOWN)
             bgOpacity = newBgOpacity
             blurEnabled = newBlurEnabled
-            colorDepthBits=newColorDepth
-            colorDepthStage=newDepthStage;hazeEnabled=newHaze;hazeBloomEnabled=newHazeBloom;smoothSwipeLead=newSmoothSwipeLead
+            smoothSwipeLead=newSmoothSwipeLead
             swipeLead=newSwipeLead
             disableEdgeOptimization=newDisableEdgeOptimization
             optimizeMiniIcons=newOptimizeMiniIcons
             artworkTransparency=newArtworkTransparency;artworkDetection=developer
-            dockEnabled=newDockEnabled;dockSidePadding=newDockSide;dockVerticalPadding=newDockVertical;dockRadius=newDockRadius
+            dockBlurY=newDockY;dockBlurHeight=newDockHeight;dockEnabled=newDockEnabled;dockSidePadding=newDockSide;dockVerticalPadding=newDockVertical;dockRadius=newDockRadius
             dockAutoLength=newDockAutoLength
             folderBlurEnabled = newFolderBlurEnabled
             folderIconsBlurEnabled=newFolderIconsBlurEnabled
@@ -364,7 +338,7 @@ object PrefsHelper {
             blurStyle = newBlurStyle
             blurVibrancy=newBlurVibrancy
             blurQuality=newBlurQuality;liquidWidth=newLiquidWidth;liquidDistortion=newLiquidDistortion
-            if(opticsChanged || blurStyleChanged || qualityChanged || vibrancyChanged || processingDepthChanged || backendChanged)WallpaperHelper.invalidate()
+            if(blurStyleChanged || qualityChanged || vibrancyChanged || backendChanged)WallpaperHelper.invalidate()
             liveFps = newLiveFps.coerceIn(1,60)
             swipeFps=bundle.getInt(SettingsProvider.KEY_SWIPE_FPS,SettingsDefaults.integer(SettingsProvider.KEY_SWIPE_FPS)).coerceIn(1,120)
             kyant=newKyant
@@ -416,7 +390,7 @@ object PrefsHelper {
             LiftedBackdrop.onSettingsChanged()
             MultiIconMaterialHook.onSettingsChanged()
             PhotoWidgetMaterial.onSettingsChanged()
-            if(dockChanged || dockSettingsChanged || dockEventDrivenChanged || materialChanged || masterChanged)DockMaterial.onSettingsChanged()
+            if(dockChanged || dockSettingsChanged || materialChanged || masterChanged)DockMaterial.onSettingsChanged()
             if(!enabled){
                 IconGlassHook.onModuleDisabled()
                 com.cosmod.launcherglass.util.LauncherWallpaperCapture.onModuleDisabled()

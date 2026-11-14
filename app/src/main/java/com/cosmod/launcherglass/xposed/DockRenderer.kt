@@ -69,6 +69,15 @@ internal class DockRenderer {
                 WallpaperFootprint.source(it,dm.widthPixels,dm.heightPixels,screen)
             }
         }
+        // Retain the resting crop as well as its pixels. The hotseat's OEM
+        // scale/translation animates this layer; resampling that transform
+        // during a static flight magnifies the blur and registers new GPU
+        // resources on the same RenderThread as the opening app snapshot.
+        if(com.cosmod.launcherglass.util.LiveBlurEngine.freezeAnimationWallpaper &&
+            sampledStyle==style && sampleWidth==w && sampleHeight==h && sampledWallpaper?.isRecycled==false){
+            wallpaper=sampledWallpaper
+            source=sampledSource
+        }
         if(canvas.isHardwareAccelerated){
             val now=System.nanoTime()
             val fps=PrefsHelper.liveFps.coerceIn(1,60)
@@ -124,7 +133,7 @@ internal class DockRenderer {
             if(wallpaper!=null && source!=null){
                 val image=WallpaperHelper.forCanvas(wallpaper,canvas)
                 val localRect=RectF(0f,0f,w.toFloat(),h.toFloat())
-                val gpu=if(style.liquid && PrefsHelper.gpuEffects && canvas.isHardwareAccelerated && Build.VERSION.SDK_INT>=33){
+                val gpu=if(style.kyant!=null && PrefsHelper.gpuEffects && canvas.isHardwareAccelerated && Build.VERSION.SDK_INT>=33){
                     val l=lens ?: LiquidGlassShader.create().also {lens=it}
                     l?.update(image,solid,source,w,h,style.filter,(radius/minOf(w,h)).coerceIn(0f,.5f),style)
                 }else null

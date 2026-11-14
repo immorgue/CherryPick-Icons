@@ -9,11 +9,14 @@ class MaterialModeTest {
         assertFalse(MaterialMode.needsBackdrop(MaterialMode.COLOR,false))
     }
     @Test fun existingGlassPresetsKeepTheirMeaning() {
-        for(mode in listOf(MaterialMode.FROSTED,MaterialMode.LIQUID,MaterialMode.KYANT)) {
+        for(mode in listOf(MaterialMode.FROSTED,MaterialMode.KYANT)) {
             assertTrue(MaterialMode.needsBackdrop(mode,true))
             assertFalse(MaterialMode.needsBackdrop(mode,false))
             assertEquals(mode,MaterialMode.normalize(mode))
         }
+    }
+    @Test fun retiredLiquidPresetsMigrateToKyant(){
+        assertEquals(MaterialMode.KYANT,MaterialMode.normalize(MaterialMode.LIQUID))
     }
     @Test fun optionalSurfaceGlassDoesNotEnableIconSampling() {
         assertTrue(MaterialMode.needsBackdrop(MaterialMode.COLOR,true,folderGlass=true))

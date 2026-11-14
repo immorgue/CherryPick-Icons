@@ -4,6 +4,10 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DockGeometryTest {
+    @Test fun developerHeightOnlyChangesThePlateAndKeepsItsCenter(){
+        assertEquals(50 to 150,DockGeometry.vertical(50f,150f,50f,50))
+        assertEquals(-100 to 300,DockGeometry.vertical(50f,150f,50f,200))
+    }
     @Test fun expandedHeightStaysCenteredOnTheIconRow() {
         val bounds=DockGeometry.vertical(36f,246f,126f)
         assertEquals(-90 to 372,bounds)

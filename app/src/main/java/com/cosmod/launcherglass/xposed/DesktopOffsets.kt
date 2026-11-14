@@ -37,6 +37,32 @@ internal object DesktopOffsets {
         return if(id==0)null else root.findViewById<View>(id)
     }
     fun install(loader:ClassLoader) {
+        // OEM spring drops calculate absolute Y from DeviceProfile rather
+        // than the laid-out hotseat. Apply the same desktop offset there.
+        XposedHelpers.findClassIfExists("com.android.launcher3.OplusHotseat",loader)?.let {hotseat ->
+            ModuleHooks.hookAllMethods(hotseat,"getFinalXY",object:XC_MethodHook(){
+                override fun afterHookedMethod(param:MethodHookParam){
+                    val view=param.thisObject as? View ?: return
+                    if(!enabled || param.hasThrowable() || view.resources.configuration.orientation!=android.content.res.Configuration.ORIENTATION_PORTRAIT)return
+                    val delta=(offsets.getValue(DesktopSizing.DOCK_Y)*view.resources.displayMetrics.density).roundToInt()
+                    when(val xy=param.args.getOrNull(1)){
+                        is FloatArray->if(xy.size>=2)xy[1]=xy[1]+delta.toFloat()
+                        is IntArray->if(xy.size>=2)xy[1]+=delta
+                    }
+                }
+            })
+            ModuleHooks.hookAllMethods(hotseat,"getFinalDestRect",object:XC_MethodHook(){
+                override fun afterHookedMethod(param:MethodHookParam){
+                    if(!enabled || param.hasThrowable())return
+                    val rect=param.args.firstOrNull() as? android.graphics.Rect ?: return
+                    val child=param.args.getOrNull(1) as? View ?: return
+                    if(child.resources.configuration.orientation!=android.content.res.Configuration.ORIENTATION_PORTRAIT)return
+                    val bounds=android.graphics.Rect()
+                    try {XposedHelpers.callMethod(child,"getWorkspaceVisualDragBounds",bounds)}catch(_:Throwable){return}
+                    if(!bounds.isEmpty)rect.set(bounds)
+                }
+            })
+        }
         var owner:Class<*>?=XposedHelpers.findClassIfExists("com.android.launcher3.OplusDragLayer",loader)
             ?: XposedHelpers.findClassIfExists("com.android.launcher3.dragndrop.DragLayer",loader)
         val signature=arrayOf(Boolean::class.javaPrimitiveType,Int::class.javaPrimitiveType,

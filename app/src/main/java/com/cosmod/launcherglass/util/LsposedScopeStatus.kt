@@ -51,7 +51,7 @@ object LsposedScopeStatus {
                 val value=if(key=="mid")moduleId?.toString() ?: return State(enabled,false) else module
                 var selected=false
                 db.rawQuery("SELECT app_pkg_name FROM scope WHERE $key=? AND user_id=?",arrayOf(value,userId.toString())).use {
-                    while(it.moveToNext()) if(it.getString(0) in setOf("com.android.launcher","com.oplus.launcher","com.oppo.launcher"))selected=true
+                    while(it.moveToNext()) if(it.getString(0) in setOf("com.android.launcher","com.oplus.launcher","com.oppo.launcher","com.coloros.launcher","com.android.launcher3"))selected=true
                 }
                 State(enabled,selected)
             }

@@ -49,7 +49,7 @@ internal object ParentBackdrop {
         if(scope===view && view.javaClass.name.let {
                 !it.endsWith(".GridRecyclerView") && !it.endsWith(".ShortcutContainer") &&
                     !it.endsWith(".FolderIcon") && !it.endsWith(".FolderRoundImageView") &&
-                    !it.endsWith(".OplusFolder") && !it.endsWith(".Folder")})return
+                    !it.endsWith(".OplusFolder") && !it.endsWith(".Folder") && !it.endsWith(".OplusHotseat")})return
         val entries=plates.getOrPut(scope){WeakHashMap()}
         val old=entries[identity]
         if(old!=null && old.bounds==bounds && old.mask===mask && old.radius==radius && old.style==style && old.decorate==decorate)return
@@ -79,16 +79,31 @@ internal object ParentBackdrop {
         return null
     }
     private fun sample(owner:View,plate:Plate,wallpaper:Bitmap):Sample? {
+        val dock=owner.javaClass.name.endsWith(".OplusHotseat")
+        if(dock && com.cosmod.launcherglass.util.LiveBlurEngine.freezeAnimationWallpaper && plate.sample!=null)
+            return plate.sample
         if(plate.frame==frame && plate.frameImage===wallpaper)return plate.sample
         plate.frame=frame;plate.frameImage=wallpaper
         val image=if(plate.style.folder)WallpaperHelper.getFolderWallpaper(owner.context) ?: wallpaper
+            else if(owner.javaClass.name.endsWith(".OplusHotseat"))WallpaperHelper.getDockWallpaper(owner.context) ?: wallpaper
             else WallpaperHelper.getBlurredWallpaper(owner.context) ?: wallpaper
         if(image.isRecycled || plate.mask.isRecycled)return null
         val world=Matrix()
-        XposedHelpers.callMethod(owner,"transformMatrixToGlobal",world)
+        if(dock && !WallpaperHelper.isLiveWallpaper(owner.context)){
+            // The plate renderer pins its resting crop. Its child backdrop
+            // must use that same crop, not the hotseat's temporary home zoom.
+            var x=0f;var y=0f;var current:View?=owner
+            while(current!=null){
+                val parent=current.parent as? View
+                x+=current.left-(parent?.scrollX ?: 0)
+                y+=current.top-(parent?.scrollY ?: 0)
+                current=parent
+            }
+            world.setTranslate(x,y)
+        }else XposedHelpers.callMethod(owner,"transformMatrixToGlobal",world)
         val values=FloatArray(9).also {world.getValues(it)}
-        val key=listOf(wallpaper,image,values.toList(),PrefsHelper.gradientOpacity,PrefsHelper.experimentalLiquid,
-            PrefsHelper.gpuEffects,MaterialFinish.key(),com.cosmod.launcherglass.util.LiveBlurEngine.wallpaperScrollRatio)
+        val key=listOf(wallpaper,image,values.toList(),PrefsHelper.gradientOpacity,
+            PrefsHelper.gpuEffects,com.cosmod.launcherglass.util.LiveBlurEngine.wallpaperScrollRatio)
         if(plate.key==key)return plate.sample
         val dm=owner.resources.displayMetrics
         val screen=RectF(plate.bounds);world.mapRect(screen)
@@ -96,7 +111,7 @@ internal object ParentBackdrop {
         val w=plate.mask.width;val h=plate.mask.height
         val local=RectF(0f,0f,w.toFloat(),h.toFloat())
         val white=LinearGradient(0f,0f,1f,0f,Color.WHITE,Color.WHITE,Shader.TileMode.CLAMP)
-        val lens=if(Build.VERSION.SDK_INT>=33 && plate.style.liquid && PrefsHelper.gpuEffects) {
+        val lens=if(Build.VERSION.SDK_INT>=33 && plate.style.kyant!=null && PrefsHelper.gpuEffects) {
             val renderer=plate.lens ?: LiquidGlassShader.create()?.also {plate.lens=it}
             renderer?.update(image,white,source,w,h,null,
                 (plate.radius/minOf(plate.bounds.width(),plate.bounds.height())).coerceIn(0f,.5f),plate.style)

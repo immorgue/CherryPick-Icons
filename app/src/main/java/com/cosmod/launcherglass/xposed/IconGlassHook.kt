@@ -110,7 +110,7 @@ object IconGlassHook {
                 // display refresh rate. Motion needs a fast cadence, a settled
                 // screen only a periodic sweep.
                 val nowMs=android.os.SystemClock.uptimeMillis()
-                val interval=if(!PrefsHelper.dockEventDriven)0L else if(LiveBlurEngine.hasRecentMotion)120L else 500L
+                val interval=if(LiveBlurEngine.hasRecentMotion)120L else 500L
                 if(nowMs-lastRecoverMs>=interval){lastRecoverMs=nowMs;recovered=recoverDiscardedIcons(current)}
                 // Lifted backdrops follow this frame's final DragView transform.
                 LiftedBackdrop.prepare()

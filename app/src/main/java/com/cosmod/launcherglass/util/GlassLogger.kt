@@ -7,7 +7,7 @@ import java.util.Date
 import java.util.Locale
 
 object GlassLogger {
-    @Volatile internal var enabled = true
+    @Volatile internal var enabled = false
 
     private val animationLogs by lazy { java.util.concurrent.ThreadPoolExecutor(1,1,30L,
         java.util.concurrent.TimeUnit.SECONDS,java.util.concurrent.ArrayBlockingQueue<Runnable>(64),

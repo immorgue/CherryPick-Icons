@@ -72,13 +72,12 @@ class SettingsProvider : ContentProvider() {
                     bundle.putInt(key,prefs.getInt(key,fallback))
                 }
                 bundle.putBoolean(KEY_GPU_EFFECTS,prefs.getBoolean(KEY_GPU_EFFECTS,true))
-                bundle.putBoolean(KEY_EXPERIMENTAL_LIQUID,prefs.getBoolean(KEY_EXPERIMENTAL_LIQUID,false))
                 bundle.putBoolean(KEY_LIMIT_CLOSING_BLUR,prefs.getBoolean(KEY_LIMIT_CLOSING_BLUR,true))
-                bundle.putBoolean(KEY_DOCK_EVENT_DRIVEN,prefs.getBoolean(KEY_DOCK_EVENT_DRIVEN,true))
-                bundle.putBoolean(KEY_COMPACT_DOCK_EFFECTS,prefs.getBoolean(KEY_COMPACT_DOCK_EFFECTS,false))
-                bundle.putBoolean(KEY_REUSE_STATIC_WALLPAPER,prefs.getBoolean(KEY_REUSE_STATIC_WALLPAPER,false))
                 bundle.putBoolean(KEY_SCENE_DRAG_BACKDROP,prefs.getBoolean(KEY_SCENE_DRAG_BACKDROP,false))
+                bundle.putBoolean(KEY_HIDE_HOME_GESTURE_BAR,prefs.getBoolean(KEY_HIDE_HOME_GESTURE_BAR,false))
+                bundle.putBoolean(KEY_MUSIC_ISLAND_EXPANSION,prefs.getBoolean(KEY_MUSIC_ISLAND_EXPANSION,false))
                 bundle.putBoolean(KEY_STATIC_ANIMATION_BLUR,prefs.getBoolean(KEY_STATIC_ANIMATION_BLUR,false))
+                bundle.putInt(KEY_FLIGHT_ICON_REVEAL,prefs.getInt(KEY_FLIGHT_ICON_REVEAL,155).coerceIn(100,400))
                 bundle.putBoolean(KEY_MODULE_LOGGING,prefs.getBoolean(KEY_MODULE_LOGGING,SettingsDefaults.boolean(KEY_MODULE_LOGGING)))
                 for(key in APP_ANIMATION_SWITCHES)
                     bundle.putBoolean(key,prefs.getBoolean(key,SettingsDefaults.boolean(key)))
@@ -102,11 +101,6 @@ class SettingsProvider : ContentProvider() {
                 bundle.putBoolean(KEY_FOLDER_ICONS_BLUR_ENABLED,prefs.getBoolean(KEY_FOLDER_ICONS_BLUR_ENABLED,true))
                 bundle.putInt(KEY_PHOTO_WIDGET_OPACITY,prefs.getInt(KEY_PHOTO_WIDGET_OPACITY,55))
                 bundle.putBoolean(KEY_DEVELOPER_MODE,prefs.getBoolean(KEY_DEVELOPER_MODE,SettingsDefaults.boolean(KEY_DEVELOPER_MODE)))
-                bundle.putBoolean(KEY_COLOR_DEPTH_ENABLED,prefs.getBoolean(KEY_COLOR_DEPTH_ENABLED,false))
-                bundle.putInt(KEY_COLOR_DEPTH_BITS,prefs.getInt(KEY_COLOR_DEPTH_BITS,8))
-                bundle.putInt(KEY_COLOR_DEPTH_STAGE,prefs.getInt(KEY_COLOR_DEPTH_STAGE,3).coerceIn(0,3))
-                bundle.putBoolean(KEY_HAZE_ENABLED,prefs.getBoolean(KEY_HAZE_ENABLED,false))
-                bundle.putBoolean(KEY_HAZE_BLOOM,prefs.getBoolean(KEY_HAZE_BLOOM,false))
                 bundle.putBoolean(KEY_SMOOTH_SWIPE_LEAD,prefs.getBoolean(KEY_SMOOTH_SWIPE_LEAD,false))
                 bundle.putBoolean(KEY_SWIPE_LEAD,prefs.getBoolean(KEY_SWIPE_LEAD,SettingsDefaults.boolean(KEY_SWIPE_LEAD)))
                 bundle.putBoolean(KEY_KYANT_MAGNIFIER,prefs.getBoolean(KEY_KYANT_MAGNIFIER,false))
@@ -115,7 +109,7 @@ class SettingsProvider : ContentProvider() {
                 bundle.putBoolean(KEY_OPTIMIZE_MINI_ICONS,prefs.getBoolean(KEY_OPTIMIZE_MINI_ICONS,SettingsDefaults.boolean(KEY_OPTIMIZE_MINI_ICONS)))
                 bundle.putBoolean(KEY_DOCK_ENABLED,prefs.getBoolean(KEY_DOCK_ENABLED,SettingsDefaults.boolean(KEY_DOCK_ENABLED)))
                 bundle.putBoolean(KEY_DOCK_AUTO_LENGTH,prefs.getBoolean(KEY_DOCK_AUTO_LENGTH,SettingsDefaults.boolean(KEY_DOCK_AUTO_LENGTH)))
-                for(key in listOf(KEY_DOCK_SIDE_PADDING,KEY_DOCK_VERTICAL_PADDING,KEY_DOCK_RADIUS))bundle.putInt(key,prefs.getInt(key,SettingsDefaults.integer(key)))
+                for(key in listOf(KEY_DOCK_SIDE_PADDING,KEY_DOCK_VERTICAL_PADDING,KEY_DOCK_RADIUS,KEY_DOCK_BLUR_HEIGHT,KEY_DOCK_BLUR_Y))bundle.putInt(key,prefs.getInt(key,SettingsDefaults.integer(key)))
                 bundle.putInt(KEY_ARTWORK_TRANSPARENCY,prefs.getInt(KEY_ARTWORK_TRANSPARENCY,SettingsDefaults.integer(KEY_ARTWORK_TRANSPARENCY)).coerceIn(0,100))
                 bundle.putInt(KEY_NATIVE_FLUX_SUPPORT,prefs.getInt(KEY_NATIVE_FLUX_SUPPORT,0))
                 if (prefs.contains(KEY_NATIVE_ICON_DARK)) bundle.putBoolean(KEY_NATIVE_ICON_DARK, prefs.getBoolean(KEY_NATIVE_ICON_DARK, false))
@@ -171,13 +165,12 @@ class SettingsProvider : ContentProvider() {
                         if(b.containsKey(key))editor.putInt(key,b.getInt(key).coerceIn(range))
                     }
                     if(b.containsKey(KEY_GPU_EFFECTS))editor.putBoolean(KEY_GPU_EFFECTS,b.getBoolean(KEY_GPU_EFFECTS))
-                    if(b.containsKey(KEY_EXPERIMENTAL_LIQUID))editor.putBoolean(KEY_EXPERIMENTAL_LIQUID,b.getBoolean(KEY_EXPERIMENTAL_LIQUID))
                     if(b.containsKey(KEY_LIMIT_CLOSING_BLUR))editor.putBoolean(KEY_LIMIT_CLOSING_BLUR,b.getBoolean(KEY_LIMIT_CLOSING_BLUR))
-                    if(b.containsKey(KEY_DOCK_EVENT_DRIVEN))editor.putBoolean(KEY_DOCK_EVENT_DRIVEN,b.getBoolean(KEY_DOCK_EVENT_DRIVEN))
-                    if(b.containsKey(KEY_COMPACT_DOCK_EFFECTS))editor.putBoolean(KEY_COMPACT_DOCK_EFFECTS,b.getBoolean(KEY_COMPACT_DOCK_EFFECTS))
-                    if(b.containsKey(KEY_REUSE_STATIC_WALLPAPER))editor.putBoolean(KEY_REUSE_STATIC_WALLPAPER,b.getBoolean(KEY_REUSE_STATIC_WALLPAPER))
                     if(b.containsKey(KEY_SCENE_DRAG_BACKDROP))editor.putBoolean(KEY_SCENE_DRAG_BACKDROP,b.getBoolean(KEY_SCENE_DRAG_BACKDROP))
+                    if(b.containsKey(KEY_HIDE_HOME_GESTURE_BAR))editor.putBoolean(KEY_HIDE_HOME_GESTURE_BAR,b.getBoolean(KEY_HIDE_HOME_GESTURE_BAR))
+                    if(b.containsKey(KEY_MUSIC_ISLAND_EXPANSION))editor.putBoolean(KEY_MUSIC_ISLAND_EXPANSION,b.getBoolean(KEY_MUSIC_ISLAND_EXPANSION))
                     if(b.containsKey(KEY_STATIC_ANIMATION_BLUR))editor.putBoolean(KEY_STATIC_ANIMATION_BLUR,b.getBoolean(KEY_STATIC_ANIMATION_BLUR))
+                    if(b.containsKey(KEY_FLIGHT_ICON_REVEAL))editor.putInt(KEY_FLIGHT_ICON_REVEAL,b.getInt(KEY_FLIGHT_ICON_REVEAL).coerceIn(100,400))
                     if(b.containsKey(KEY_MODULE_LOGGING))editor.putBoolean(KEY_MODULE_LOGGING,b.getBoolean(KEY_MODULE_LOGGING))
                     for(key in APP_ANIMATION_SWITCHES)
                         if(b.containsKey(key))editor.putBoolean(key,b.getBoolean(key))
@@ -195,11 +188,6 @@ class SettingsProvider : ContentProvider() {
                     if(b.containsKey(KEY_FOLDER_ICONS_BLUR_ENABLED))editor.putBoolean(KEY_FOLDER_ICONS_BLUR_ENABLED,b.getBoolean(KEY_FOLDER_ICONS_BLUR_ENABLED))
                     if(b.containsKey(KEY_PHOTO_WIDGET_OPACITY))editor.putInt(KEY_PHOTO_WIDGET_OPACITY,b.getInt(KEY_PHOTO_WIDGET_OPACITY).coerceIn(0,100))
                     if(b.containsKey(KEY_DEVELOPER_MODE))editor.putBoolean(KEY_DEVELOPER_MODE,b.getBoolean(KEY_DEVELOPER_MODE))
-                    if(b.containsKey(KEY_COLOR_DEPTH_ENABLED))editor.putBoolean(KEY_COLOR_DEPTH_ENABLED,b.getBoolean(KEY_COLOR_DEPTH_ENABLED))
-                    if(b.containsKey(KEY_COLOR_DEPTH_BITS))editor.putInt(KEY_COLOR_DEPTH_BITS,b.getInt(KEY_COLOR_DEPTH_BITS).coerceIn(8,24))
-                    if(b.containsKey(KEY_COLOR_DEPTH_STAGE))editor.putInt(KEY_COLOR_DEPTH_STAGE,b.getInt(KEY_COLOR_DEPTH_STAGE).coerceIn(0,3))
-                    if(b.containsKey(KEY_HAZE_ENABLED))editor.putBoolean(KEY_HAZE_ENABLED,b.getBoolean(KEY_HAZE_ENABLED))
-                    if(b.containsKey(KEY_HAZE_BLOOM))editor.putBoolean(KEY_HAZE_BLOOM,b.getBoolean(KEY_HAZE_BLOOM))
                     if(b.containsKey(KEY_SMOOTH_SWIPE_LEAD))editor.putBoolean(KEY_SMOOTH_SWIPE_LEAD,b.getBoolean(KEY_SMOOTH_SWIPE_LEAD))
                     if(b.containsKey(KEY_SWIPE_LEAD))editor.putBoolean(KEY_SWIPE_LEAD,b.getBoolean(KEY_SWIPE_LEAD))
                     if(b.containsKey(KEY_KYANT_MAGNIFIER))editor.putBoolean(KEY_KYANT_MAGNIFIER,b.getBoolean(KEY_KYANT_MAGNIFIER))
@@ -209,6 +197,8 @@ class SettingsProvider : ContentProvider() {
                     if(b.containsKey(KEY_DOCK_ENABLED))editor.putBoolean(KEY_DOCK_ENABLED,b.getBoolean(KEY_DOCK_ENABLED))
                     if(b.containsKey(KEY_DOCK_AUTO_LENGTH))editor.putBoolean(KEY_DOCK_AUTO_LENGTH,b.getBoolean(KEY_DOCK_AUTO_LENGTH))
                     for(key in listOf(KEY_DOCK_SIDE_PADDING,KEY_DOCK_VERTICAL_PADDING))if(b.containsKey(key))editor.putInt(key,b.getInt(key).coerceIn(0,DOCK_PADDING_MAX))
+                    if(b.containsKey(KEY_DOCK_BLUR_HEIGHT))editor.putInt(KEY_DOCK_BLUR_HEIGHT,b.getInt(KEY_DOCK_BLUR_HEIGHT).coerceIn(50,200))
+                    if(b.containsKey(KEY_DOCK_BLUR_Y))editor.putInt(KEY_DOCK_BLUR_Y,b.getInt(KEY_DOCK_BLUR_Y).coerceIn(-120,120))
                     if(b.containsKey(KEY_DOCK_RADIUS))editor.putInt(KEY_DOCK_RADIUS,b.getInt(KEY_DOCK_RADIUS).coerceIn(0,100))
                     if(b.containsKey(KEY_ARTWORK_TRANSPARENCY))editor.putInt(KEY_ARTWORK_TRANSPARENCY,b.getInt(KEY_ARTWORK_TRANSPARENCY).coerceIn(0,100))
                     if (b.containsKey(KEY_LIGHT_HUE)) editor.putInt(KEY_LIGHT_HUE, b.getInt(KEY_LIGHT_HUE))
@@ -237,9 +227,9 @@ class SettingsProvider : ContentProvider() {
                     if (b.containsKey(KEY_DRAWER_BLUR_ENABLED)) editor.putBoolean(KEY_DRAWER_BLUR_ENABLED, b.getBoolean(KEY_DRAWER_BLUR_ENABLED))
                     if (b.containsKey(KEY_BLUR_RADIUS)) editor.putInt(KEY_BLUR_RADIUS, b.getInt(KEY_BLUR_RADIUS))
                     if (b.containsKey(KEY_BLUR_MODE)) editor.putInt(KEY_BLUR_MODE, b.getInt(KEY_BLUR_MODE))
-                    if (b.containsKey(KEY_BLUR_STYLE)) editor.putInt(KEY_BLUR_STYLE, b.getInt(KEY_BLUR_STYLE).coerceIn(0,BLUR_STYLE_KYANT))
+                    if (b.containsKey(KEY_BLUR_STYLE)) editor.putInt(KEY_BLUR_STYLE, com.cosmod.launcherglass.util.MaterialMode.normalize(b.getInt(KEY_BLUR_STYLE)))
                     for(key in listOf(KEY_BLUR_QUALITY,KEY_LIQUID_WIDTH))if(b.containsKey(key))editor.putInt(key,b.getInt(key).coerceIn(0,100))
-                    for(key in kyantOpticsKeys)if(b.containsKey(key))editor.putInt(key,b.getInt(key).coerceIn(0,if(key==KEY_KYANT_VIBRANCY)200 else 100))
+                    for(key in kyantOpticsKeys)if(b.containsKey(key))editor.putInt(key,b.getInt(key).coerceIn(0,if(key==KEY_KYANT_VIBRANCY)400 else 300))
                     if(b.containsKey(KEY_SWIPE_FPS))editor.putInt(KEY_SWIPE_FPS,b.getInt(KEY_SWIPE_FPS).coerceIn(1,120))
                     if (b.containsKey(KEY_LIVE_FPS)) editor.putInt(KEY_LIVE_FPS, b.getInt(KEY_LIVE_FPS))
                     if (b.containsKey(KEY_IDLE_PAUSE)) editor.putBoolean(KEY_IDLE_PAUSE, b.getBoolean(KEY_IDLE_PAUSE))
@@ -278,7 +268,7 @@ class SettingsProvider : ContentProvider() {
 
     companion object {
         const val AUTHORITY = "com.cosmod.launcherglass.settings"
-        val CONTENT_URI: Uri = Uri.parse("content://$AUTHORITY/settings")
+        val CONTENT_URI: Uri by lazy { Uri.parse("content://$AUTHORITY/settings") }
         const val PREFS_NAME = "launcher_monet_prefs"
 
         const val METHOD_REPORT_ICON_APPEARANCE = "reportIconAppearance"
@@ -289,7 +279,10 @@ class SettingsProvider : ContentProvider() {
         const val METHOD_CONSUME_DESKTOP = "consumeDesktopDesigner"
         const val METHOD_SET = "set"
         const val METHOD_WALLPAPER_CHANGED="wallpaperChanged"
+        const val KEY_HIDE_HOME_GESTURE_BAR="hide_home_gesture_bar"
+        const val KEY_MUSIC_ISLAND_EXPANSION="experimental_music_island_expansion"
         const val KEY_STATIC_ANIMATION_BLUR="experimental_static_animation_blur"
+        const val KEY_FLIGHT_ICON_REVEAL="flight_icon_reveal"
         const val KEY_MODULE_LOGGING="module_logging"
         const val KEY_APP_WINDOW_TILT="app_window_tilt"
         const val KEY_APP_GENIE="app_genie"
@@ -328,19 +321,10 @@ class SettingsProvider : ContentProvider() {
         const val KEY_ENABLED = "enabled"
         const val KEY_DEVELOPER_MODE = "developer_mode"
         const val KEY_GPU_EFFECTS = "gpu_effects"
-        const val KEY_EXPERIMENTAL_LIQUID = "experimental_liquid_optics"
         const val KEY_LIMIT_CLOSING_BLUR = "limit_closing_blur_fps"
         /** Developer: event-driven dock refresh and frame-aligned material sampling. */
-        const val KEY_DOCK_EVENT_DRIVEN = "dock_event_driven"
-        const val KEY_COMPACT_DOCK_EFFECTS = "experimental_compact_dock_effects"
-        const val KEY_REUSE_STATIC_WALLPAPER = "experimental_reuse_static_wallpaper"
         const val KEY_BLUR_TONE_ENABLED = "blur_tone_enabled"
         const val KEY_PHOTO_WIDGET_BLUR = "photo_widget_blur"
-        const val KEY_COLOR_DEPTH_ENABLED = "blur_color_depth_enabled"
-        const val KEY_COLOR_DEPTH_BITS = "blur_color_depth_bits"
-        const val KEY_COLOR_DEPTH_STAGE = "blur_color_depth_stage"
-        const val KEY_HAZE_ENABLED = "glass_haze_enabled"
-        const val KEY_HAZE_BLOOM = "experimental_haze_bloom"
         const val KEY_SMOOTH_SWIPE_LEAD = "experimental_smooth_swipe_lead"
         const val KEY_SWIPE_LEAD = "swipe_blur_lead"
         const val KEY_DISABLE_EDGE_OPTIMIZATION = "disable_edge_optimization"
@@ -349,6 +333,8 @@ class SettingsProvider : ContentProvider() {
         const val KEY_DOCK_ENABLED = "dock_enabled"
         const val KEY_DOCK_SIDE_PADDING = "dock_side_padding"
         const val KEY_DOCK_VERTICAL_PADDING = "dock_vertical_padding"
+        const val KEY_DOCK_BLUR_HEIGHT = "dock_blur_height"
+        const val KEY_DOCK_BLUR_Y = "dock_blur_y"
         const val KEY_DOCK_RADIUS = "dock_radius"
         /** On: the dock fits the hotseat icons and animates its width; off: it spans the full hotseat row. */
         const val KEY_DOCK_AUTO_LENGTH = "dock_auto_length"

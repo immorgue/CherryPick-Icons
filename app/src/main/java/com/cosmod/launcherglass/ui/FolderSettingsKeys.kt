@@ -2,7 +2,7 @@ package com.cosmod.launcherglass.ui
 
 internal val kyantOpticsKeys=listOf(SettingsProvider.KEY_KYANT_WIDTH,
     SettingsProvider.KEY_KYANT_DISTORTION,SettingsProvider.KEY_KYANT_HIGHLIGHT,
-    SettingsProvider.KEY_KYANT_DISPERSION,SettingsProvider.KEY_KYANT_ZOOM,SettingsProvider.KEY_KYANT_VIBRANCY)
+    SettingsProvider.KEY_KYANT_DISPERSION,SettingsProvider.KEY_KYANT_VIBRANCY)
 
 /**
  * A group of glass keys that a surface (folders, dock) may override.  The
