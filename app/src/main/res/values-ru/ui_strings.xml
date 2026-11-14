@@ -217,6 +217,19 @@
     <string name="ui_theme_system_apply_hint">Листай сохранённые темы. Галочка открывает выбранную тему в системном редакторе; его кнопка применения сохраняет все настройки системной темы.</string>
     <string name="ui_theme_android_hint">Сохранённые системные темы на этой прошивке недоступны. Показаны текущие обои и установленные сервисы живых обоев; применение выполняет их системный предпросмотр.</string>
     <string name="ui_static_animation_blur">Статичный блюр в анимациях</string>
+    <string name="ui_module_logging">Логирование модуля</string>
+    <string name="ui_module_logging_hint">Записывать диагностику CherryPick из лаунчера в logcat и LSPosed.</string>
+    <string name="ui_app_animation_title">Анимации приложений</string>
+    <string name="ui_app_animation_hint">Пружины и деформация окна в стиле iOS при переходе между приложением и рабочим столом.</string>
+    <string name="ui_app_window_tilt">Открытие и закрытие в стиле iOS</string>
+    <string name="ui_app_genie">Эффект джина</string>
+    <string name="ui_app_genie_strength">Сила деформации</string>
+    <string name="ui_app_droplet">Капля (округление окна при переходе)</string>
+    <string name="ui_app_gesture_bounce">Отскок при жесте «Домой»</string>
+    <string name="ui_app_open_response">Отклик пружины открытия</string>
+    <string name="ui_app_close_speed">Скорость закрытия</string>
+    <string name="ui_app_animation_slowdown">Замедление переходов</string>
+    <string name="ui_app_animation_timing_hint">Настройки пружин применяются в совместимых версиях лаунчера. Чем меньше отклик, тем быстрее открывается приложение.</string>
     <string name="ui_static_animation_blur_hint">Блюр статичен на протяжении всего открытия и закрытия. После возвращения иконки плавно включается живой блюр.</string>
     <string name="ui_haze_bloom">Дымка: цветное свечение · тест</string>
     <string name="ui_haze_bloom_hint">Мягко усиливает яркие цвета, уже рассеянные блюром. Требует включённой дымки iOS. Без дополнительных выборок текстуры и проходов размытия; при радиусе 0 широкого ореола нет. По умолчанию выключено.</string>
@@ -252,4 +265,17 @@
     <string name="ui_desktop_grid_cells_hint">Расстояние по горизонтали и вертикали меняется отдельно. 100% — штатная сетка лаунчера.</string>
     <string name="ui_desktop_cell_width">Ширина ячеек</string>
     <string name="ui_desktop_cell_height">Высота ячеек</string>
+    <string name="ui_mode_kyant">Liquid Glass (Kyant)</string>
+    <string name="ui_mode_kyant_hint">Спокойный центр, мягкое преломление и блик по краям.</string>
+    <string name="ui_kyant_highlight">Блик на кромке</string>
+    <string name="ui_kyant_magnifier">Объёмная линза Magnifier</string>
+    <string name="ui_kyant_basic">Базовая линза</string>
+    <string name="ui_kyant_control_center">Линза Control Center</string>
+    <string name="ui_kyant_dispersion">Хроматическая дисперсия</string>
+    <string name="ui_kyant_zoom">Увеличение линзы</string>
+    <string name="ui_kyant_vibrancy">Насыщенность</string>
+    <string name="ui_swipe_blur_fps">FPS блюра при свайпе</string>
+    <string name="ui_swipe_blur_lead">Опережение блюра при свайпе</string>
+    <string name="ui_swipe_blur_lead_hint">Выключите, чтобы блюр брал фон по текущим координатам. Лимит FPS при свайпе сохраняется.</string>
+    <string name="ui_swipe_blur_fps_hint">Для перелистывания рабочего стола. В анимациях приложений действует обычный лимит.</string>
 </resources>

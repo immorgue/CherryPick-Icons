@@ -378,6 +378,7 @@ class MainActivity : AppCompatActivity() {
         SettingsScreen.WALLPAPERS -> getString(R.string.ui_nav_wallpapers)
         SettingsScreen.BEHAVIOR -> getString(R.string.ui_nav_behavior)
         SettingsScreen.DEVELOPER -> getString(R.string.ui_developer_mode)
+        SettingsScreen.ANIMATIONS -> getString(R.string.ui_app_animation_title)
     }
     private fun navigate(screen:SettingsScreen){
         if(!navigation.open(screen))return
@@ -477,6 +478,7 @@ class MainActivity : AppCompatActivity() {
             SettingsScreen.WALLPAPERS -> buildWallpaperSettings(body)
             SettingsScreen.BEHAVIOR -> buildBehaviorSettings(body)
             SettingsScreen.DEVELOPER -> buildDeveloperSettings(body)
+            SettingsScreen.ANIMATIONS -> buildAnimationSettings(body)
         }
         if(navigation.current.tab==1 && navigation.current!=SettingsScreen.MODULE)
             add(body,text(getString(R.string.ui_reset_hold_hint),12f,true),top=20)
@@ -534,6 +536,7 @@ class MainActivity : AppCompatActivity() {
         category(body,R.string.ui_nav_wallpapers,R.string.ui_nav_wallpapers_hint,SettingsScreen.WALLPAPERS)
         add(body,text(getString(R.string.ui_nav_operation),13f,true),top=16,bottom=12)
         category(body,R.string.ui_nav_behavior,R.string.ui_nav_behavior_hint,SettingsScreen.BEHAVIOR)
+        category(body,R.string.ui_app_animation_title,R.string.ui_app_animation_hint,SettingsScreen.ANIMATIONS)
     }
     private fun buildWallpaperSettings(body:LinearLayout){
         val loading=text(getString(R.string.ui_theme_loading),14f,true)
@@ -745,11 +748,55 @@ class MainActivity : AppCompatActivity() {
             getString(R.string.ui_static_animation_blur_hint)))
         gate(animationBlur,::blur)
         add(body,animationBlur,bottom=12)
+        val swipe=card(slider(getString(R.string.ui_swipe_blur_fps),SettingsProvider.KEY_SWIPE_FPS,1,120," FPS",
+            getString(R.string.ui_swipe_blur_fps_hint)))
+        gate(swipe){blur() && number(SettingsProvider.KEY_BLUR_MODE)==SettingsProvider.BLUR_MODE_LIVE}
+        add(body,swipe,bottom=12)
+        val lead=card(switchRow(getString(R.string.ui_swipe_blur_lead),SettingsProvider.KEY_SWIPE_LEAD,
+            getString(R.string.ui_swipe_blur_lead_hint)))
+        gate(lead){blur() && number(SettingsProvider.KEY_BLUR_MODE)==SettingsProvider.BLUR_MODE_LIVE}
+        add(body,lead,bottom=12)
         val idle=card(switchRow(getString(R.string.ui_energy_saving),SettingsProvider.KEY_IDLE_PAUSE,
             getString(R.string.ui_energy_saving_description)))
         gate(idle) { blur() && number(SettingsProvider.KEY_BLUR_MODE)==SettingsProvider.BLUR_MODE_LIVE }
         add(body,idle,bottom=24)
     }
+    private fun buildAnimationSettings(body:LinearLayout) {
+        val enabled=SettingsProvider.KEY_APP_WINDOW_TILT
+        add(body,card(switchRow(getString(R.string.ui_app_window_tilt),enabled,
+            getString(R.string.ui_app_animation_hint))),bottom=12)
+        val effects=column()
+        add(effects,switchRow(getString(R.string.ui_app_genie),SettingsProvider.KEY_APP_GENIE))
+        add(effects,slider(getString(R.string.ui_app_genie_strength),SettingsProvider.KEY_APP_GENIE_STRENGTH,0,200,"%")
+            .also { gate(it){master() && bool(enabled) && bool(SettingsProvider.KEY_APP_GENIE)} })
+        divider(effects)
+        add(effects,switchRow(getString(R.string.ui_app_droplet),SettingsProvider.KEY_APP_DROPLET))
+        add(effects,switchRow(getString(R.string.ui_app_gesture_bounce),SettingsProvider.KEY_APP_GESTURE_BOUNCE))
+        val effectCard=card(effects)
+        gate(effectCard){master() && bool(enabled)}
+        add(body,effectCard,bottom=12)
+
+        val timing=column()
+        for((label,key,unit) in listOf(
+            Triple(R.string.ui_app_open_response,SettingsProvider.KEY_APP_OPEN_RESPONSE," ms"),
+            Triple(R.string.ui_app_close_speed,SettingsProvider.KEY_APP_CLOSE_SPEED,"%"),
+            Triple(R.string.ui_app_animation_slowdown,SettingsProvider.KEY_APP_ANIMATION_SLOWDOWN,"%")
+        )){
+            val range=SettingsProvider.APP_ANIMATION_RANGES.getValue(key)
+            add(timing,slider(getString(label),key,range.first,range.last,unit))
+        }
+        add(timing,text(getString(R.string.ui_app_animation_timing_hint),12f,true)
+            .apply { setPadding(dp(20),0,dp(20),dp(16)) })
+        val timingCard=card(timing)
+        gate(timingCard){master() && bool(enabled)}
+        add(body,timingCard,bottom=12)
+        add(body,com.google.android.material.button.MaterialButton(this,null,M.attr.materialButtonOutlinedStyle).apply {
+            text=getString(R.string.ui_reset_defaults)
+            isAllCaps=false
+            setOnClickListener {haptic(it);confirmReset(enabled)}
+        },bottom=24)
+    }
+
     private fun desktopPositionEditor(body:LinearLayout) {
         val names=linkedMapOf(
             DesktopSizing.GRID_Y to getString(R.string.ui_desktop_grid_y),
@@ -937,9 +984,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** Inner card with a title and a chevron: a collapsible group without a switch of its own. */
-    private fun collapsibleGroup(parent:LinearLayout,label:String,resetKey:String,content:(LinearLayout)->Unit) {
+    private fun collapsibleGroup(parent:LinearLayout,label:String,resetKey:String,expanded:Boolean=false,content:(LinearLayout)->Unit) {
         val group=column()
-        val details=column().apply {visibility=View.GONE}
+        val details=column().apply {visibility=if(expanded)View.VISIBLE else View.GONE}
         divider(details)
         content(details)
         val line=row().apply {
@@ -949,7 +996,7 @@ class MainActivity : AppCompatActivity() {
         val labels=column()
         add(labels,text(label,16f))
         line.addView(labels,LinearLayout.LayoutParams(0,-2,1f))
-        val chevron=expandButton(false,label) {open -> reveal(details,open)}
+        val chevron=expandButton(expanded,label) {open -> reveal(details,open)}
         line.addView(actions(listOf(chevron)))
         line.setOnLongClickListener {confirmReset(resetKey);true}
         if(md3)rowRipple(line)
@@ -1000,26 +1047,28 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun styleCards(parent:LinearLayout,key:String,scoped:Boolean,allowed:()->Boolean) {
-        val labels=listOf(R.string.ui_mode_frosted,R.string.ui_mode_liquid,R.string.ui_mode_color)
-        val hints=listOf(R.string.ui_mode_frosted_hint,R.string.ui_mode_liquid_hint,R.string.ui_mode_color_hint)
-        val choices=(if(scoped)0..1 else 0..2).map {index ->
+        val labels=listOf(R.string.ui_mode_frosted,R.string.ui_mode_liquid,R.string.ui_mode_color,R.string.ui_mode_kyant)
+        val hints=listOf(R.string.ui_mode_frosted_hint,R.string.ui_mode_liquid_hint,R.string.ui_mode_color_hint,R.string.ui_mode_kyant_hint)
+        val modes=listOf(SettingsProvider.BLUR_STYLE_FROSTED,SettingsProvider.BLUR_STYLE_LIQUID,
+            SettingsProvider.BLUR_STYLE_KYANT,SettingsProvider.BLUR_STYLE_COLOR).filterNot {scoped && it==SettingsProvider.BLUR_STYLE_COLOR}
+        val choices=modes.associateWith {index ->
             ModeChoiceCard(this,getString(labels[index]),getString(hints[index])).apply {
-                chosen=number(key).coerceIn(0,if(scoped)1 else 2)==index
+                chosen=number(key)==index
                 setOnClickListener {
                     haptic(it)
                     if(!scoped)prefs.edit().putBoolean(SettingsProvider.KEY_BLUR_ENABLED,true).apply()
                     save(key,index)
                     refreshControls()
                 }
-                gate(this){allowed() && (index!=1 || android.os.Build.VERSION.SDK_INT>=33)}
+                gate(this){allowed() && (index==0 || index==2 || android.os.Build.VERSION.SDK_INT>=33)}
                 add(parent,this,bottom=10)
             }
         }
-        refreshers.add {choices.forEachIndexed {index,choice -> choice.chosen=number(key).coerceIn(0,if(scoped)1 else 2)==index}}
+        refreshers.add {choices.forEach {(index,choice) -> choice.chosen=number(key)==index}}
     }
     private fun lensControls(parent:LinearLayout,key:(String)->String,allowed:()->Boolean) {
         val controls=column()
-        collapsibleGroup(controls,getString(R.string.ui_refraction_settings),key(SettingsProvider.KEY_LIQUID_WIDTH)) {details ->
+        collapsibleGroup(controls,getString(R.string.ui_refraction_settings),key(SettingsProvider.KEY_LIQUID_WIDTH),expanded=true) {details ->
             add(details,slider(getString(R.string.ui_liquid_width),key(SettingsProvider.KEY_LIQUID_WIDTH),0,100,"%"))
             add(details,slider(getString(R.string.ui_liquid_distortion),key(SettingsProvider.KEY_LIQUID_DISTORTION),0,300,"%"))
         }
@@ -1027,6 +1076,47 @@ class MainActivity : AppCompatActivity() {
         controls.visibility=if(selected())View.VISIBLE else View.GONE
         refreshers.add {controls.visibility=if(selected())View.VISIBLE else View.GONE}
         gate(controls){allowed() && selected()};add(parent,controls,bottom=8)
+        val kyant=column()
+        collapsibleGroup(kyant,getString(R.string.ui_mode_kyant),key(SettingsProvider.KEY_KYANT_WIDTH),expanded=true) {details ->
+            val magnifier=key(SettingsProvider.KEY_KYANT_MAGNIFIER)
+            val controlCenter=key(SettingsProvider.KEY_KYANT_CONTROL_CENTER)
+            val group=RadioGroup(this).apply {setPadding(dp(16),0,dp(16),0)}
+            val lenses=listOf(R.string.ui_kyant_basic,R.string.ui_kyant_magnifier,R.string.ui_kyant_control_center).map {label ->
+                com.google.android.material.radiobutton.MaterialRadioButton(this).apply {
+                    id=View.generateViewId()
+                    text=getString(label)
+                    minHeight=dp(48)
+                    group.addView(this)
+                }
+            }
+            fun syncLens(){group.check(lenses[if(bool(controlCenter))2 else if(bool(magnifier))1 else 0].id)}
+            syncLens()
+            refreshers.add(::syncLens)
+            group.setOnCheckedChangeListener { _,id ->
+                val index=lenses.indexOfFirst {it.id==id}
+                if(!updatingUi && index>=0){
+                    haptic(lenses[index])
+                    prefs.edit().putBoolean(magnifier,index==1).putBoolean(controlCenter,index==2).apply()
+                    contentResolver.notifyChange(SettingsProvider.CONTENT_URI,null)
+                    updateGates()
+                }
+            }
+            add(details,group)
+            add(details,slider(getString(R.string.ui_liquid_width),key(SettingsProvider.KEY_KYANT_WIDTH),0,100,"%"))
+            add(details,slider(getString(R.string.ui_liquid_distortion),key(SettingsProvider.KEY_KYANT_DISTORTION),0,100,"%"))
+            add(details,slider(getString(R.string.ui_kyant_highlight),key(SettingsProvider.KEY_KYANT_HIGHLIGHT),0,100,"%"))
+            add(details,slider(getString(R.string.ui_kyant_dispersion),key(SettingsProvider.KEY_KYANT_DISPERSION),0,100,"%"))
+            val zoomSlider=slider(getString(R.string.ui_kyant_zoom),key(SettingsProvider.KEY_KYANT_ZOOM),0,100,"%")
+            gate(zoomSlider){bool(magnifier)}
+            add(details,zoomSlider)
+            add(details,slider(getString(R.string.ui_kyant_vibrancy),key(SettingsProvider.KEY_KYANT_VIBRANCY),0,200,"%"))
+        }
+        fun kyantSelected()=number(key(SettingsProvider.KEY_BLUR_STYLE))==SettingsProvider.BLUR_STYLE_KYANT
+        fun showKyant(){kyant.visibility=if(kyantSelected())View.VISIBLE else View.GONE}
+        showKyant()
+        refreshers.add(::showKyant)
+        gate(kyant){allowed() && kyantSelected()}
+        add(parent,kyant,bottom=8)
     }
     private fun scopedStyleSelector(parent:LinearLayout,scope:ScopedSettingsKeys,allowed:()->Boolean) {
         styleCards(parent,scope.key(SettingsProvider.KEY_BLUR_STYLE),true,allowed)
@@ -1198,10 +1288,13 @@ class MainActivity : AppCompatActivity() {
             SettingsProvider.KEY_ICON_APPEARANCE, SettingsProvider.KEY_CLEAR_BRIGHTNESS,
             SettingsProvider.KEY_COLOR_HUE, SettingsProvider.KEY_COLOR_SATURATION, SettingsProvider.KEY_COLOR_BRIGHTNESS) +
             SettingsProvider.colorKeys(false) + SettingsProvider.colorKeys(true)
-        SettingsProvider.KEY_BLUR_STYLE -> listOf(key,SettingsProvider.KEY_LIQUID_WIDTH,SettingsProvider.KEY_LIQUID_DISTORTION)
+        SettingsProvider.KEY_APP_WINDOW_TILT -> SettingsProvider.APP_ANIMATION_SWITCHES+
+            SettingsProvider.APP_ANIMATION_RANGES.keys
+        SettingsProvider.KEY_BLUR_STYLE -> listOf(key,SettingsProvider.KEY_LIQUID_WIDTH,SettingsProvider.KEY_LIQUID_DISTORTION,
+            SettingsProvider.KEY_KYANT_MAGNIFIER,SettingsProvider.KEY_KYANT_CONTROL_CENTER)+kyantOpticsKeys
         SettingsProvider.KEY_BLUR_ENABLED -> listOf(key, SettingsProvider.KEY_BLUR_STYLE,SettingsProvider.KEY_BLUR_QUALITY,SettingsProvider.KEY_LIQUID_WIDTH,SettingsProvider.KEY_LIQUID_DISTORTION,SettingsProvider.KEY_BLUR_RADIUS_ENABLED, SettingsProvider.KEY_BLUR_TONE_ENABLED, SettingsProvider.KEY_BLUR_LOCATIONS_ENABLED, SettingsProvider.KEY_BLUR_RADIUS,
             SettingsProvider.KEY_BG_OPACITY, SettingsProvider.KEY_DRAWER_BLUR_ENABLED,
-            SettingsProvider.KEY_FOLDER_BLUR_ENABLED, SettingsProvider.KEY_LIVE_FPS,
+            SettingsProvider.KEY_FOLDER_BLUR_ENABLED, SettingsProvider.KEY_LIVE_FPS, SettingsProvider.KEY_SWIPE_FPS,
             SettingsProvider.KEY_BLUR_SATURATION,SettingsProvider.KEY_BLUR_VIBRANCY,SettingsProvider.KEY_BLUR_LIGHTENING)
         SettingsProvider.KEY_FOLDER_BLUR_ENABLED -> listOf(key,FolderSettingsKeys.OWN)+FolderSettingsKeys.keys
         SettingsProvider.KEY_DOCK_ENABLED -> listOf(key,SettingsProvider.KEY_DOCK_AUTO_LENGTH,SettingsProvider.KEY_DOCK_SIDE_PADDING,
@@ -1562,6 +1655,9 @@ class MainActivity : AppCompatActivity() {
         val developer=column()
         add(developer,switchRow(getString(R.string.ui_developer_mode),SettingsProvider.KEY_DEVELOPER_MODE))
         val developerOptions=column()
+        divider(developerOptions)
+        add(developerOptions,switchRow(getString(R.string.ui_module_logging),SettingsProvider.KEY_MODULE_LOGGING,
+            getString(R.string.ui_module_logging_hint)))
         divider(developerOptions)
         add(developerOptions,switchRow(getString(R.string.ui_gpu_effects),SettingsProvider.KEY_GPU_EFFECTS))
         add(developerOptions,text(getString(R.string.ui_gpu_effects_hint),12f,true).apply {setPadding(dp(20),0,dp(20),dp(16))})

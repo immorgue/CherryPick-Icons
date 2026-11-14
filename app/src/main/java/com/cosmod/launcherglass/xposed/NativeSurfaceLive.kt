@@ -18,6 +18,8 @@ import de.robv.android.xposed.*
 import java.util.WeakHashMap
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.math.abs
+import kotlin.math.sqrt
 
 /** Own only material buffers. Never retain/replay mutable native shadow builders. */
 object NativeSurfaceLive {
@@ -31,9 +33,13 @@ object NativeSurfaceLive {
     private data class Pose(val xx:Float=1f,val xy:Float=0f,val yx:Float=0f,val yy:Float=1f,
         val x:Float=0f,val y:Float=0f,val positioned:Boolean=false,val transformed:Boolean=false,val version:Long=0L)
     private data class Lease(val provider: Any, val control: SurfaceControl,
-        val pose:AtomicReference<Pose> = AtomicReference(Pose()))
+        val pose:AtomicReference<Pose> = AtomicReference(Pose())) {
+        @Volatile var restScale=Float.POSITIVE_INFINITY
+        @Volatile var flightAlpha=1f
+        @Volatile var nativeAlpha=1f
+    }
     private val controls=ConcurrentHashMap<SurfaceControl,Lease>()
-    private data class Sample(val capture:Capture,val draw:Draw,val pose:Pose?)
+    private data class Sample(val capture:Capture,val draw:Draw,val pose:Pose?,var backdrop:StaticBackdrop?=null)
     private val sampling=ThreadLocal<Sample?>()
     internal val isSampling:Boolean get()=sampling.get()!=null
     private val sampleTransform=ThreadLocal<Matrix?>()
@@ -58,7 +64,8 @@ object NativeSurfaceLive {
         var wallpaper: Bitmap?, var closing:Boolean=false,var direction:Int=0,var last: Long = 0L, var redraws: Int = 0, var poseVersion:Long = -1L,
         val staticFlight:Boolean=PrefsHelper.staticAnimationBlur,
         val clock:SampleFrameClock=SampleFrameClock(),val progress:SurfaceProgress=SurfaceProgress(started),
-        val motion:FlightDirection=FlightDirection(if(closing)-1 else 0))
+        val motion:FlightDirection=FlightDirection(if(closing)-1 else 0),
+        var submittedBackdrop:StaticBackdrop?=null)
     private val leases = WeakHashMap<Surface, Lease>()
     private val tokens = WeakHashMap<Surface, Any>()
     private val frames = WeakHashMap<Surface, Frame>()
@@ -84,7 +91,7 @@ object NativeSurfaceLive {
                         pool.add(output)
                     }catch(t:Throwable){output.close();throw t}
                 }
-                GlassLogger.animation("LiveSurface","Prewarmed ${pool.size} reusable GPU material producers")
+                GlassLogger.animation("LiveSurface") {"Prewarmed ${pool.size} reusable GPU material producers"}
             }catch(t:Throwable){warmed.set(false);GlassLogger.e("LiveSurface","GPU producer warmup unavailable",t)}
         }
     }
@@ -121,6 +128,9 @@ object NativeSurfaceLive {
         private set
 
     @Volatile private var hasLiveFlight=false
+    internal val hasStaticFlight get()=active && !hasLiveFlight
+    @Volatile internal var staticFlightReturn=0L
+        private set
     @Volatile private var animatedSources:Set<View> = emptySet()
     fun ownsSource(view:View)=!LiveBlurEngine.isWorkspaceScrolling && animatedSources.contains(view)
     val materialSource: View? get() = recording.get()?.source ?: sampling.get()?.capture?.source
@@ -136,10 +146,15 @@ object NativeSurfaceLive {
         return false
     }
 
-    fun rememberStaticBackdrop(wallpaper:Bitmap,source:RectF,mask:Bitmap,style:GlassStyle){
-        if(!PrefsHelper.staticAnimationBlur)return
-        val capture=recording.get() ?: return
-        capture.backdrop=StaticBackdrop(wallpaper,RectF(source),mask,style)
+    fun rememberFlightBackdrop(wallpaper:Bitmap,source:RectF,mask:Bitmap,style:GlassStyle){
+        val sample=sampling.get()
+        if(sample!=null){
+            if(PrefsHelper.appWindowTilt && PrefsHelper.appGenie && PrefsHelper.appGenieStrength>0 && sample.backdrop==null)
+                sample.backdrop=StaticBackdrop(wallpaper,RectF(source),mask,style)
+        }else if(PrefsHelper.staticAnimationBlur){
+            val capture=recording.get() ?: return
+            capture.backdrop=StaticBackdrop(wallpaper,RectF(source),mask,style)
+        }
     }
 
     private fun refreshActive() {
@@ -148,8 +163,10 @@ object NativeSurfaceLive {
         // desktop source or show a stationary child over the scrolling icon.
         val flying=frames.values.filter {it.closing && hasNativePose(it.capture)}
         val next=flying.isNotEmpty()
+        val wasStatic=hasStaticFlight
         hasLiveFlight=flying.any {!it.staticFlight}
         animatedSources=flying.mapNotNull {it.capture.source}.toSet()
+        if(wasStatic && !next)staticFlightReturn++
         if(active!=next){active=next;main.post {LiveBlurEngine.onNativeSurfacesChanged()}}
     }
     private fun hasNativePose(capture:Capture)=capture.lease?.pose?.get()?.let {it.positioned && it.transformed}==true
@@ -168,6 +185,7 @@ object NativeSurfaceLive {
     }
     private data class StagedTransform(val lease:Lease,val update:SurfaceTransformUpdate)
     private val stagedPoses=WeakHashMap<Any,MutableMap<SurfaceControl,StagedTransform>>()
+    private val writingFlightAlpha=ThreadLocal<Boolean>()
     private fun observeTransform(param:XC_MethodHook.MethodHookParam,position:Boolean){
         val control=param.args.firstOrNull() as? SurfaceControl ?: return
         val lease=controls[control] ?: return
@@ -185,6 +203,7 @@ object NativeSurfaceLive {
                 values[3]=(param.args[3] as? Number)?.toFloat() ?: return
                 values[4]=(param.args[4] as? Number)?.toFloat() ?: return
             }
+            updateFlightIconAlpha(param.thisObject as SurfaceControl.Transaction,lease,values)
             SurfaceTransformUpdate(matrix=listOf(values[0],values[1],values[3],values[4]))
         }
         synchronized(lock){
@@ -193,6 +212,29 @@ object NativeSurfaceLive {
             updates[control]=StagedTransform(lease,prior.then(update))
         }
     }
+    private fun limitFlightIcon()=PrefsHelper.enabled && PrefsHelper.appWindowTilt && PrefsHelper.appGenie &&
+        PrefsHelper.appGenieStrength>0 && !LiveBlurEngine.isEditing && !LiveBlurEngine.isWorkspaceScrolling
+
+    private fun updateFlightIconAlpha(transaction:SurfaceControl.Transaction,lease:Lease,values:FloatArray) {
+        val limit=limitFlightIcon()
+        if(!limit && lease.flightAlpha==1f)return
+        val scale=sqrt(abs(values[0]*values[4]-values[1]*values[3]))
+        if(!scale.isFinite() || scale<=.001f)return
+        val rest=minOf(lease.restScale,scale)
+        lease.restScale=rest
+        // The same surface can reverse without returning to the desktop.
+        // Its resting size is independent of the direction of the gesture.
+        val progress=((scale/rest-1.55f)/.40f).coerceIn(0f,1f)
+        val alpha=if(limit)1f-progress*progress*(3f-2f*progress) else 1f
+        if(lease.flightAlpha==alpha)return
+        lease.flightAlpha=alpha
+        if(lease.control.isValid){
+            writingFlightAlpha.set(true)
+            try {transaction.setAlpha(lease.control,minOf(alpha,lease.nativeAlpha))}
+            finally {writingFlightAlpha.remove()}
+        }
+    }
+
     /** Publish matrix + translation together, only after the OEM transaction has applied. */
     private fun publishTransforms(transaction:Any) {
         synchronized(lock){
@@ -323,7 +365,7 @@ object NativeSurfaceLive {
                     // every open/return allocates another BufferQueue/context.
                     releaseChild(it.control,handoff)
                 }
-                GlassLogger.animation("LiveSurface", "Retired record=${capture.recordId}, redraws=${frame?.redraws ?: 0}, pose=${capture.lease?.pose?.get()}, reason=$reason")
+                GlassLogger.animation("LiveSurface") {"Retired record=${capture.recordId}, redraws=${frame?.redraws ?: 0}, pose=${capture.lease?.pose?.get()}, reason=$reason"}
             }
             remove
         }
@@ -402,6 +444,7 @@ object NativeSurfaceLive {
                     val poseChanged=poseVersion!=frame.poseVersion
                     if(frame.clock.remainingNs(nowNs,fps)>0L || (wallpaper===frame.wallpaper && !poseChanged))continue
                     var canvas: Canvas? = null
+                    var backdrop:StaticBackdrop?=null
                     Trace.beginSection("CherryPick.surfaceSubmit")
                     try {
                         // Never hold the lease lock over allocation, renderer
@@ -410,7 +453,7 @@ object NativeSurfaceLive {
                         canvas = output.surface.lockHardwareCanvas()
                         canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
                         canvas.scale(canvas.width.toFloat()/owner.canvasWidth,canvas.height.toFloat()/owner.canvasHeight)
-                        drawMaterial(canvas,owner,pose)
+                        backdrop=drawMaterial(canvas,owner,pose)
                     } catch (t: Throwable) {
                         synchronized(lock){if(frames[surface]===frame){frames.remove(surface);captures.remove(surface);owner.lease?.let {releaseChild(it.control)}}}
                         GlassLogger.e("LiveSurface", "Material lease ended", t)
@@ -420,6 +463,7 @@ object NativeSurfaceLive {
                             synchronized(lock){
                                 if(frame.closing && frames[surface]===frame && tokens[surface]===owner.token && leases[surface]===owner.lease){
                                     output.show()
+                                    frame.submittedBackdrop=backdrop
                                     frame.wallpaper=wallpaper;frame.last=now;frame.poseVersion=poseVersion;frame.redraws++
                                     frame.clock.record(nowNs,fps)
                                 }
@@ -434,13 +478,19 @@ object NativeSurfaceLive {
         }
     }
 
-    private fun drawMaterial(canvas:Canvas,owner:Capture,pose:Pose?){
+    private fun drawMaterial(canvas:Canvas,owner:Capture,pose:Pose?):StaticBackdrop? {
+        var backdrop:StaticBackdrop?=null
         for(draw in owner.draws){
             val saved=canvas.save()
             canvas.concat(draw.matrix);canvas.clipRect(draw.clip)
-            sampling.set(Sample(owner,draw,pose))
-            try {draw.render(canvas)}finally{sampling.remove();canvas.restoreToCount(saved)}
+            val sample=Sample(owner,draw,pose)
+            sampling.set(sample)
+            try {
+                draw.render(canvas)
+                if(backdrop==null)backdrop=sample.backdrop
+            }finally{sampling.remove();canvas.restoreToCount(saved)}
         }
+        return backdrop
     }
 
     private fun beginCapture(param:XC_MethodHook.MethodHookParam,surface:Surface,sourceView:View?) {
@@ -461,6 +511,9 @@ object NativeSurfaceLive {
     private fun endCapture(param:XC_MethodHook.MethodHookParam) {
         val capture = param.getObjectExtra("capture") as? Capture ?: return
         recording.set(param.getObjectExtra("priorCapture") as? Capture)
+        val restingWidth=capture.source?.let {IconGlassHook.displayedIconBounds(it)?.width()}
+        if(restingWidth!=null && restingWidth>0 && capture.canvasWidth>=restingWidth)
+            capture.lease?.let {it.restScale=minOf(it.restScale,restingWidth.toFloat()/capture.canvasWidth)}
         if (param.hasThrowable() || capture.draws.isEmpty() || capture.lease == null) {
             synchronized(lock) {
                 if (captures[capture.surface] === capture) {
@@ -474,7 +527,7 @@ object NativeSurfaceLive {
             capture.recordId?.let {templates[it]=capture}
             frames[capture.surface] = frame(capture)
             refreshActive()
-            GlassLogger.animation("LiveSurface", "Leased material: record=${capture.recordId}, draws=${capture.draws.size}, source=${capture.source?.javaClass?.simpleName}, closing=${frames[capture.surface]?.closing}, static=${frames[capture.surface]?.staticFlight}, limit=${FlightBlurPolicy.fps(PrefsHelper.liveFps,PrefsHelper.limitClosingBlur)}")
+            GlassLogger.animation("LiveSurface") {"Leased material: record=${capture.recordId}, draws=${capture.draws.size}, source=${capture.source?.javaClass?.simpleName}, closing=${frames[capture.surface]?.closing}, static=${frames[capture.surface]?.staticFlight}, limit=${FlightBlurPolicy.fps(PrefsHelper.liveFps,PrefsHelper.limitClosingBlur)}"}
         }
         main.postDelayed({retire("unused preparation") {it===capture && !hasNativePose(it)}},4000L)
         schedule()
@@ -489,6 +542,18 @@ object NativeSurfaceLive {
         for(method in listOf("setPosition","setMatrix"))ModuleHooks.hookAllMethods(SurfaceControl.Transaction::class.java,method,object:XC_MethodHook(){
             override fun afterHookedMethod(param:MethodHookParam){if(!param.hasThrowable())observeTransform(param,method=="setPosition")}
         })
+        ModuleHooks.findAndHookMethod(SurfaceControl.Transaction::class.java,"setAlpha",
+            SurfaceControl::class.java,Float::class.javaPrimitiveType!!,object:XC_MethodHook(){
+                override fun beforeHookedMethod(param:MethodHookParam){
+                    val control=param.args[0] as? SurfaceControl ?: return
+                    val lease=controls[control] ?: return
+                    if(writingFlightAlpha.get()==true)return
+                    val alpha=param.args[1] as Float
+                    lease.nativeAlpha=alpha
+                    val limit=lease.flightAlpha
+                    if(limit<1f && limitFlightIcon())param.args[1]=minOf(alpha,limit)
+                }
+            })
         ModuleHooks.hookAllMethods(SurfaceControl.Transaction::class.java,"apply",object:XC_MethodHook(){
             override fun afterHookedMethod(param:MethodHookParam){
                 if(!param.hasThrowable())publishTransforms(param.thisObject)
@@ -553,9 +618,10 @@ object NativeSurfaceLive {
                         val surface = XposedHelpers.callMethod(holder, "getSurface") as? Surface ?: return
                         val control = XposedHelpers.callMethod(holder, "getSc") as? SurfaceControl ?: return
                         synchronized(lock) {
+                            val restScale=controls[control]?.restScale ?: Float.POSITIVE_INFINITY
                             retire("new buffer") {it.lease?.control===control}
                             releaseChild(control)
-                            val lease=Lease(param.thisObject, control)
+                            val lease=Lease(param.thisObject, control).apply {this.restScale=restScale}
                             leases[surface]=lease;controls[control]=lease
                         }
                         legacyTransfer.get()?.let {transfer ->
@@ -589,6 +655,7 @@ object NativeSurfaceLive {
                     val frame=capture?.let {frames[it.surface]}
                     param.setObjectExtra("returnedClosing",frame?.closing==true)
                     param.setObjectExtra("returnedStatic",frame?.staticFlight==true)
+                    param.setObjectExtra("returnedBackdrop",frame?.submittedBackdrop)
                 }
             }
             override fun afterHookedMethod(param:MethodHookParam) {
@@ -602,7 +669,11 @@ object NativeSurfaceLive {
                     try {
                         if(param.getObjectExtra("returnedClosing")==true){
                             Trace.beginSection("CherryPick.returnRepair")
-                            try {IconGlassHook.onNativeIconReturned(capture.source,fadeFromStatic=param.getObjectExtra("returnedStatic")==true,backdrop=capture.backdrop)}finally{Trace.endSection()}
+                            val static=param.getObjectExtra("returnedStatic")==true
+                            val live=(param.getObjectExtra("returnedBackdrop") as? StaticBackdrop)
+                                ?.takeIf {PrefsHelper.appWindowTilt && PrefsHelper.appGenie && PrefsHelper.appGenieStrength>0}
+                            try {IconGlassHook.onNativeIconReturned(capture.source,fadeFromStatic=static,
+                                backdrop=if(static)capture.backdrop else live)}finally{Trace.endSection()}
                         }
                         retire("showOriginalIcon",capture.source?.rootView) {it===capture}
                     }finally{Trace.endSection()}

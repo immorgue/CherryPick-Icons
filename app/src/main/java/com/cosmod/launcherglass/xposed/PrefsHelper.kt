@@ -31,6 +31,15 @@ object PrefsHelper {
     @Volatile var hazeBloomEnabled=false
         private set
     @Volatile var smoothSwipeLead=false
+    @Volatile var appWindowTilt=false
+    @Volatile var appGenie=true
+    @Volatile var appDroplet=true
+    @Volatile var appGestureBounce=true
+    @Volatile var appOpenResponse=240
+    @Volatile var appCloseSpeed=100
+    @Volatile var appGenieStrength=100
+    @Volatile var appAnimationSlowdown=100
+    @Volatile var swipeLead=SettingsDefaults.boolean(SettingsProvider.KEY_SWIPE_LEAD)
         private set
     @Volatile var disableEdgeOptimization=SettingsDefaults.boolean(SettingsProvider.KEY_DISABLE_EDGE_OPTIMIZATION)
         private set
@@ -69,7 +78,10 @@ object PrefsHelper {
     val iconBackdropEnabled:Boolean get()=com.cosmod.launcherglass.util.MaterialMode.needsBackdrop(blurStyle,blurEnabled)
     val backdropEnabled:Boolean get()=com.cosmod.launcherglass.util.MaterialMode.needsBackdrop(blurStyle,blurEnabled,
         FolderSettings.own && folderBlurEnabled,DockSettings.own && dockEnabled)
-    val liquidGlass:Boolean get()=blurStyle==SettingsProvider.BLUR_STYLE_LIQUID && android.os.Build.VERSION.SDK_INT>=33
+    val kyantGlass:Boolean get()=blurStyle==SettingsProvider.BLUR_STYLE_KYANT && android.os.Build.VERSION.SDK_INT>=33
+    val liquidGlass:Boolean get()=kyantGlass || (blurStyle==SettingsProvider.BLUR_STYLE_LIQUID && android.os.Build.VERSION.SDK_INT>=33)
+    @Volatile var kyant=KyantOptics.read()
+    @Volatile var swipeFps=SettingsDefaults.integer(SettingsProvider.KEY_SWIPE_FPS)
     @Volatile var liveFps: Int = SettingsDefaults.integer(SettingsProvider.KEY_LIVE_FPS)
     /** Event-driven dock refresh and frame-aligned material sampling (developer comparison switch). */
     @Volatile var dockEventDriven: Boolean = true
@@ -198,6 +210,7 @@ object PrefsHelper {
             val newHaze=developer && android.os.Build.VERSION.SDK_INT>=33 && bundle.getBoolean(SettingsProvider.KEY_HAZE_ENABLED,false)
             val newHazeBloom=newHaze && bundle.getBoolean(SettingsProvider.KEY_HAZE_BLOOM,false)
             val newSmoothSwipeLead=developer && bundle.getBoolean(SettingsProvider.KEY_SMOOTH_SWIPE_LEAD,false)
+            val newSwipeLead=bundle.getBoolean(SettingsProvider.KEY_SWIPE_LEAD,SettingsDefaults.boolean(SettingsProvider.KEY_SWIPE_LEAD))
             val depthChanged=newColorDepth!=colorDepthBits || newDepthStage!=colorDepthStage
             val processingDepthChanged=depthChanged && ((colorDepthBits<24 && colorDepthStage<=ColorDepthEffect.AFTER_BLUR) ||
                 (newColorDepth<24 && newDepthStage<=ColorDepthEffect.AFTER_BLUR))
@@ -225,12 +238,13 @@ object PrefsHelper {
             val newBlurRadius = if (bundle.getBoolean(SettingsProvider.KEY_BLUR_RADIUS_ENABLED,true))
                 bundle.getInt(SettingsProvider.KEY_BLUR_RADIUS, SettingsDefaults.integer(SettingsProvider.KEY_BLUR_RADIUS)).coerceIn(0,50) else 0
             val newBlurMode = bundle.getInt(SettingsProvider.KEY_BLUR_MODE, SettingsDefaults.integer(SettingsProvider.KEY_BLUR_MODE))
-            val newBlurStyle = bundle.getInt(SettingsProvider.KEY_BLUR_STYLE, SettingsDefaults.integer(SettingsProvider.KEY_BLUR_STYLE)).coerceIn(0,2)
+            val newBlurStyle = bundle.getInt(SettingsProvider.KEY_BLUR_STYLE, SettingsDefaults.integer(SettingsProvider.KEY_BLUR_STYLE)).coerceIn(0,SettingsProvider.BLUR_STYLE_KYANT)
             val blurStyleChanged=newBlurStyle!=blurStyle
             val newBlurQuality=if(developer)bundle.getInt(SettingsProvider.KEY_BLUR_QUALITY,SettingsDefaults.integer(SettingsProvider.KEY_BLUR_QUALITY)).coerceIn(0,100)else 0
             val newLiquidWidth=bundle.getInt(SettingsProvider.KEY_LIQUID_WIDTH,SettingsDefaults.integer(SettingsProvider.KEY_LIQUID_WIDTH)).coerceIn(0,100)
             val newLiquidDistortion=bundle.getInt(SettingsProvider.KEY_LIQUID_DISTORTION,SettingsDefaults.integer(SettingsProvider.KEY_LIQUID_DISTORTION)).coerceIn(0,300)
-            val geometryChanged=newLiquidWidth!=liquidWidth || newLiquidDistortion!=liquidDistortion
+            val newKyant=KyantOptics.read(bundle)
+            val geometryChanged=newLiquidWidth!=liquidWidth || newLiquidDistortion!=liquidDistortion || newKyant!=kyant
             val qualityChanged=newBlurQuality!=blurQuality
             val newLiveFps = bundle.getInt(SettingsProvider.KEY_LIVE_FPS, SettingsDefaults.integer(SettingsProvider.KEY_LIVE_FPS))
             val newIdlePause = bundle.getBoolean(SettingsProvider.KEY_IDLE_PAUSE, SettingsDefaults.boolean(SettingsProvider.KEY_IDLE_PAUSE))
@@ -300,7 +314,9 @@ object PrefsHelper {
                 newIconStroke != iconStroke || newStrokeOpacity != strokeOpacity ||
                 newGlyphShadow != glyphShadow || newShadowOpacity != shadowOpacity ||
                 newGradientOpacity != gradientOpacity || glyphOutlineChanged || paletteChanged ||
-                blurColorsChanged || blurStyleChanged || geometryChanged || vibrancyChanged || widgetChanged || depthChanged || hazeChanged || newSmoothSwipeLead!=smoothSwipeLead || newDisableEdgeOptimization!=disableEdgeOptimization || newOptimizeMiniIcons!=optimizeMiniIcons || artworkChanged
+                blurColorsChanged || blurStyleChanged || geometryChanged || vibrancyChanged || widgetChanged || depthChanged || hazeChanged ||
+                newSwipeLead!=swipeLead || newSmoothSwipeLead!=smoothSwipeLead || newDisableEdgeOptimization!=disableEdgeOptimization ||
+                newOptimizeMiniIcons!=optimizeMiniIcons || artworkChanged
 
             if (blurColorsChanged || paletteChanged || vibrancyChanged) {
                 blurSaturation = newBlurSaturation
@@ -317,10 +333,22 @@ object PrefsHelper {
             reuseStaticWallpaper=newReuseStaticWallpaper
             sceneDragBackdrop=developer && bundle.getBoolean(SettingsProvider.KEY_SCENE_DRAG_BACKDROP,false)
             staticAnimationBlur=bundle.getBoolean(SettingsProvider.KEY_STATIC_ANIMATION_BLUR,false)
+            GlassLogger.enabled=bundle.getBoolean(SettingsProvider.KEY_MODULE_LOGGING,SettingsDefaults.boolean(SettingsProvider.KEY_MODULE_LOGGING))
+            appWindowTilt=bundle.getBoolean(SettingsProvider.KEY_APP_WINDOW_TILT,false)
+            appGenie=bundle.getBoolean(SettingsProvider.KEY_APP_GENIE,true)
+            appDroplet=bundle.getBoolean(SettingsProvider.KEY_APP_DROPLET,true)
+            appGestureBounce=bundle.getBoolean(SettingsProvider.KEY_APP_GESTURE_BOUNCE,true)
+            fun animationValue(key:String)=bundle.getInt(key,SettingsDefaults.integer(key))
+                .coerceIn(SettingsProvider.APP_ANIMATION_RANGES.getValue(key))
+            appOpenResponse=animationValue(SettingsProvider.KEY_APP_OPEN_RESPONSE)
+            appCloseSpeed=animationValue(SettingsProvider.KEY_APP_CLOSE_SPEED)
+            appGenieStrength=animationValue(SettingsProvider.KEY_APP_GENIE_STRENGTH)
+            appAnimationSlowdown=animationValue(SettingsProvider.KEY_APP_ANIMATION_SLOWDOWN)
             bgOpacity = newBgOpacity
             blurEnabled = newBlurEnabled
             colorDepthBits=newColorDepth
             colorDepthStage=newDepthStage;hazeEnabled=newHaze;hazeBloomEnabled=newHazeBloom;smoothSwipeLead=newSmoothSwipeLead
+            swipeLead=newSwipeLead
             disableEdgeOptimization=newDisableEdgeOptimization
             optimizeMiniIcons=newOptimizeMiniIcons
             artworkTransparency=newArtworkTransparency;artworkDetection=developer
@@ -337,7 +365,9 @@ object PrefsHelper {
             blurVibrancy=newBlurVibrancy
             blurQuality=newBlurQuality;liquidWidth=newLiquidWidth;liquidDistortion=newLiquidDistortion
             if(opticsChanged || blurStyleChanged || qualityChanged || vibrancyChanged || processingDepthChanged || backendChanged)WallpaperHelper.invalidate()
-            liveFps = newLiveFps
+            liveFps = newLiveFps.coerceIn(1,60)
+            swipeFps=bundle.getInt(SettingsProvider.KEY_SWIPE_FPS,SettingsDefaults.integer(SettingsProvider.KEY_SWIPE_FPS)).coerceIn(1,120)
+            kyant=newKyant
             idlePause = newIdlePause
             iconStroke = newIconStroke
             strokeOpacity = newStrokeOpacity
@@ -396,7 +426,7 @@ object PrefsHelper {
 
             GlassLogger.i(
                 "PrefsHelper",
-                "Preferences loaded: enabled=$enabled, bgOpacity=$bgOpacity%, blur=$blurEnabled(mode=$blurMode, fps=$liveFps, idlePause=$idlePause, r=$blurRadius), stroke=$iconStroke($strokeOpacity%), glyphShadow=$glyphShadow($shadowOpacity%), gradient=$gradientOpacity%, palette=$iconPalette"
+                "Preferences loaded: enabled=$enabled, bgOpacity=$bgOpacity%, blur=$blurEnabled(mode=$blurMode, fps=$liveFps, swipeFps=$swipeFps, swipeLead=$swipeLead, idlePause=$idlePause, r=$blurRadius), stroke=$iconStroke($strokeOpacity%), glyphShadow=$glyphShadow($shadowOpacity%), gradient=$gradientOpacity%, palette=$iconPalette"
             )
         } catch (t: Throwable) {
             GlassLogger.e("PrefsHelper", "Failed to load preferences", t)

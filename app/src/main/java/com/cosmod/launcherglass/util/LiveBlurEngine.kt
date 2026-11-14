@@ -38,6 +38,10 @@ object LiveBlurEngine {
         private set
 
     private var lastWorkspaceScrollMs = 0L
+    private var workspacePager: java.lang.ref.WeakReference<View>? = null
+    private var workspaceEndPending = false
+    private var workspaceReleasedAt = 0L
+    private var workspaceSettleSteps = 0
 
     /**
      * Touch, scrolling, transitions or wallpaper motion during the settling
@@ -51,7 +55,11 @@ object LiveBlurEngine {
                 isWallpaperMoving || transitionVisible()
         }
     val isWorkspaceScrolling: Boolean
-        get() = lastWorkspaceScrollMs > 0L && SystemClock.uptimeMillis() - lastWorkspaceScrollMs < 90L
+        get() = (!workspaceEndPending && workspacePager?.get()?.isAttachedToWindow==true) ||
+            (lastWorkspaceScrollMs > 0L && SystemClock.uptimeMillis() - lastWorkspaceScrollMs < 90L)
+    internal val canBoostWorkspaceSamples: Boolean
+        get() = isResumed && !isAppLaunchInProgress && !transitionVisible() &&
+            PrefsHelper.blurMode==SettingsProvider.BLUR_MODE_LIVE && isWorkspaceScrolling
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val isTickerRunning = AtomicBoolean(false)
@@ -127,7 +135,7 @@ object LiveBlurEngine {
         if(transitionVisible()){
             transitionRefreshUntilMs=maxOf(transitionRefreshUntilMs,SystemClock.uptimeMillis()+600L)
             startTickerIfNeeded()
-        }
+        }else if(isResumed && !isAppLaunchInProgress)IconGlassHook.requestLiveFrame()
     }
     private fun stopFrameLoop() {
         if(transitionVisible() && PrefsHelper.enabled){
@@ -143,6 +151,7 @@ object LiveBlurEngine {
     }
 
     fun onAppLaunchStarted() = onMainThread {
+        clearWorkspaceScroll()
         isAppLaunchInProgress = true
         com.cosmod.launcherglass.xposed.NativeSurfaceLive.onFlightStarted(opening=true)
         stopFrameLoop()
@@ -259,6 +268,7 @@ object LiveBlurEngine {
             mainHandler.removeCallbacks(tickerRunnable);isTickerRunning.set(false)
             isMoving=false;isWallpaperMoving=false;activePointerCount=0
             isEditing=false;isAppLaunchInProgress=false;isWorkspaceBlurSuspended=false
+            clearWorkspaceScroll()
             transitionRefreshUntilMs=0L
             return@onMainThread
         }
@@ -309,11 +319,54 @@ object LiveBlurEngine {
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 activePointerCount = 0
+                if(workspacePager?.get()!=null && !workspaceEndPending)
+                    workspaceReleasedAt=SystemClock.uptimeMillis()
             }
         }
     }
 
-    fun onScroll(scrollX: Int, view: View) {
+    internal fun onWorkspacePageBegin(view: View) {
+        if(workspacePager?.get()===view && !workspaceEndPending)return
+        workspacePager=java.lang.ref.WeakReference(view)
+        workspaceEndPending=false
+        workspaceReleasedAt=0L
+        workspaceSettleSteps=0
+    }
+
+    internal fun onWorkspacePageEnd(view: View) {
+        if(workspacePager?.get()!==view || workspaceEndPending)return
+        if(workspaceReleasedAt!=0L)GlassLogger.animationLimited(TAG,"workspaceSettle",30){
+            "Workspace settled ${SystemClock.uptimeMillis()-workspaceReleasedAt}ms after release, " +
+                "scrollSteps=$workspaceSettleSteps, sampleLimit=${if(canBoostWorkspaceSamples)PrefsHelper.swipeFps else PrefsHelper.liveFps}"
+        }
+        // The final scroll coordinates can be published earlier in this same
+        // traversal. Keep their swipe cadence through this frame's pre-draw.
+        lastWorkspaceScrollMs=SystemClock.uptimeMillis()
+        workspaceEndPending=true
+    }
+
+    internal fun onWorkspaceFrameSampled(root:View){
+        if(workspaceEndPending && workspacePager?.get()?.rootView===root)clearWorkspaceScroll()
+    }
+
+    internal fun settlingWorkspace(view:View):Boolean =
+        workspacePager?.get()===view && workspaceReleasedAt!=0L && canBoostWorkspaceSamples
+
+    internal fun finalWorkspaceFrame(view:View):Boolean =
+        workspaceEndPending && workspacePager?.get()?.rootView===view
+
+    internal fun isTrackedWorkspaceScroller(scroller:Any):Boolean {
+        if(!canBoostWorkspaceSamples || PrefsHelper.swipeFps<=60 || workspaceEndPending)return false
+        val pager=workspacePager?.get() ?: return false
+        return com.cosmod.launcherglass.xposed.NativeIconAccess.field(pager,"mScroller")===scroller
+    }
+
+    private fun clearWorkspaceScroll(){
+        lastWorkspaceScrollMs=0L;workspacePager=null;workspaceEndPending=false
+        workspaceReleasedAt=0L;workspaceSettleSteps=0
+    }
+
+    fun onScroll(scrollX: Int, oldScrollX:Int, view: View) {
         val name = view.javaClass.name
         if (!name.contains("Workspace") || name.contains("Recents") || name.contains("Task")) {
             return
@@ -325,6 +378,8 @@ object LiveBlurEngine {
         isAppLaunchInProgress=false
         lastMotionTimeMs = SystemClock.uptimeMillis()
         lastWorkspaceScrollMs = lastMotionTimeMs
+        if(scrollX!=oldScrollX && workspaceReleasedAt!=0L && !workspaceEndPending && workspacePager?.get()===view)
+            workspaceSettleSteps++
 
         val childCount = (view as? ViewGroup)?.childCount ?: 3
         val maxScroll = (maxOf(1, childCount - 1) * view.width).coerceAtLeast(1)
@@ -336,6 +391,7 @@ object LiveBlurEngine {
 
     fun onActivityPaused() = onMainThread {
         isResumed = false
+        clearWorkspaceScroll()
         stopFrameLoop()
     }
 

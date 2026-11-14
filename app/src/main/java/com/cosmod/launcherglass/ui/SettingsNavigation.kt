@@ -2,7 +2,7 @@ package com.cosmod.launcherglass.ui
 
 internal enum class SettingsScreen(val tab:Int) {
     HOME(0), MODULE(1), APP(2), COLORS(1), BLUR(1), ICONS(1), FOLDERS(1),
-    DOCK(1), WIDGETS(1), DESKTOP(1), WALLPAPERS(1), BEHAVIOR(1), DEVELOPER(2), POSITIONS(1)
+    DOCK(1), WIDGETS(1), DESKTOP(1), WALLPAPERS(1), BEHAVIOR(1), DEVELOPER(2), POSITIONS(1), ANIMATIONS(1)
 }
 
 /** A real history: back from a category or another tab restores the previous screen. */

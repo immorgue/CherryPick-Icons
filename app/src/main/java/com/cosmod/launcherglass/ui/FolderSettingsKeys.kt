@@ -1,5 +1,9 @@
 package com.cosmod.launcherglass.ui
 
+internal val kyantOpticsKeys=listOf(SettingsProvider.KEY_KYANT_WIDTH,
+    SettingsProvider.KEY_KYANT_DISTORTION,SettingsProvider.KEY_KYANT_HIGHLIGHT,
+    SettingsProvider.KEY_KYANT_DISPERSION,SettingsProvider.KEY_KYANT_ZOOM,SettingsProvider.KEY_KYANT_VIBRANCY)
+
 /**
  * A group of glass keys that a surface (folders, dock) may override.  The
  * scoped key is "<prefix><base>"; while [own] is off the surface inherits the
@@ -15,8 +19,9 @@ open class ScopedSettingsKeys(val prefix:String,val own:String) {
     companion object {
         val INTEGERS=listOf(SettingsProvider.KEY_BLUR_STYLE,SettingsProvider.KEY_BLUR_RADIUS,SettingsProvider.KEY_BLUR_QUALITY,
             SettingsProvider.KEY_BG_OPACITY,SettingsProvider.KEY_BLUR_SATURATION,SettingsProvider.KEY_BLUR_VIBRANCY,
-            SettingsProvider.KEY_BLUR_LIGHTENING,SettingsProvider.KEY_LIQUID_WIDTH,SettingsProvider.KEY_LIQUID_DISTORTION)
-        val BOOLEANS=listOf(SettingsProvider.KEY_BLUR_RADIUS_ENABLED,SettingsProvider.KEY_BLUR_TONE_ENABLED)
+            SettingsProvider.KEY_BLUR_LIGHTENING,SettingsProvider.KEY_LIQUID_WIDTH,SettingsProvider.KEY_LIQUID_DISTORTION) + kyantOpticsKeys
+        val BOOLEANS=listOf(SettingsProvider.KEY_BLUR_RADIUS_ENABLED,SettingsProvider.KEY_BLUR_TONE_ENABLED,
+            SettingsProvider.KEY_KYANT_MAGNIFIER,SettingsProvider.KEY_KYANT_CONTROL_CENTER)
         val all:List<ScopedSettingsKeys> get()=listOf(FolderSettingsKeys,DockSettingsKeys)
         fun scopeOf(key:String):ScopedSettingsKeys?=all.firstOrNull {it.base(key)!=null}
         /** The base icon key of a scoped key, or null for a non-scoped key. */

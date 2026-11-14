@@ -99,7 +99,8 @@ object IconGlassHook {
             val current=weak.get()
             var recovered=0
             if(current!=null && PrefsHelper.enabled && PrefsHelper.backdropEnabled) {
-                DockMaterial.onFrame()
+                if(!NativeSurfaceLive.hasStaticFlight || LiveBlurEngine.isWorkspaceScrolling || LiveBlurEngine.isEditing)
+                    DockMaterial.onFrame()
                 ParentBackdrop.beginFrame()
                 IconMaterialRenderer.beginFrame()
                 // OEM trim/snapshot teardown also discards nested nodes in
@@ -117,11 +118,16 @@ object IconGlassHook {
             }
             if(current!=null && PrefsHelper.enabled && PrefsHelper.backdropEnabled &&
                 PrefsHelper.blurMode==com.cosmod.launcherglass.ui.SettingsProvider.BLUR_MODE_LIVE &&
-                current.isShown && !(PrefsHelper.staticAnimationBlur && LiveBlurEngine.isAppLaunchInProgress)) {
+                current.isShown && (!LiveBlurEngine.isAppLaunchInProgress || NativeSurfaceLive.active) &&
+                (!NativeSurfaceLive.hasStaticFlight || LiveBlurEngine.isWorkspaceScrolling || LiveBlurEngine.isEditing)) {
                 // Animation/scroll transforms are final now; sample the same
                 // position that this frame will present, not the previous tick.
                 android.os.Trace.beginSection("CherryPick.sampleBeforeDraw")
-                try {invalidateActiveIcons(onlyChangedDrawerSamples=true,beforeDraw=current)}finally{android.os.Trace.endSection()}
+                try {invalidateActiveIcons(onlyChangedDrawerSamples=true,beforeDraw=current,
+                    correctWorkspacePose=LiveBlurEngine.finalWorkspaceFrame(current))}finally{
+                    android.os.Trace.endSection()
+                    LiveBlurEngine.onWorkspaceFrameSampled(current)
+                }
             }
             if(current!=null && PrefsHelper.enabled && PrefsHelper.backdropEnabled)reportIdleFrame(recovered)
             true
@@ -189,7 +195,7 @@ object IconGlassHook {
         }
         return hosts[drawable]?.get()?.takeIf {it.isAttachedToWindow}
     }
-    private fun displayedIconBounds(view:View):Rect? = try {
+    internal fun displayedIconBounds(view:View):Rect? = try {
         Rect().also {XposedHelpers.callMethod(view,"getIconBounds",it)}.takeUnless {it.isEmpty}
     }catch(_:Throwable){null}
     private fun anchor(view:View,bounds:Rect):Anchor {
@@ -261,7 +267,8 @@ object IconGlassHook {
         }
         if(Looper.myLooper()==Looper.getMainLooper())refresh.run()else view.post(refresh)
     }
-    fun invalidateActiveIcons(onlyChangedDrawerSamples:Boolean=false,beforeDraw:View?=null){
+    fun invalidateActiveIcons(onlyChangedDrawerSamples:Boolean=false,beforeDraw:View?=null,
+        workspace:View?=null,correctWorkspacePose:Boolean=false){
         if(!PrefsHelper.enabled)return
         // Icon config resets may clear drawable associations while native
         // RenderNodes keep their display lists. Keep view registration separate
@@ -272,10 +279,12 @@ object IconGlassHook {
         val world=Matrix()
         val full=RectF()
         val scroll=(LiveBlurEngine.wallpaperScrollRatio*10000).toInt()
+        val moving=LiveBlurEngine.canBoostWorkspaceSamples
         val roots=LinkedHashSet<View>()
         for(reference in registeredViews()){
             val view=reference.get() ?: continue
             if(beforeDraw!=null && view.rootView!==beforeDraw)continue
+            if(workspace!=null && !IconMaterialRenderer.isWorkspaceSample(view,null,workspace))continue
             if(NativeSurfaceLive.ownsSource(view) || !view.isAttachedToWindow || !view.isShown)continue
             world.reset()
             try {XposedHelpers.callMethod(view,"transformMatrixToGlobal",world)}catch(_:Throwable){continue}
@@ -284,11 +293,13 @@ object IconGlassHook {
             // The override permits sampling a partially visible icon; it must
             // not invalidate the entire adjacent page on every unlock/launch
             // frame or bypass retained samplers and their material FPS clocks.
+            val movingWorkspace=moving && (workspace!=null || IconMaterialRenderer.isWorkspaceSample(view,null))
             if(!LiveSamplePolicy.refresh(full.left,full.top,full.right,full.bottom,
                     metrics.widthPixels,metrics.heightPixels,view.javaClass.name.contains("BubbleTextView"),
-                    !onlyChangedDrawerSamples || PrefsHelper.disableEdgeOptimization))continue
+                    !onlyChangedDrawerSamples || PrefsHelper.disableEdgeOptimization || movingWorkspace))continue
             if(onlyChangedDrawerSamples && IconMaterialRenderer.hasBindings(view)){
-                if(IconMaterialRenderer.updateSamplers(view,wallpaper,world)){
+                if(IconMaterialRenderer.updateSamplers(view,wallpaper,world,
+                        correctWorkspacePose=correctWorkspacePose && movingWorkspace)){
                     if(beforeDraw==null)roots.add(view.rootView)
                     continue
                 }
@@ -442,7 +453,7 @@ object IconGlassHook {
         val plateOpacity=if(PrefsHelper.colorOnly)100 else PrefsHelper.bgOpacity
         val style=GlassStyle.icons().copy(extendedLens=width!=height)
         if(binding==null && compatible!=null && source!=null)
-            NativeSurfaceLive.rememberStaticBackdrop(compatible,source,plateMask,style)
+            NativeSurfaceLive.rememberFlightBackdrop(compatible,source,plateMask,style)
         IconMaterialRenderer.draw(canvas,bounds,plateMask,parts.glyphBitmap,plateColor,
             plateOpacity*255/100,false,compatible,source,binding,style=style){target,local,blurred ->
             if(!blurred){
@@ -678,6 +689,7 @@ object IconGlassHook {
         val loader=lpparam.classLoader
         for((name,install) in listOf<Pair<String,()->Unit>>(
             "NativeSurface" to {NativeSurfaceLive.install(loader)},
+            "AppWindowTilt" to {AppWindowTilt.install(loader)},
             "DragPreview" to {DragPreviewMaterial.install(loader)},
             "Folders" to {FolderMaterialHook.install(loader)},
             "LiftedBackdrop" to {LiftedBackdrop.install(loader)},

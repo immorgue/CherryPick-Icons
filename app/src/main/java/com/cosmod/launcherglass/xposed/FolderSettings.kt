@@ -9,7 +9,7 @@ import com.cosmod.launcherglass.ui.*
  * dock). While [own] is off the surface is tuned exactly like the icons.
  */
 internal open class ScopedGlassSettings(private val keys:ScopedSettingsKeys,private val folder:Boolean) {
-    data class Processing(val radius:Int,val quality:Int,val vibrancy:Int,val lightening:Int,val liquid:Boolean)
+    data class Processing(val radius:Int,val quality:Int,val vibrancy:Int,val lightening:Int,val liquid:Boolean,val kyant:Boolean=false)
     @Volatile var own=false
         private set
     @Volatile private var selected:GlassStyle?=null
@@ -43,14 +43,17 @@ internal open class ScopedGlassSettings(private val keys:ScopedSettingsKeys,priv
         val tone=bool(SettingsProvider.KEY_BLUR_TONE_ENABLED)
         val radius=if(bool(SettingsProvider.KEY_BLUR_RADIUS_ENABLED))number(SettingsProvider.KEY_BLUR_RADIUS,50)else 0
         val quality=if(developer)number(SettingsProvider.KEY_BLUR_QUALITY,100)else 0
-        val liquid=number(SettingsProvider.KEY_BLUR_STYLE,1)==1 && Build.VERSION.SDK_INT>=33
+        val mode=number(SettingsProvider.KEY_BLUR_STYLE,SettingsProvider.BLUR_STYLE_KYANT)
+        val kyant=mode==SettingsProvider.BLUR_STYLE_KYANT && Build.VERSION.SDK_INT>=33
+        val liquid=kyant || (mode==SettingsProvider.BLUR_STYLE_LIQUID && Build.VERSION.SDK_INT>=33)
         val vibrancy=if(tone)number(SettingsProvider.KEY_BLUR_VIBRANCY,200)else 0
-        processing=Processing(radius,quality,vibrancy,if(tone)number(SettingsProvider.KEY_BLUR_LIGHTENING,100)else 50,liquid)
+        processing=Processing(radius,quality,vibrancy,if(tone)number(SettingsProvider.KEY_BLUR_LIGHTENING,100)else 50,liquid,kyant)
         saturation=if(tone)number(SettingsProvider.KEY_BLUR_SATURATION,200)else 100
         selected=GlassStyle(liquid,number(SettingsProvider.KEY_LIQUID_WIDTH,100),
             number(SettingsProvider.KEY_LIQUID_DISTORTION,300),radius,if(tone)number(SettingsProvider.KEY_BG_OPACITY,100)else 0,
             PrefsHelper.backdropFilter(vibrancy,PrefsHelper.iconPalette),folder,
-            PrefsHelper.plateColor(PrefsHelper.iconPalette.background,saturation))
+            PrefsHelper.plateColor(PrefsHelper.iconPalette.background,saturation),
+            kyant=if(kyant)KyantOptics.read(bundle,keys::key)else null)
         return true
     }
 }

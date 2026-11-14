@@ -79,6 +79,11 @@ class SettingsProvider : ContentProvider() {
                 bundle.putBoolean(KEY_REUSE_STATIC_WALLPAPER,prefs.getBoolean(KEY_REUSE_STATIC_WALLPAPER,false))
                 bundle.putBoolean(KEY_SCENE_DRAG_BACKDROP,prefs.getBoolean(KEY_SCENE_DRAG_BACKDROP,false))
                 bundle.putBoolean(KEY_STATIC_ANIMATION_BLUR,prefs.getBoolean(KEY_STATIC_ANIMATION_BLUR,false))
+                bundle.putBoolean(KEY_MODULE_LOGGING,prefs.getBoolean(KEY_MODULE_LOGGING,SettingsDefaults.boolean(KEY_MODULE_LOGGING)))
+                for(key in APP_ANIMATION_SWITCHES)
+                    bundle.putBoolean(key,prefs.getBoolean(key,SettingsDefaults.boolean(key)))
+                for(key in APP_ANIMATION_RANGES.keys)
+                    bundle.putInt(key,prefs.getInt(key,SettingsDefaults.integer(key)))
                 for(scope in ScopedSettingsKeys.all){
                     bundle.putBoolean(scope.own,prefs.getBoolean(scope.own,false))
                     for(base in scope.integers){
@@ -103,6 +108,9 @@ class SettingsProvider : ContentProvider() {
                 bundle.putBoolean(KEY_HAZE_ENABLED,prefs.getBoolean(KEY_HAZE_ENABLED,false))
                 bundle.putBoolean(KEY_HAZE_BLOOM,prefs.getBoolean(KEY_HAZE_BLOOM,false))
                 bundle.putBoolean(KEY_SMOOTH_SWIPE_LEAD,prefs.getBoolean(KEY_SMOOTH_SWIPE_LEAD,false))
+                bundle.putBoolean(KEY_SWIPE_LEAD,prefs.getBoolean(KEY_SWIPE_LEAD,SettingsDefaults.boolean(KEY_SWIPE_LEAD)))
+                bundle.putBoolean(KEY_KYANT_MAGNIFIER,prefs.getBoolean(KEY_KYANT_MAGNIFIER,false))
+                bundle.putBoolean(KEY_KYANT_CONTROL_CENTER,prefs.getBoolean(KEY_KYANT_CONTROL_CENTER,false))
                 bundle.putBoolean(KEY_DISABLE_EDGE_OPTIMIZATION,prefs.getBoolean(KEY_DISABLE_EDGE_OPTIMIZATION,SettingsDefaults.boolean(KEY_DISABLE_EDGE_OPTIMIZATION)))
                 bundle.putBoolean(KEY_OPTIMIZE_MINI_ICONS,prefs.getBoolean(KEY_OPTIMIZE_MINI_ICONS,SettingsDefaults.boolean(KEY_OPTIMIZE_MINI_ICONS)))
                 bundle.putBoolean(KEY_DOCK_ENABLED,prefs.getBoolean(KEY_DOCK_ENABLED,SettingsDefaults.boolean(KEY_DOCK_ENABLED)))
@@ -140,6 +148,7 @@ class SettingsProvider : ContentProvider() {
                 bundle.putInt(KEY_BLUR_QUALITY,prefs.getInt(KEY_BLUR_QUALITY,SettingsDefaults.integer(KEY_BLUR_QUALITY)))
                 bundle.putInt(KEY_LIQUID_WIDTH,prefs.getInt(KEY_LIQUID_WIDTH,SettingsDefaults.integer(KEY_LIQUID_WIDTH)))
                 bundle.putInt(KEY_LIQUID_DISTORTION,prefs.getInt(KEY_LIQUID_DISTORTION,SettingsDefaults.integer(KEY_LIQUID_DISTORTION)))
+                for(key in kyantOpticsKeys + KEY_SWIPE_FPS)bundle.putInt(key,prefs.getInt(key,SettingsDefaults.integer(key)))
                 bundle.putInt(KEY_LIVE_FPS, prefs.getInt(KEY_LIVE_FPS, SettingsDefaults.integer(KEY_LIVE_FPS)))
                 bundle.putBoolean(KEY_IDLE_PAUSE, prefs.getBoolean(KEY_IDLE_PAUSE, SettingsDefaults.boolean(KEY_IDLE_PAUSE)))
                 bundle.putInt(KEY_GLYPH_STROKE_WIDTH, prefs.getInt(KEY_GLYPH_STROKE_WIDTH, SettingsDefaults.integer(KEY_GLYPH_STROKE_WIDTH)))
@@ -169,6 +178,11 @@ class SettingsProvider : ContentProvider() {
                     if(b.containsKey(KEY_REUSE_STATIC_WALLPAPER))editor.putBoolean(KEY_REUSE_STATIC_WALLPAPER,b.getBoolean(KEY_REUSE_STATIC_WALLPAPER))
                     if(b.containsKey(KEY_SCENE_DRAG_BACKDROP))editor.putBoolean(KEY_SCENE_DRAG_BACKDROP,b.getBoolean(KEY_SCENE_DRAG_BACKDROP))
                     if(b.containsKey(KEY_STATIC_ANIMATION_BLUR))editor.putBoolean(KEY_STATIC_ANIMATION_BLUR,b.getBoolean(KEY_STATIC_ANIMATION_BLUR))
+                    if(b.containsKey(KEY_MODULE_LOGGING))editor.putBoolean(KEY_MODULE_LOGGING,b.getBoolean(KEY_MODULE_LOGGING))
+                    for(key in APP_ANIMATION_SWITCHES)
+                        if(b.containsKey(key))editor.putBoolean(key,b.getBoolean(key))
+                    for((key,range) in APP_ANIMATION_RANGES)
+                        if(b.containsKey(key))editor.putInt(key,b.getInt(key).coerceIn(range))
                     for(scope in ScopedSettingsKeys.all){
                         if(b.containsKey(scope.own))editor.putBoolean(scope.own,b.getBoolean(scope.own))
                         for(base in scope.integers){val key=scope.key(base);if(b.containsKey(key))editor.putInt(key,b.getInt(key))}
@@ -187,6 +201,9 @@ class SettingsProvider : ContentProvider() {
                     if(b.containsKey(KEY_HAZE_ENABLED))editor.putBoolean(KEY_HAZE_ENABLED,b.getBoolean(KEY_HAZE_ENABLED))
                     if(b.containsKey(KEY_HAZE_BLOOM))editor.putBoolean(KEY_HAZE_BLOOM,b.getBoolean(KEY_HAZE_BLOOM))
                     if(b.containsKey(KEY_SMOOTH_SWIPE_LEAD))editor.putBoolean(KEY_SMOOTH_SWIPE_LEAD,b.getBoolean(KEY_SMOOTH_SWIPE_LEAD))
+                    if(b.containsKey(KEY_SWIPE_LEAD))editor.putBoolean(KEY_SWIPE_LEAD,b.getBoolean(KEY_SWIPE_LEAD))
+                    if(b.containsKey(KEY_KYANT_MAGNIFIER))editor.putBoolean(KEY_KYANT_MAGNIFIER,b.getBoolean(KEY_KYANT_MAGNIFIER))
+                    if(b.containsKey(KEY_KYANT_CONTROL_CENTER))editor.putBoolean(KEY_KYANT_CONTROL_CENTER,b.getBoolean(KEY_KYANT_CONTROL_CENTER))
                     if(b.containsKey(KEY_DISABLE_EDGE_OPTIMIZATION))editor.putBoolean(KEY_DISABLE_EDGE_OPTIMIZATION,b.getBoolean(KEY_DISABLE_EDGE_OPTIMIZATION))
                     if(b.containsKey(KEY_OPTIMIZE_MINI_ICONS))editor.putBoolean(KEY_OPTIMIZE_MINI_ICONS,b.getBoolean(KEY_OPTIMIZE_MINI_ICONS))
                     if(b.containsKey(KEY_DOCK_ENABLED))editor.putBoolean(KEY_DOCK_ENABLED,b.getBoolean(KEY_DOCK_ENABLED))
@@ -220,8 +237,10 @@ class SettingsProvider : ContentProvider() {
                     if (b.containsKey(KEY_DRAWER_BLUR_ENABLED)) editor.putBoolean(KEY_DRAWER_BLUR_ENABLED, b.getBoolean(KEY_DRAWER_BLUR_ENABLED))
                     if (b.containsKey(KEY_BLUR_RADIUS)) editor.putInt(KEY_BLUR_RADIUS, b.getInt(KEY_BLUR_RADIUS))
                     if (b.containsKey(KEY_BLUR_MODE)) editor.putInt(KEY_BLUR_MODE, b.getInt(KEY_BLUR_MODE))
-                    if (b.containsKey(KEY_BLUR_STYLE)) editor.putInt(KEY_BLUR_STYLE, b.getInt(KEY_BLUR_STYLE).coerceIn(0,2))
+                    if (b.containsKey(KEY_BLUR_STYLE)) editor.putInt(KEY_BLUR_STYLE, b.getInt(KEY_BLUR_STYLE).coerceIn(0,BLUR_STYLE_KYANT))
                     for(key in listOf(KEY_BLUR_QUALITY,KEY_LIQUID_WIDTH))if(b.containsKey(key))editor.putInt(key,b.getInt(key).coerceIn(0,100))
+                    for(key in kyantOpticsKeys)if(b.containsKey(key))editor.putInt(key,b.getInt(key).coerceIn(0,if(key==KEY_KYANT_VIBRANCY)200 else 100))
+                    if(b.containsKey(KEY_SWIPE_FPS))editor.putInt(KEY_SWIPE_FPS,b.getInt(KEY_SWIPE_FPS).coerceIn(1,120))
                     if (b.containsKey(KEY_LIVE_FPS)) editor.putInt(KEY_LIVE_FPS, b.getInt(KEY_LIVE_FPS))
                     if (b.containsKey(KEY_IDLE_PAUSE)) editor.putBoolean(KEY_IDLE_PAUSE, b.getBoolean(KEY_IDLE_PAUSE))
                     if (b.containsKey(KEY_GLYPH_STROKE_WIDTH)) editor.putInt(KEY_GLYPH_STROKE_WIDTH, b.getInt(KEY_GLYPH_STROKE_WIDTH))
@@ -271,6 +290,20 @@ class SettingsProvider : ContentProvider() {
         const val METHOD_SET = "set"
         const val METHOD_WALLPAPER_CHANGED="wallpaperChanged"
         const val KEY_STATIC_ANIMATION_BLUR="experimental_static_animation_blur"
+        const val KEY_MODULE_LOGGING="module_logging"
+        const val KEY_APP_WINDOW_TILT="app_window_tilt"
+        const val KEY_APP_GENIE="app_genie"
+        const val KEY_APP_DROPLET="app_droplet"
+        const val KEY_APP_GESTURE_BOUNCE="app_gesture_bounce"
+        const val KEY_APP_OPEN_RESPONSE="app_open_response"
+        const val KEY_APP_CLOSE_SPEED="app_close_speed"
+        const val KEY_APP_GENIE_STRENGTH="app_genie_strength"
+        const val KEY_APP_ANIMATION_SLOWDOWN="app_animation_slowdown"
+        internal val APP_ANIMATION_SWITCHES=listOf(KEY_APP_WINDOW_TILT,KEY_APP_GENIE,
+            KEY_APP_DROPLET,KEY_APP_GESTURE_BOUNCE)
+        internal val APP_ANIMATION_RANGES=mapOf(KEY_APP_OPEN_RESPONSE to 120..500,
+            KEY_APP_CLOSE_SPEED to 50..200,KEY_APP_GENIE_STRENGTH to 0..200,
+            KEY_APP_ANIMATION_SLOWDOWN to 100..1000)
         const val KEY_SCENE_DRAG_BACKDROP="experimental_scene_drag_backdrop"
 
         const val KEY_LIGHT_HUE = "color_light_hue"
@@ -309,6 +342,7 @@ class SettingsProvider : ContentProvider() {
         const val KEY_HAZE_ENABLED = "glass_haze_enabled"
         const val KEY_HAZE_BLOOM = "experimental_haze_bloom"
         const val KEY_SMOOTH_SWIPE_LEAD = "experimental_smooth_swipe_lead"
+        const val KEY_SWIPE_LEAD = "swipe_blur_lead"
         const val KEY_DISABLE_EDGE_OPTIMIZATION = "disable_edge_optimization"
         const val KEY_OPTIMIZE_MINI_ICONS = "optimize_folder_mini_icons"
         /** Glass dock behind the hotseat icons. Paddings and radius: % of the icon size. */
@@ -346,6 +380,16 @@ class SettingsProvider : ContentProvider() {
         const val BLUR_STYLE_FROSTED = 0
         const val BLUR_STYLE_LIQUID = 1
         const val BLUR_STYLE_COLOR = 2
+        const val BLUR_STYLE_KYANT = 3
+        const val KEY_KYANT_WIDTH = "kyant_width"
+        const val KEY_KYANT_DISTORTION = "kyant_distortion"
+        const val KEY_KYANT_HIGHLIGHT = "kyant_highlight"
+        const val KEY_KYANT_MAGNIFIER = "kyant_magnifier"
+        const val KEY_KYANT_CONTROL_CENTER = "kyant_control_center"
+        const val KEY_KYANT_DISPERSION = "kyant_dispersion"
+        const val KEY_KYANT_ZOOM = "kyant_zoom"
+        const val KEY_KYANT_VIBRANCY = "kyant_vibrancy"
+        const val KEY_SWIPE_FPS = "swipe_blur_fps"
         const val KEY_LIVE_FPS = "live_blur_fps"
         const val KEY_IDLE_PAUSE = "idle_pause"
         const val KEY_GLYPH_STROKE_WIDTH = "glyph_stroke_width"

@@ -4,7 +4,7 @@ package com.cosmod.launcherglass.xposed
 internal object MiniIconRefresh {
     fun refraction(liquid:Boolean,mini:Boolean,enabled:Boolean)=liquid && !(mini && enabled)
     fun fps(globalFps:Int,mini:Boolean,enabled:Boolean)=
-        minOf(globalFps.coerceIn(1,60),if(mini && enabled)30 else 60)
+        minOf(globalFps.coerceIn(1,120),if(mini && enabled)30 else 120)
     fun isMini(preview:Boolean,width:Float,height:Float,nativeWidth:Int,nativeHeight:Int):Boolean =
         preview && nativeWidth>0 && nativeHeight>0 && width>0f && height>0f &&
             width<=nativeWidth*.5f && height<=nativeHeight*.5f

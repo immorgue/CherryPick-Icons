@@ -198,6 +198,7 @@ class HookEntry : IXposedHookLoadPackage {
                 "com.android.launcher3.Workspace",
                 "com.oplus.launcher.Workspace"
             )
+            WorkspaceBlurScroll.install(lpparam.classLoader,pagedClasses)
             for (pagedName in pagedClasses) {
                 try {
                     val pagedClass = XposedHelpers.findClassIfExists(pagedName, lpparam.classLoader) ?: continue
@@ -216,7 +217,7 @@ class HookEntry : IXposedHookLoadPackage {
                                     return
                                 }
                                 val l = param.args[0] as Int
-                                com.cosmod.launcherglass.util.LiveBlurEngine.onScroll(l, view)
+                                com.cosmod.launcherglass.util.LiveBlurEngine.onScroll(l, param.args[2] as Int, view)
                             }
                         }
                     )

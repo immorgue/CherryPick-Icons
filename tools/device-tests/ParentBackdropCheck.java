@@ -33,11 +33,99 @@ public class ParentBackdropCheck {
   Class<?> helper=cls("util.WallpaperHelper");field(helper,"blurredWallpaper",wallpaper);field(helper,"cachedBlurRadius",0);field(helper,"sourceRevision",0L);field(helper,"cachedRevision",0L);
   FrameLayout owner=(FrameLayout)Class.forName("com.android.launcher3.viewcontainer.GridRecyclerView").getConstructor(Context.class).newInstance(context);View child=new View(context);owner.addView(child,new FrameLayout.LayoutParams(200,200));owner.layout(0,0,200,200);child.layout(0,0,200,200);
   Bitmap mask=Bitmap.createBitmap(200,200,Bitmap.Config.ARGB_8888);Canvas maskCanvas=new Canvas(mask);Paint white=new Paint(Paint.ANTI_ALIAS_FLAG);white.setColor(Color.WHITE);maskCanvas.drawRoundRect(new RectF(0,0,200,200),35,35,white);
-  Class<?> style=cls("xposed.GlassStyle");Constructor<?> constructor=style.getConstructor(boolean.class,int.class,int.class,int.class,int.class,ColorMatrixColorFilter.class,boolean.class,Integer.class,boolean.class,boolean.class,boolean.class);
+  Class<?> optics=cls("xposed.KyantOptics");Class<?> style=cls("xposed.GlassStyle");Constructor<?> constructor=style.getConstructor(boolean.class,int.class,int.class,int.class,int.class,ColorMatrixColorFilter.class,boolean.class,Integer.class,boolean.class,boolean.class,boolean.class,optics);
+  Object kyant=optics.getConstructor(int.class,int.class,int.class).newInstance(40,60,0);
+  Object kyantStyle=constructor.newInstance(true,30,80,0,0,null,false,null,false,false,false,kyant);
+  Class<?> materialType=cls("xposed.IconMaterialRenderer$Material");
+  Constructor<?> materialConstructor=materialType.getDeclaredConstructor(Bitmap.class,Bitmap.class,BitmapShader.class,float.class,Bitmap.class);
+  materialConstructor.setAccessible(true);
+  Object material=materialConstructor.newInstance(mask,null,null,.175f,mask);
+  Class<?> samplerType=cls("xposed.IconMaterialRenderer$Sampler");
+  Constructor<?> samplerConstructor=samplerType.getDeclaredConstructor(RenderNode.class,materialType,RectF.class,int.class,int.class,style);
+  samplerConstructor.setAccessible(true);
+  RectF current=new RectF(15,0,215,200);
+  Object sampler=samplerConstructor.newInstance(new RenderNode("SwipeLeadCheck"),material,current,sw,sh,kyantStyle);
+  Method previous=samplerType.getDeclaredMethod("setPreviousSource",RectF.class);
+  previous.setAccessible(true);previous.invoke(sampler,new RectF(10,0,210,200));
+  Method predict=samplerType.getDeclaredMethod("predict",RectF.class,boolean.class,long.class,boolean.class);
+  predict.setAccessible(true);
+  check(((RectF)predict.invoke(sampler,current,true,1_000_000_000L,true)).left==20f,"Classic swipe lead did not move the sample");
+  field(prefs,"swipeLead",false);
+  for(boolean smooth:new boolean[]{false,true}){
+   field(prefs,"smoothSwipeLead",smooth);
+   check(predict.invoke(sampler,current,true,1_016_000_000L,true)==current,"Disabled swipe lead still adjusted the crop");
+  }
+  field(prefs,"swipeLead",true);field(prefs,"smoothSwipeLead",false);
+  System.out.println("PASS: disabling swipe anticipation bypasses both predictors");
+  Bitmap gradient=Bitmap.createBitmap(200,200,Bitmap.Config.ARGB_8888);
+  for(int x=0;x<200;x++)for(int y=0;y<200;y++)gradient.setPixel(x,y,Color.rgb(x,0,0));
+  Shader maskShader=new BitmapShader(mask,Shader.TileMode.CLAMP,Shader.TileMode.CLAMP);
+  Class<?> lensType=cls("xposed.LiquidGlassShader");
+  Object lensCompanion=lensType.getField("Companion").get(null);
+  Object kyantLens=lensCompanion.getClass().getMethod("create").invoke(lensCompanion);
+  check(kyantLens!=null,"Kyant AGSL did not compile");
+  RectF crop=new RectF(0,0,200,200);
+  Shader kyantGpu=(Shader)lensType.getMethod("update",Bitmap.class,Shader.class,RectF.class,int.class,int.class,ColorMatrixColorFilter.class,float.class,style,Shader.class)
+      .invoke(kyantLens,gradient,maskShader,crop,200,200,null,.175f,kyantStyle,null);
+  Bitmap gpuPixels=render(kyantGpu);
+  Class<?> cpuType=cls("xposed.CpuLiquidGlass");
+  Shader kyantCpu=(Shader)cpuType.getMethod("shader",Bitmap.class,Bitmap.class,int.class,int.class,RectF.class,float.class,style)
+      .invoke(obj(cpuType),gradient,mask,200,200,crop,.175f,kyantStyle);
+  Bitmap cpuPixels=Bitmap.createBitmap(200,200,Bitmap.Config.ARGB_8888);
+  Paint cpuPaint=new Paint();cpuPaint.setShader(kyantCpu);new Canvas(cpuPixels).drawRect(0,0,200,200,cpuPaint);
+  for(Bitmap pixels:new Bitmap[]{gpuPixels,cpuPixels}){
+   check(Math.abs(Color.red(pixels.getPixel(100,100))-100)<=1,"Kyant shifted the center");
+   check(Color.red(pixels.getPixel(2,100))>10,"Kyant did not refract near the edge");
+   check(Color.alpha(pixels.getPixel(0,0))==0,"Kyant changed the native silhouette");
+  }
+  check(Math.abs(Color.red(gpuPixels.getPixel(2,100))-Color.red(cpuPixels.getPixel(2,100)))<=2,"Kyant software and GPU optics diverge");
+  Object litOptics=optics.getConstructor(int.class,int.class,int.class).newInstance(40,60,100);
+  Object litStyle=constructor.newInstance(true,30,80,0,0,null,false,null,false,false,false,litOptics);
+  Object lifted=lensCompanion.getClass().getMethod("lifted").invoke(lensCompanion);
+  check(lifted!=null,"Lifted Kyant AGSL did not compile");
+  RuntimeShader liftShader=(RuntimeShader)lensType.getMethod("updateLifted",Shader.class,int.class,int.class,float.class,int.class,int.class,
+      ColorMatrixColorFilter.class,float.class,style).invoke(lifted,maskShader,200,200,0f,200,200,null,.175f,litStyle);
+  liftShader.setInputShader("backdrop",new BitmapShader(gradient,Shader.TileMode.CLAMP,Shader.TileMode.CLAMP));
+  Bitmap liftPixels=render(liftShader);
+  check(Color.blue(liftPixels.getPixel(2,100))>8 && Color.blue(liftPixels.getPixel(100,100))==0,
+      "Kyant highlight should affect only the edge");
+  check(Color.alpha(liftPixels.getPixel(0,0))==0,"Lifted Kyant changed the native silhouette");
+  Object magnifier=optics.getConstructor(int.class,int.class,int.class,boolean.class).newInstance(40,60,30,true);
+  Object magnifierStyle=constructor.newInstance(true,30,80,0,0,null,false,null,false,false,false,magnifier);
+  Shader magnifierGpu=(Shader)lensType.getMethod("update",Bitmap.class,Shader.class,RectF.class,int.class,int.class,ColorMatrixColorFilter.class,float.class,style,Shader.class)
+      .invoke(kyantLens,gradient,maskShader,crop,200,200,null,.175f,magnifierStyle,null);
+  Bitmap magnifierPixels=render(magnifierGpu);
+  Shader magnifierCpu=(Shader)cpuType.getMethod("shader",Bitmap.class,Bitmap.class,int.class,int.class,RectF.class,float.class,style)
+      .invoke(obj(cpuType),gradient,mask,200,200,crop,.175f,magnifierStyle);
+  cpuPaint.setShader(magnifierCpu);cpuPixels.eraseColor(Color.TRANSPARENT);
+  new Canvas(cpuPixels).drawRect(0,0,200,200,cpuPaint);
+  check(Color.red(magnifierPixels.getPixel(50,100))>60,"Magnifier did not zoom the backdrop");
+  check(Color.alpha(magnifierPixels.getPixel(0,0))==0,"Magnifier changed the native silhouette");
+  for(int x:new int[]{2,50,100,196})
+   check(Math.abs(Color.red(magnifierPixels.getPixel(x,100))-Color.red(cpuPixels.getPixel(x,100)))<=2,"Magnifier GPU/CPU divergence at "+x);
+  magnifierPixels.recycle();
+  Object controlCenter=optics.getConstructor(int.class,int.class,int.class,boolean.class,boolean.class)
+      .newInstance(40,60,30,false,true);
+  Object centerStyle=constructor.newInstance(true,30,80,0,0,null,false,null,false,false,false,controlCenter);
+  Shader centerGpu=(Shader)lensType.getMethod("update",Bitmap.class,Shader.class,RectF.class,int.class,int.class,ColorMatrixColorFilter.class,float.class,style,Shader.class)
+      .invoke(kyantLens,gradient,maskShader,crop,200,200,null,.175f,centerStyle,null);
+  Bitmap centerPixels=render(centerGpu);
+  Shader centerCpu=(Shader)cpuType.getMethod("shader",Bitmap.class,Bitmap.class,int.class,int.class,RectF.class,float.class,style)
+      .invoke(obj(cpuType),gradient,mask,200,200,crop,.175f,centerStyle);
+  cpuPaint.setShader(centerCpu);cpuPixels.eraseColor(Color.TRANSPARENT);
+  new Canvas(cpuPixels).drawRect(0,0,200,200,cpuPaint);
+  check(Math.abs(Color.red(centerPixels.getPixel(50,100))-70)<=2,"Control Center changed central geometry or lost vibrancy");
+  check(Color.alpha(centerPixels.getPixel(0,0))==0,"Control Center changed the native silhouette");
+  for(int x:new int[]{2,25,50,100,196})
+   check(Math.abs(Color.red(centerPixels.getPixel(x,100))-Color.red(cpuPixels.getPixel(x,100)))<=2,"Control Center GPU/CPU divergence at "+x);
+  centerPixels.recycle();
+  System.out.println("PASS: Control Center depth, saturation and native mask match on GPU and software");
+  gpuPixels.recycle();cpuPixels.recycle();liftPixels.recycle();gradient.recycle();
+  System.out.println("PASS: Kyant GPU, software and lifted shaders preserve the center and silhouette, with edge refraction and highlight");
   Class<?> parent=cls("xposed.ParentBackdrop");Object singleton=obj(parent);Method record=parent.getMethod("record",View.class,Drawable.class,RectF.class,Bitmap.class,float.class,style,boolean.class);Method resolve=parent.getMethod("resolve",View.class,Drawable.class,Bitmap.class);
   Drawable plate=new ColorDrawable(Color.RED),icon=new ColorDrawable(Color.WHITE);
   for(boolean liquid:new boolean[]{false,true}) {
-   Object appearance=constructor.newInstance(liquid,30,80,0,100,null,false,Integer.valueOf(Color.RED),true,false,false);
+   Object appearance=constructor.newInstance(liquid,30,80,0,100,null,false,Integer.valueOf(Color.RED),true,false,false,null);
    record.invoke(singleton,owner,plate,new RectF(0,0,200,200),mask,35f,appearance,false);
    parent.getMethod("beginFrame").invoke(singleton);
    Object sample=resolve.invoke(singleton,child,icon,wallpaper);check(sample!=null,"Parent plate not found");Shader shader=(Shader)sample.getClass().getMethod("getShader").invoke(sample);
@@ -52,12 +140,12 @@ public class ParentBackdropCheck {
    owner.setTranslationX(80);parent.getMethod("beginFrame").invoke(singleton);Object moved=resolve.invoke(singleton,child,icon,wallpaper);pixels=render((Shader)moved.getClass().getMethod("getShader").invoke(moved));check(Color.blue(pixels.getPixel(40,100))>245,"Parent shader lags behind translated owner");check(Color.red(pixels.getPixel(150,100))>245,"Moved parent missing");pixels.recycle();owner.setTranslationX(0);
   }
     ColorMatrixColorFilter filter=new ColorMatrixColorFilter(new float[]{0,0,0,0,0, 0,0,1,0,0, 0,0,0,0,0, 0,0,0,1,0});
-  Object colored=constructor.newInstance(false,30,80,0,0,filter,false,Integer.valueOf(Color.RED),true,false,false);
+  Object colored=constructor.newInstance(false,30,80,0,0,filter,false,Integer.valueOf(Color.RED),true,false,false,null);
   record.invoke(singleton,owner,plate,new RectF(0,0,200,200),mask,35f,colored,false);parent.getMethod("beginFrame").invoke(singleton);
   Object coloredSample=resolve.invoke(singleton,child,icon,wallpaper);Bitmap filtered=render((Shader)coloredSample.getClass().getMethod("getShader").invoke(coloredSample));check(Color.green(filtered.getPixel(100,100))>245,"Parent color filter was not applied");filtered.recycle();
   for(String name:new String[]{"com.android.launcher3.folder.FolderIcon","com.android.launcher3.folder.OplusFolder"}) {
    FrameLayout folder=(FrameLayout)Class.forName(name).getConstructor(Context.class).newInstance(context);View background=new View(context),content=new View(context);folder.addView(background,new FrameLayout.LayoutParams(200,200));folder.addView(content,new FrameLayout.LayoutParams(200,200));folder.layout(0,0,200,200);background.layout(0,0,200,200);content.layout(0,0,200,200);
-   Drawable folderIdentity=new ColorDrawable(Color.RED);Object appearance=constructor.newInstance(false,30,80,0,100,null,true,Integer.valueOf(Color.RED),true,false,false);
+   Drawable folderIdentity=new ColorDrawable(Color.RED);Object appearance=constructor.newInstance(false,30,80,0,100,null,true,Integer.valueOf(Color.RED),true,false,false,null);
    record.invoke(singleton,background,folderIdentity,new RectF(0,0,200,200),mask,35f,appearance,false);parent.getMethod("beginFrame").invoke(singleton);
    Object folderSample=resolve.invoke(singleton,content,icon,wallpaper);check(folderSample!=null,"Sibling folder background unavailable: "+name);Bitmap folderPixels=render((Shader)folderSample.getClass().getMethod("getShader").invoke(folderSample));check(Color.red(folderPixels.getPixel(100,100))>245,"Folder child ignored sibling plate");folderPixels.recycle();
    check(resolve.invoke(singleton,folder,icon,wallpaper)!=null,"Inline miniature cannot see FolderIcon background");
@@ -89,7 +177,7 @@ public class ParentBackdropCheck {
   field(helper,"blurredWallpaper",null);field(helper,"isReloading",true);field(helper,"appContext",context);
   View waiting=new View(context);waiting.layout(0,0,200,200);
   Bitmap pending=Bitmap.createBitmap(200,200,Bitmap.Config.ARGB_8888);
-  Object waitingStyle=constructor.newInstance(false,30,80,7,100,null,false,Integer.valueOf(Color.RED),true,false,false);
+  Object waitingStyle=constructor.newInstance(false,30,80,7,100,null,false,Integer.valueOf(Color.RED),true,false,false,null);
   Class<?> surface=cls("xposed.SurfaceMaterial");Method draw=null;
   for(Method method:surface.getMethods())if(method.getName().equals("draw")){draw=method;break;}
   check(draw!=null,"Surface draw unavailable");
@@ -110,7 +198,7 @@ public class ParentBackdropCheck {
   Path stockClip=new Path();stockClip.addRoundRect(new RectF(0,0,200,200),24,24,Path.Direction.CW);
   Canvas actualCanvas=new Canvas(flat);actualCanvas.clipPath(stockClip);
   Canvas stockCanvas=new Canvas(expected);stockCanvas.clipPath(stockClip);stockCanvas.drawColor(Color.RED);
-  Object colorStyle=constructor.newInstance(false,30,80,0,100,null,false,Integer.valueOf(Color.RED),true,false,true);
+  Object colorStyle=constructor.newInstance(false,30,80,0,100,null,false,Integer.valueOf(Color.RED),true,false,true,null);
   check(Boolean.TRUE.equals(draw.invoke(obj(surface),actualCanvas,new Rect(0,0,200,200),waiting,new ColorDrawable(Color.RED),77f,stockClip,false,255,colorStyle,null,rectangle,null,null,null,false)),"Native clipped flat plate unavailable");
   for(int y=0;y<200;y++)for(int x=0;x<200;x++)check(Color.alpha(flat.getPixel(x,y))==Color.alpha(expected.getPixel(x,y)),"Native destination clip changed at "+x+","+y);
   field(prefs,"iconStroke",true);field(prefs,"strokeOpacity",100);

@@ -94,6 +94,10 @@ object IconMaterialRenderer {
         var returnBackdrop:NativeSurfaceLive.StaticBackdrop?=null
         var returnEffect:RenderEffect?=null
         var returnStartedNs=0L
+        var returnFromLive=false
+        var staticReturn=NativeSurfaceLive.staticFlightReturn
+        var staticReturnSource:RectF?=null
+        var staticReturnStartedNs=0L
         private val predictedSource=RectF()
         private val smoothLead=SmoothSwipeLead()
         private var leadFrame=-1L
@@ -103,6 +107,7 @@ object IconMaterialRenderer {
             smoothLead.reset();leadFrame=-1L;leadOffset=0f
         }
         fun predict(current:RectF,active:Boolean,nowNs:Long,allowTail:Boolean):RectF {
+            if(!PrefsHelper.swipeLead)return current
             if(PrefsHelper.smoothSwipeLead){
                 if(!allowTail){smoothLead.reset();leadFrame=-1L;return current}
                 if(leadFrame!=frameSerial){
@@ -155,8 +160,9 @@ object IconMaterialRenderer {
             // the icon back. Start the fade on its first real workspace draw.
             sampler.returnEffect=if(fadeFromStatic)sampler.presentedEffect else null
             sampler.returnStartedNs=0L
+            sampler.returnFromLive=!fadeFromStatic && backdrop!=null
             sampler.returnBackdrop=backdrop?.takeIf {
-                fadeFromStatic && it.mask===sampler.material.maskImage && it.style==sampler.style && !it.wallpaper.isRecycled
+                it.mask===sampler.material.maskImage && it.style==sampler.style && !it.wallpaper.isRecycled
             }
             // source may already match the final crop while the node still
             // holds a blend effect. Force one fresh effect, not a view redraw.
@@ -329,25 +335,61 @@ object IconMaterialRenderer {
         for(sampler in entries.values)if(!sampler.node.hasDisplayList() || sampler.plateNode?.hasDisplayList()==false)return true
         return false
     }
-    private fun samplerEffect(sampler:Sampler,wallpaper:Bitmap,rawSource:RectF,nowNs:Long=System.nanoTime(),view:View?=null,parent:ParentBackdrop.Sample?=null):Boolean {
+    private fun samplerEffect(sampler:Sampler,wallpaper:Bitmap,rawSource:RectF,nowNs:Long=System.nanoTime(),view:View?=null,
+        parent:ParentBackdrop.Sample?=null,correctWorkspacePose:Boolean=false):Boolean {
         val style=sampler.style
         val filter=style.filter
         val finishKey=MaterialFinish.key()
-        val fps=MiniIconRefresh.fps(PrefsHelper.liveFps,sampler.mini,PrefsHelper.optimizeMiniIcons)
-        if(sampler.appliedStyle!=style || !PrefsHelper.staticAnimationBlur){
+        if(sampler.appliedStyle!=style){
             sampler.returnEffect=null
             sampler.returnBackdrop=null
+            sampler.staticReturnSource=null
         }
+        val workspaceMaterial=view!=null && !NativeSurfaceLive.isSampling && !style.folder &&
+            !com.cosmod.launcherglass.util.LiveBlurEngine.isWorkspaceScrolling &&
+            !com.cosmod.launcherglass.util.LiveBlurEngine.isEditing
+        if(workspaceMaterial && NativeSurfaceLive.hasStaticFlight && !sampler.returnPending &&
+            sampler.appliedStyle==style && sampler.source!=null && sampler.presentedEffect!=null)return true
+        val returnEpoch=NativeSurfaceLive.staticFlightReturn
+        if(sampler.staticReturn!=returnEpoch){
+            sampler.staticReturn=returnEpoch
+            sampler.staticReturnSource=null
+            if(workspaceMaterial && sampler.appliedStyle==style && !sampler.returnPending){
+                if(sampler.wallpaper===wallpaper && sampler.source!=rawSource){
+                    sampler.staticReturnSource=sampler.source
+                    sampler.staticReturnStartedNs=nowNs
+                }else if(sampler.wallpaper!==wallpaper && sampler.presentedEffect!=null){
+                    sampler.returnEffect=sampler.presentedEffect
+                    sampler.returnStartedNs=nowNs
+                    sampler.returnFromLive=false
+                }
+            }
+        }
+        if(!workspaceMaterial || sampler.returnPending)sampler.staticReturnSource=null
         val blending=sampler.returnEffect!=null || sampler.returnBackdrop!=null
         if(blending && sampler.returnStartedNs==0L)sampler.returnStartedNs=nowNs
-        val fade=if(blending)StaticBlurTiming.returnProgress(nowNs-sampler.returnStartedNs)else 1f
+        val fade=if(blending)StaticBlurTiming.returnProgress(nowNs-sampler.returnStartedNs,sampler.returnFromLive)else 1f
         val swipe=com.cosmod.launcherglass.util.LiveBlurEngine.isWorkspaceScrolling &&
-            !NativeSurfaceLive.isSampling && isWorkspaceSample(view,sampler)
+            !NativeSurfaceLive.isSampling && isWorkspaceSample(view,sampler.origin?.get())
+        val fps=sampleFps(swipe && !blending,sampler.mini)
+        val smoothTail=PrefsHelper.swipeLead && PrefsHelper.smoothSwipeLead && !swipe
         val compatible=sampler.wallpaper===wallpaper && sampler.appliedStyle==style
         val allowTail=compatible && !NativeSurfaceLive.isSampling &&
             !com.cosmod.launcherglass.util.LiveBlurEngine.isAppLaunchInProgress &&
-            !NativeSurfaceLive.active && isWorkspaceSample(view,sampler)
-        val source=sampler.predict(rawSource,swipe && compatible,nowNs,allowTail)
+            !NativeSurfaceLive.active && isWorkspaceSample(view,sampler.origin?.get())
+        val finalPose=correctWorkspacePose && view?.rootView?.let {
+            com.cosmod.launcherglass.util.LiveBlurEngine.finalWorkspaceFrame(it)
+        }==true
+        val start=sampler.staticReturnSource
+        val source=if(start!=null){
+            val p=StaticBlurTiming.returnProgress(nowNs-sampler.staticReturnStartedNs,live=true)
+            if(p>=1f){sampler.staticReturnSource=null;rawSource}
+            else {
+                scheduleSampleRefresh(view,1_000_000_000L/fps)
+                RectF(start.left+(rawSource.left-start.left)*p,start.top+(rawSource.top-start.top)*p,
+                    start.right+(rawSource.right-start.right)*p,start.bottom+(rawSource.bottom-start.bottom)*p)
+            }
+        }else if(finalPose)rawSource else sampler.predict(rawSource,swipe && compatible,nowNs,allowTail)
         // Correct the retained lead immediately when motion ends. Never
         // leave a predicted crop on a stationary icon.
         val settlePrediction=sampler.predictionApplied && source==rawSource
@@ -360,7 +402,8 @@ object IconMaterialRenderer {
         // lower that limit to 30; neither draw path bypasses the same clock.
         if(sampler.source!=null && sampler.appliedStyle==style && sampler.finishKey==finishKey){
             val remaining=sampler.clock.remainingNs(nowNs,fps)
-            if(remaining>0L && !NativeSurfaceLive.isSampling && !settlePrediction && !sampler.returnPending && !(blending && fade>=1f)){scheduleSampleRefresh(view,remaining,PrefsHelper.smoothSwipeLead && !swipe);return false}
+            val correct=finalPose || (correctWorkspacePose && fps>60)
+            if(remaining>0L && !correct && !NativeSurfaceLive.isSampling && !settlePrediction && !sampler.returnPending && !(blending && fade>=1f)){scheduleSampleRefresh(view,remaining,smoothTail);return false}
         }
         val sameCrop=contentMatches && sampler.source==source && sampler.backdropRevision==(parent?.revision ?: 0L)
         val live=if(sameCrop) sampler.liveEffect ?: backdropEffect(sampler,wallpaper,source,parent)
@@ -383,14 +426,16 @@ object IconMaterialRenderer {
         else if(sampler.returnEffect!=null)scheduleSampleRefresh(view,1_000_000_000L/fps)
         sampler.wallpaper=wallpaper;sampler.source=RectF(source);sampler.filter=filter;sampler.appliedStyle=style
         sampler.previousSource=RectF(rawSource);sampler.previousSourceFrame=frameSerial
-        sampler.predictionApplied=source!=rawSource
-        if(PrefsHelper.smoothSwipeLead && !swipe && sampler.predictionApplied)
+        sampler.predictionApplied=start==null && source!=rawSource
+        if(smoothTail && sampler.predictionApplied)
             scheduleSampleRefresh(view,1_000_000_000L/fps,cadenceOnly=true)
         sampler.lastUpdateNs=nowNs
         sampler.finishKey=finishKey
         sampler.backdropRevision=parent?.revision ?: 0L
         sampler.returnPending=false
-        sampler.clock.record(nowNs,fps)
+        // A correction after native computeScroll belongs to the slot that
+        // was already recorded in pre-draw. Do not advance the clock twice.
+        if(!correctWorkspacePose || sampler.clock.remainingNs(nowNs,fps)==0L)sampler.clock.record(nowNs,fps)
         return true
     }
     private fun backdropEffect(sampler:Sampler,wallpaper:Bitmap,source:RectF,parent:ParentBackdrop.Sample?):RenderEffect {
@@ -412,19 +457,29 @@ object IconMaterialRenderer {
         return MaterialFinish.effect(effect,sampler.node.width,sampler.node.height) ?: effect
     }
 
-    private fun isWorkspaceSample(view:View?,sampler:Sampler):Boolean {
-        if(sampler.origin?.get()!=null)return false
+    private fun sampleFps(workspace:Boolean,mini:Boolean):Int {
+        val boost=workspace && com.cosmod.launcherglass.util.LiveBlurEngine.canBoostWorkspaceSamples &&
+            !NativeSurfaceLive.isSampling
+        return MiniIconRefresh.fps(if(boost)PrefsHelper.swipeFps else PrefsHelper.liveFps,mini,PrefsHelper.optimizeMiniIcons)
+    }
+    private fun sampleFps(binding:Binding?):Int = sampleFps(
+        binding!=null && com.cosmod.launcherglass.util.LiveBlurEngine.canBoostWorkspaceSamples &&
+            isWorkspaceSample(binding.view,binding.origin),binding?.mini==true)
+    internal fun isWorkspaceSample(view:View?,origin:View?,workspace:View?=null):Boolean {
+        if(origin!=null)return false
         var owner=view
         repeat(24){
             val current=owner ?: return false
             val name=current.javaClass.name
             if(name.contains("DragView") || name.contains("FolderPagedView"))return false
-            if(name.contains("Workspace") && !name.contains("Recents") && !name.contains("Task"))return true
+            if(name.contains("Workspace") && !name.contains("Recents") && !name.contains("Task"))
+                return workspace==null || current===workspace
             owner=current.parent as? View
         }
         return false
     }
-    @Synchronized fun updateSamplers(view:View,wallpaper:Bitmap?,transform:Matrix?=null,nowNs:Long=System.nanoTime()):Boolean {
+    @Synchronized fun updateSamplers(view:View,wallpaper:Bitmap?,transform:Matrix?=null,nowNs:Long=System.nanoTime(),
+        correctWorkspacePose:Boolean=false):Boolean {
         if(wallpaper==null)return false
         val entries=samplers[view] ?: return false
         prune(entries)
@@ -442,9 +497,12 @@ object IconMaterialRenderer {
                 folderImage ?: (com.cosmod.launcherglass.util.WallpaperHelper.getFolderWallpaper(view.context) ?: wallpaper).also {folderImage=it}
             }else DockMaterial.iconWallpaper(scope,wallpaper)
             val parent=ParentBackdrop.resolve(scope,drawable,image,includeHidden=sampler.origin?.get()!=null)
-            if(sampler.returnEffect==null && !sampler.predictionApplied && sampler.worldValid && sampler.world==world && sampler.scroll==scroll && sampler.wallpaper===image && sampler.appliedStyle==sampler.style && sampler.finishKey==MaterialFinish.key() && sampler.backdropRevision==(parent?.revision ?: 0L))continue
+            if(sampler.returnEffect==null && sampler.staticReturnSource==null && !sampler.predictionApplied && sampler.worldValid && sampler.world==world && sampler.scroll==scroll && sampler.wallpaper===image && sampler.appliedStyle==sampler.style && sampler.finishKey==MaterialFinish.key() && sampler.backdropRevision==(parent?.revision ?: 0L)){
+                sampler.staticReturn=NativeSurfaceLive.staticFlightReturn
+                continue
+            }
             val rect=RectF(sampler.local);world.mapRect(rect)
-            if(samplerEffect(sampler,image,WallpaperFootprint.source(image,sampler.screenW,sampler.screenH,rect),nowNs,view,parent)){
+            if(samplerEffect(sampler,image,WallpaperFootprint.source(image,sampler.screenW,sampler.screenH,rect),nowNs,view,parent,correctWorkspacePose)){
                 sampler.world.set(world);sampler.worldValid=true;sampler.scroll=scroll
             }
         }
@@ -477,7 +535,7 @@ object IconMaterialRenderer {
         // Mini folder previews retain blur/tint, but do not run a separate
         // refraction shader for each tiny tile. The same policy applies to
         // GPU samplers, CPU fallback and transition recordings.
-        val style=if(!MiniIconRefresh.refraction(style.liquid,binding?.mini==true,PrefsHelper.optimizeMiniIcons))style.copy(liquid=false)else style
+        val style=if(!MiniIconRefresh.refraction(style.liquid,binding?.mini==true,PrefsHelper.optimizeMiniIcons))style.copy(liquid=false,kyant=null)else style
         // Frosted radius 0 needs no wallpaper sample. Liquid keeps its sharp
         // backdrop for refraction even when its blur radius is zero.
         val clear = clearGlass(style)
@@ -509,7 +567,7 @@ object IconMaterialRenderer {
             }
             val changed=frame.bitmap==null || frame.wallpaper!==wallpaper || frame.source!=footprint || frame.style!=style || frame.finish!=MaterialFinish.key()
             val now=System.nanoTime()
-            val fps=MiniIconRefresh.fps(PrefsHelper.liveFps,binding?.mini==true,PrefsHelper.optimizeMiniIcons)
+            val fps=sampleFps(binding)
             val remaining=frame.clock.remainingNs(now,fps)
             if(changed && (frame.bitmap==null || remaining==0L || NativeSurfaceLive.isSampling)){
                 val bitmap=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888)
@@ -623,7 +681,7 @@ object IconMaterialRenderer {
                     plate.drawRenderNode(liftNode(sampler,binding) ?: sampler.node)
                 }else{
                     val nowNs=System.nanoTime()
-                    val fps=MiniIconRefresh.fps(PrefsHelper.liveFps,false,false)
+                    val fps=sampleFps(binding)
                     val hardware=canvas.isHardwareAccelerated
                     val changed=material.wallpaper!==wallpaper || material.source!=source || material.appliedStyle!=style || material.appliedHardware!=hardware
                     // Software canvases are often one-shot launcher snapshots:
@@ -703,7 +761,7 @@ object IconMaterialRenderer {
     }
 
     /** Liquid always needs a backdrop for refraction, even with the blur switch off. */
-    fun clearGlass(style:GlassStyle)=style.colorOnly || !com.cosmod.launcherglass.util.LiquidOptics.needsBackdrop(style.radius,style.liquid,PrefsHelper.experimentalLiquid)
+    fun clearGlass(style:GlassStyle)=style.colorOnly || (style.kyant?.needsBackdrop!=true && !com.cosmod.launcherglass.util.LiquidOptics.needsBackdrop(style.radius,style.liquid,style.experimentalOptics))
 
     /** The sampler an element's own draw bound for [material], preferring its latest. */
     private fun foreignSampler(binding:Binding,material:Material,width:Int,height:Int):Sampler? {
@@ -883,7 +941,7 @@ object IconMaterialRenderer {
         // sampler survives the preference transition for one frame.
         if(clearGlass(style))return false
         val scale=toNode.mapRadius(1f).coerceIn(.05f,20f)
-        val screenRadius=com.cosmod.launcherglass.util.LiquidOptics.blurRadius(style.radius.coerceIn(0,50),sampler.screenH,style.liquid,PrefsHelper.experimentalLiquid)
+        val screenRadius=com.cosmod.launcherglass.util.LiquidOptics.blurRadius(style.radius.coerceIn(0,50),sampler.screenH,style.liquid,style.experimentalOptics)
         val radius=kotlin.math.round(screenRadius*scale*4f)/4f
         val edge=minOf(w,h).toFloat()
         val liquid=style.liquid && material.mask!=null
