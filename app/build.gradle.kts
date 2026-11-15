@@ -11,8 +11,8 @@ android {
         applicationId = "com.cosmod.launcherglass"
         minSdk = 31
         targetSdk = 35
-        versionCode = 350
-        versionName = "0.3.50-dev"
+        versionCode = 357
+        versionName = "0.3.57-dev"
     }
 
     signingConfigs {

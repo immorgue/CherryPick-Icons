@@ -2,6 +2,23 @@ package com.cosmod.launcherglass.ui
 
 /** Defaults for absent keys only. Existing installations retain their saved values. */
 object SettingsDefaults {
+    internal fun seedOwnGlassSettings(prefs: android.content.SharedPreferences) {
+        var editor: android.content.SharedPreferences.Editor?=null
+        fun edit()=editor ?: prefs.edit().also {editor=it}
+        for(scope in ScopedSettingsKeys.all){
+            if(!prefs.getBoolean(scope.own,false))continue
+            for(base in scope.integers){
+                val key=scope.key(base)
+                if(!prefs.contains(key))edit().putInt(key,prefs.getInt(base,integer(base)))
+            }
+            for(base in scope.booleans){
+                val key=scope.key(base)
+                if(!prefs.contains(key))edit().putBoolean(key,prefs.getBoolean(base,boolean(base)))
+            }
+        }
+        editor?.apply()
+    }
+
     fun initialize(context: android.content.Context, prefs: android.content.SharedPreferences) {
         // Capture this before migrations populate an otherwise fresh preference file.
         val hadSavedValues = prefs.all.isNotEmpty()
@@ -15,7 +32,12 @@ object SettingsDefaults {
         }
         modeEditor.apply()
         initializePhoto(prefs)
-        if (prefs.getInt("defaults_revision", 0) >= 38) { initializeColors(prefs); initializeTone(prefs); return }
+        if (prefs.getInt("defaults_revision", 0) >= 38) {
+            initializeColors(prefs)
+            initializeTone(prefs)
+            seedOwnGlassSettings(prefs)
+            return
+        }
         val info = context.packageManager.getPackageInfo(context.packageName, 0)
         val upgrade = info.firstInstallTime != info.lastUpdateTime || hadSavedValues
         val editor = prefs.edit()
@@ -35,6 +57,7 @@ object SettingsDefaults {
         editor.remove("force_themed").putInt("defaults_revision", 38).apply()
         initializeColors(prefs)
         initializeTone(prefs)
+        seedOwnGlassSettings(prefs)
     }
     private fun initializePhoto(prefs:android.content.SharedPreferences){
         val editor=prefs.edit()

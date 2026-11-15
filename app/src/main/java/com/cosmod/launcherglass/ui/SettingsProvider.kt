@@ -68,6 +68,8 @@ class SettingsProvider : ContentProvider() {
                 }
             }
             METHOD_GET_ALL -> {
+                // Profiles and older installs can have an enabled scope with missing newer keys.
+                SettingsDefaults.seedOwnGlassSettings(prefs)
                 com.cosmod.launcherglass.util.DesktopSizing.defaults.forEach {(key,fallback) ->
                     bundle.putInt(key,prefs.getInt(key,fallback))
                 }

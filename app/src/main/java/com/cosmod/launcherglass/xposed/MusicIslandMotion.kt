@@ -192,6 +192,7 @@ internal object MusicIslandMotion {
                 if(state.animator==null && state.progress>.999f){
                     state.rect.set(0f,0f,view.width.toFloat(),view.height.toFloat())
                     state.radius=MusicIslandMaterial.radiusPixels(view)
+                    MusicIslandMaterial.updateBlurGeometry(view,state.rect,state.radius,1f)
                     view.invalidateOutline()
                 }
             }
@@ -220,7 +221,7 @@ internal object MusicIslandMotion {
         val to=if(opening)1f else 0f
         val spring=IslandSpring(from,if(opening)state.velocity else state.velocity.coerceAtMost(0f),to,opening)
         val heightSpring=IslandSpring(state.heightProgress,
-            if(opening)state.heightVelocity else state.heightVelocity.coerceAtMost(0f),to,opening,if(opening)1.0 else 1.65)
+            if(opening)state.heightVelocity else state.heightVelocity.coerceAtMost(0f),to,opening,if(opening)1.0 else 1.35)
         val nativeState=nativeStateType?.let {XposedHelpers.newInstance(it,width.toFloat(),height.toFloat())}
         if(nativeState!=null)XposedHelpers.callMethod(card,"setAnimatorState",nativeState)
         fun smooth(value:Float):Float=value.coerceIn(0f,1f).let {it*it*(3-2*it)}
@@ -245,6 +246,7 @@ internal object MusicIslandMotion {
             content.alpha=state.contentOpacity
             // Fade into the native capsule only once the widths are almost equal.
             state.opacity=smooth((horizontal-.01f)/.09f)
+            MusicIslandMaterial.updateBlurGeometry(card,state.rect,state.radius,smooth((vertical-.10f)/.80f))
             state.writingAlpha=true
             try {card.alpha=state.opacity}finally {state.writingAlpha=false}
             if(nativeState!=null){

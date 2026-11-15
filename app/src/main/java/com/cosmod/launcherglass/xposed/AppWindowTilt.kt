@@ -42,6 +42,7 @@ internal object AppWindowTilt {
     private val frame=ThreadLocal<Frame>()
     private val pendingSource=ThreadLocal<Source>()
     private val sources=Collections.synchronizedMap(WeakHashMap<Any,Source>())
+    private val legacyCloseTargets = Collections.synchronizedMap(WeakHashMap<Any,Source>())
     private val motions=WeakHashMap<SurfaceControl,AppGenieMotion>()
     private val scratch=ThreadLocal.withInitial {FloatArray(16)}
     private val iconBounds=ThreadLocal.withInitial {FlyingIconBounds()}
@@ -153,13 +154,13 @@ internal object AppWindowTilt {
 
     private fun makeFrame(owner: Any, kind: String, opening: Boolean, window: Rect, current: RectF,
                           originHeight: Float, radius: Float, matrix: Matrix, crop: Rect,
-                          transaction: SurfaceControl.Transaction?): Frame? {
+                          transaction: SurfaceControl.Transaction?, targetSource: Source? = null): Frame? {
         if (window.isEmpty || current.isEmpty || window.width() >= window.height()) return null
         val rawAnchor = originHeight / window.height()
         val anchor = rawAnchor.takeIf { it in .015f.. .30f } ?: .065f
         // Both icon and window use vertical size to read progress across the spring.
         val scale = current.height() / window.height()
-        val source = sources[owner]
+        val source = targetSource ?: sources[owner]
         val remaining = (1f - scale).coerceAtLeast(.20f)
         val row = source?.let { (it.y - window.exactCenterY()) * 2f / window.height() }
             ?: (current.centerY() - window.exactCenterY()) * 2f / window.height() / remaining
@@ -230,15 +231,42 @@ internal object AppWindowTilt {
         val kindField = helper.declaredFields.singleOrNull { it.name == "mAnimType" && it.type.isEnum }
             ?.apply { isAccessible = true } ?: return
         val cropField = helper.field("mClipRect", Rect::class.java) ?: return
-        val fullField = helper.field("mRealWindowRect", Rect::class.java) ?: return
+        val fullWindow = helper.method("getRealWindowRect")?.takeIf { it.returnType == Rect::class.java } ?: return
+        val sourceWindow = helper.field("mSourceWindowRect", Rect::class.java) ?: return
         val matrixField = helper.field("mTmpMatrix", Matrix::class.java) ?: return
         val heightField = params.field("originHeight", Float::class.javaPrimitiveType!!) ?: return
         val radiusField = params.field("radius", Float::class.javaPrimitiveType!!) ?: return
         val taskView = params.field("isTaskView", Boolean::class.javaPrimitiveType!!) ?: return
         val flexible = params.field("isFlexibleWindowScene", Boolean::class.javaPrimitiveType!!) ?: return
         val corner = builder.method("setCornerRadius", Float::class.javaPrimitiveType!!)
+        val cropStrategy = helper.method("getWindowCropStrategy", params, RectF::class.java,
+            Int::class.javaPrimitiveType!!, Boolean::class.javaPrimitiveType!!)
         hookSource(loader, helper)
         installColorOs16Spring(loader, kindField.type)
+        cropStrategy?.let { method ->
+            ModuleHooks.hookMethod(method, object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    val input = param.args[0]
+                    legacyCloseTargets.remove(input)
+                    if (!enabled() || param.args[2] != 0 || param.args[3] == true) return
+                    val kind = (kindField.get(param.thisObject) as? Enum<*>)?.name ?: return
+                    if (kind !in closing) return
+                    val rect = param.args[1] as RectF
+                    val window = fullWindow.invoke(param.thisObject) as Rect
+                    val x = rect.centerX()
+                    val y = rect.centerY()
+                    val width = rect.width()
+                    val height = rect.height()
+                    if (window.isEmpty || window.width() >= window.height() ||
+                        x !in window.left.toFloat()..window.right.toFloat() ||
+                        y !in window.top.toFloat()..window.bottom.toFloat() ||
+                        width / window.width() !in .015f.. .40f ||
+                        height / window.height() !in .015f.. .30f) return
+                    // Gesture setup already knows the landing icon's bounds.
+                    legacyCloseTargets[input] = Source(x, y, width)
+                }
+            })
+        }
 
         // ColorOS 16 dispatches the app update through a Runnable. Hook its body so
         // the additional matrix lands in the same transaction after the launcher writes its pose.
@@ -254,11 +282,16 @@ internal object AppWindowTilt {
                     if (!opening && kind !in closing) return
                     val leash = leashField.get(param.args[0]) as? SurfaceControl ?: return
                     if (!leash.isValid) return
-                    val crop = cropField.get(owner) as Rect
+                    // Open and swipe-to-home use the constructor that leaves mRealWindowRect empty.
+                    // The OEM getter falls back to the source window in those scenes.
+                    val window = fullWindow.invoke(owner) as Rect
+                    val crop = (cropField.get(owner) as Rect).takeUnless { it.isEmpty }
+                        ?: sourceWindow.get(owner) as Rect
                     val matrix = matrixField.get(owner) as Matrix
                     val current = makeFrame(
-                        owner, kind, opening, fullField.get(owner) as Rect, param.args[7] as RectF,
-                        heightField.getFloat(input), radiusField.getFloat(input), matrix, crop, null
+                        owner, kind, opening, window, param.args[7] as RectF,
+                        heightField.getFloat(input), radiusField.getFloat(input), matrix, crop, null,
+                        if (opening) null else legacyCloseTargets[input]
                     ) ?: return
                     val tilt = perspective(leash, current, crop, writePerspective, matrix)
                     if (tilt == null && current.droplet <= 0f) return
@@ -303,6 +336,8 @@ internal object AppWindowTilt {
         ModuleHooks.hookMethod(apply, object : XC_MethodHook() {
             override fun beforeHookedMethod(param: MethodHookParam) {
                 if (!enabled()) return
+                // The OEM crossfade uses its own spring and a separate start delay.
+                if ((param.args[0] as? Enum<*>)?.name == "RECT_ALPHA") return
                 val kind = (kindField.get(param.thisObject) as? Enum<*>)?.name ?: return
                 val opening = kind in legacyOpening
                 if (!opening && kind !in closing) return
