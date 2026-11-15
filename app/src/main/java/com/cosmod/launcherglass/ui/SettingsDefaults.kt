@@ -99,6 +99,8 @@ object SettingsDefaults {
         SettingsProvider.KEY_SCENE_DRAG_BACKDROP to false,
         SettingsProvider.KEY_HIDE_HOME_GESTURE_BAR to false,
         SettingsProvider.KEY_MUSIC_ISLAND_EXPANSION to false,
+        SettingsProvider.KEY_MUSIC_ISLAND_BLUR to false,
+        SettingsProvider.KEY_MUSIC_ISLAND_GLOW to true,
         SettingsProvider.KEY_STATIC_ANIMATION_BLUR to false,
         SettingsProvider.KEY_MODULE_LOGGING to false,
         SettingsProvider.KEY_APP_WINDOW_TILT to false,
@@ -137,6 +139,10 @@ object SettingsDefaults {
         SettingsProvider.KEY_VOLUME_ENABLED to true
     )
     private val integers = mapOf(
+        SettingsProvider.KEY_MUSIC_ISLAND_OUTER to 8,
+        SettingsProvider.KEY_MUSIC_ISLAND_CONTENT_X to 0,
+        SettingsProvider.KEY_MUSIC_ISLAND_CONTENT_Y to 8,
+        SettingsProvider.KEY_MUSIC_ISLAND_RADIUS to 28,
         SettingsProvider.KEY_BLUR_STYLE to SettingsProvider.BLUR_STYLE_KYANT,
         SettingsProvider.KEY_ARTWORK_TRANSPARENCY to 40,
         // Proportions of the reference dock: about a quarter of the icon size

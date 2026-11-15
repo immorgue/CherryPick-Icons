@@ -1620,6 +1620,12 @@ class MainActivity : AppCompatActivity() {
         val developerOptions=column()
         add(developerOptions,switchRow(getString(R.string.ui_music_island_expansion),SettingsProvider.KEY_MUSIC_ISLAND_EXPANSION,
             getString(R.string.ui_music_island_expansion_hint)))
+        add(developerOptions,switchRow(getString(R.string.ui_music_island_blur),SettingsProvider.KEY_MUSIC_ISLAND_BLUR))
+        add(developerOptions,switchRow(getString(R.string.ui_music_island_glow),SettingsProvider.KEY_MUSIC_ISLAND_GLOW))
+        add(developerOptions,slider(getString(R.string.ui_music_island_outer),SettingsProvider.KEY_MUSIC_ISLAND_OUTER,0,48,"dp"))
+        add(developerOptions,slider(getString(R.string.ui_music_island_content_x),SettingsProvider.KEY_MUSIC_ISLAND_CONTENT_X,0,48,"dp"))
+        add(developerOptions,slider(getString(R.string.ui_music_island_content_y),SettingsProvider.KEY_MUSIC_ISLAND_CONTENT_Y,0,48,"dp"))
+        add(developerOptions,slider(getString(R.string.ui_music_island_radius),SettingsProvider.KEY_MUSIC_ISLAND_RADIUS,0,48,"dp"))
         divider(developerOptions)
         add(developerOptions,slider(getString(R.string.ui_dock_blur_y),SettingsProvider.KEY_DOCK_BLUR_Y,-120,120,"dp"))
         add(developerOptions,slider(getString(R.string.ui_dock_blur_height),SettingsProvider.KEY_DOCK_BLUR_HEIGHT,50,200,"%"))

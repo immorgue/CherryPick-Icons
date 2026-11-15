@@ -286,5 +286,11 @@
     <string name="ui_dock_blur_height">Высота блюра дока</string>
     <string name="ui_dock_blur_y">Положение блюра дока по вертикали</string>
     <string name="ui_music_island_expansion">Музыкальный островок: раскрытие на месте</string>
+    <string name="ui_music_island_blur">Островок: размытие фона</string>
+    <string name="ui_music_island_glow">Островок: свечение</string>
+    <string name="ui_music_island_outer">Островок: внешний отступ</string>
+    <string name="ui_music_island_content_x">Островок: дополнительный отступ по бокам</string>
+    <string name="ui_music_island_content_y">Островок: отступ под камерой</string>
+    <string name="ui_music_island_radius">Островок: скругление раскрытой карточки</string>
     <string name="ui_music_island_expansion_hint">Раскрывает музыкальную карточку из островка поверх статус-бара. Нажатие снаружи сворачивает её. Экспериментальная функция ColorOS; нужен System UI в области LSPosed.</string>
 </resources>

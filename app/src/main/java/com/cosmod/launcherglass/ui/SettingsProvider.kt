@@ -76,6 +76,9 @@ class SettingsProvider : ContentProvider() {
                 bundle.putBoolean(KEY_SCENE_DRAG_BACKDROP,prefs.getBoolean(KEY_SCENE_DRAG_BACKDROP,false))
                 bundle.putBoolean(KEY_HIDE_HOME_GESTURE_BAR,prefs.getBoolean(KEY_HIDE_HOME_GESTURE_BAR,false))
                 bundle.putBoolean(KEY_MUSIC_ISLAND_EXPANSION,prefs.getBoolean(KEY_MUSIC_ISLAND_EXPANSION,false))
+                bundle.putBoolean(KEY_MUSIC_ISLAND_BLUR,prefs.getBoolean(KEY_MUSIC_ISLAND_BLUR,false))
+                bundle.putBoolean(KEY_MUSIC_ISLAND_GLOW,prefs.getBoolean(KEY_MUSIC_ISLAND_GLOW,true))
+                for((key,default) in MUSIC_ISLAND_SPACING)bundle.putInt(key,prefs.getInt(key,default).coerceIn(0,48))
                 bundle.putBoolean(KEY_STATIC_ANIMATION_BLUR,prefs.getBoolean(KEY_STATIC_ANIMATION_BLUR,false))
                 bundle.putInt(KEY_FLIGHT_ICON_REVEAL,prefs.getInt(KEY_FLIGHT_ICON_REVEAL,155).coerceIn(100,400))
                 bundle.putBoolean(KEY_MODULE_LOGGING,prefs.getBoolean(KEY_MODULE_LOGGING,SettingsDefaults.boolean(KEY_MODULE_LOGGING)))
@@ -169,6 +172,8 @@ class SettingsProvider : ContentProvider() {
                     if(b.containsKey(KEY_SCENE_DRAG_BACKDROP))editor.putBoolean(KEY_SCENE_DRAG_BACKDROP,b.getBoolean(KEY_SCENE_DRAG_BACKDROP))
                     if(b.containsKey(KEY_HIDE_HOME_GESTURE_BAR))editor.putBoolean(KEY_HIDE_HOME_GESTURE_BAR,b.getBoolean(KEY_HIDE_HOME_GESTURE_BAR))
                     if(b.containsKey(KEY_MUSIC_ISLAND_EXPANSION))editor.putBoolean(KEY_MUSIC_ISLAND_EXPANSION,b.getBoolean(KEY_MUSIC_ISLAND_EXPANSION))
+                    for(key in listOf(KEY_MUSIC_ISLAND_BLUR,KEY_MUSIC_ISLAND_GLOW))if(b.containsKey(key))editor.putBoolean(key,b.getBoolean(key))
+                    for(key in MUSIC_ISLAND_SPACING.keys)if(b.containsKey(key))editor.putInt(key,b.getInt(key).coerceIn(0,48))
                     if(b.containsKey(KEY_STATIC_ANIMATION_BLUR))editor.putBoolean(KEY_STATIC_ANIMATION_BLUR,b.getBoolean(KEY_STATIC_ANIMATION_BLUR))
                     if(b.containsKey(KEY_FLIGHT_ICON_REVEAL))editor.putInt(KEY_FLIGHT_ICON_REVEAL,b.getInt(KEY_FLIGHT_ICON_REVEAL).coerceIn(100,400))
                     if(b.containsKey(KEY_MODULE_LOGGING))editor.putBoolean(KEY_MODULE_LOGGING,b.getBoolean(KEY_MODULE_LOGGING))
@@ -281,6 +286,13 @@ class SettingsProvider : ContentProvider() {
         const val METHOD_WALLPAPER_CHANGED="wallpaperChanged"
         const val KEY_HIDE_HOME_GESTURE_BAR="hide_home_gesture_bar"
         const val KEY_MUSIC_ISLAND_EXPANSION="experimental_music_island_expansion"
+        const val KEY_MUSIC_ISLAND_BLUR="music_island_blur"
+        const val KEY_MUSIC_ISLAND_GLOW="music_island_glow"
+        const val KEY_MUSIC_ISLAND_OUTER="music_island_outer_spacing"
+        const val KEY_MUSIC_ISLAND_CONTENT_X="music_island_content_x"
+        const val KEY_MUSIC_ISLAND_CONTENT_Y="music_island_content_y"
+        const val KEY_MUSIC_ISLAND_RADIUS="music_island_radius"
+        val MUSIC_ISLAND_SPACING=mapOf(KEY_MUSIC_ISLAND_OUTER to 8,KEY_MUSIC_ISLAND_CONTENT_X to 0,KEY_MUSIC_ISLAND_CONTENT_Y to 8,KEY_MUSIC_ISLAND_RADIUS to 28)
         const val KEY_STATIC_ANIMATION_BLUR="experimental_static_animation_blur"
         const val KEY_FLIGHT_ICON_REVEAL="flight_icon_reveal"
         const val KEY_MODULE_LOGGING="module_logging"

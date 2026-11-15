@@ -53,6 +53,7 @@ internal object AppWindowTilt {
     private val loggedOpen=AtomicBoolean()
     private val loggedClose=AtomicBoolean()
     private val opening=setOf("LAUNCH_FROM_HOME","PRE_START3_LAUNCH","SWIPE_BREAK_LAUNCH")
+    private val legacyOpening=setOf("OPEN_FROM_HOME","REVERSE_TO_OPEN","REVERSE_TO_OPEN_REMOTE")
     private val closing=setOf("REMOTE_CLOSE_TO_HOME","PREDICTIVE_BACK_TO_HOME","SWIPE_TO_HOME","SWIPE_TO_CLIENT_HOME")
 
     fun install(loader:ClassLoader) {
@@ -60,7 +61,7 @@ internal object AppWindowTilt {
             .firstNotNullOfOrNull { name ->
                 val type=XposedHelpers.findClassIfExists(name,loader) ?: return@firstNotNullOfOrNull null
                 type.takeIf { it.declaredFields.any { field -> field.name=="d" && field.type==Matrix::class.java } }
-            } ?: return
+            } ?: return installColorOs16(loader)
         val transform=helper.declaredMethods.singleOrNull { method ->
             val p=method.parameterTypes
             p.size==9 && p[1].isArray && p[2]==Int::class.javaPrimitiveType &&
@@ -110,34 +111,10 @@ internal object AppWindowTilt {
                     if(rotating.getBoolean(input))return
                     val window=full.invoke(param.thisObject) as? Rect ?: return
                     val current=param.args[5] as? RectF ?: return
-                    if(window.isEmpty || current.isEmpty || window.width()>=window.height())return
-                    // A single vertical size signal avoids crossing between
-                    // two different spring curves as the square icon unfolds.
-                    val rawAnchor=height.getFloat(input)/window.height()
-                    val anchor=rawAnchor.takeIf {it in .015f.. .30f} ?: .065f
-                    val scale=current.height()/window.height()
-                    val isOpening=kind in opening
-                    val source=sources[param.thisObject]
-                    // If an OEM gesture constructs its helper outside the
-                    // source-view call, recover the origin from its travel.
-                    val remaining=(1f-scale).coerceAtLeast(.20f)
-                    val row=(source?.let {(it.y-window.exactCenterY())*2f/window.height()}
-                        ?: ((current.centerY()-window.exactCenterY())*2f/window.height()/remaining))
-                    val column=(source?.let {(it.x-window.exactCenterX())*2f/window.width()}
-                        ?: ((current.centerX()-window.exactCenterX())*2f/window.width()/remaining))
-                    if(!scale.isFinite() || !column.isFinite() || !row.isFinite())return
-                    val progress=((scale-anchor)/(1f-anchor)).coerceIn(0f,1f)
-                    val iconWidth=(source?.width ?: anchor*window.height()).toDouble()/window.width()
-                    val iconLeft=(1.0+column-iconWidth)*.5
-                    val intensity=if(PrefsHelper.appGenie)PrefsHelper.appGenieStrength*.01 else 0.0
-                    val droplet=if(PrefsHelper.appDroplet)AppWindowDeformation.droplet(progress,isOpening) else 0f
-                    if(intensity==0.0 && droplet==0f)return
-                    frame.set(Frame(native.get(param.thisObject) as Matrix,crop.get(param.thisObject) as Rect,
-                        1.0-progress,iconLeft,iconWidth,row.toDouble(),response(true),response(false),
-                        if(isSwipe(kind))1.1 else 1.0,current.width(),current.height(),intensity,droplet,
-                        isOpening,source!=null,System.nanoTime(),iconBatch.get(),
-                        radius?.getFloat(input)?.takeIf {it.isFinite()} ?: 0f,
-                        nativeTransaction?.get(param.args[3]) as? SurfaceControl.Transaction))
+                    makeFrame(param.thisObject,kind,kind in opening,window,current,height.getFloat(input),
+                        radius?.getFloat(input) ?: 0f,native.get(param.thisObject) as Matrix,
+                        crop.get(param.thisObject) as Rect,
+                        nativeTransaction?.get(param.args[3]) as? SurfaceControl.Transaction)?.let(frame::set)
                 }catch(error:Exception){
                     GlassLogger.animationLimited("AppWindowTilt","tiltPoseFailure"){ "Skipped native pose: ${error.javaClass.simpleName}" }
                 }
@@ -174,6 +151,33 @@ internal object AppWindowTilt {
         GlassLogger.i("AppWindowTilt","Native perspective available via ${helper.name}/${builder.name}")
     }
 
+    private fun makeFrame(owner: Any, kind: String, opening: Boolean, window: Rect, current: RectF,
+                          originHeight: Float, radius: Float, matrix: Matrix, crop: Rect,
+                          transaction: SurfaceControl.Transaction?): Frame? {
+        if (window.isEmpty || current.isEmpty || window.width() >= window.height()) return null
+        val rawAnchor = originHeight / window.height()
+        val anchor = rawAnchor.takeIf { it in .015f.. .30f } ?: .065f
+        // Both icon and window use vertical size to read progress across the spring.
+        val scale = current.height() / window.height()
+        val source = sources[owner]
+        val remaining = (1f - scale).coerceAtLeast(.20f)
+        val row = source?.let { (it.y - window.exactCenterY()) * 2f / window.height() }
+            ?: (current.centerY() - window.exactCenterY()) * 2f / window.height() / remaining
+        val column = source?.let { (it.x - window.exactCenterX()) * 2f / window.width() }
+            ?: (current.centerX() - window.exactCenterX()) * 2f / window.width() / remaining
+        if (!scale.isFinite() || !column.isFinite() || !row.isFinite()) return null
+        val progress = ((scale - anchor) / (1f - anchor)).coerceIn(0f, 1f)
+        val iconWidth = (source?.width ?: anchor * window.height()).toDouble() / window.width()
+        val iconLeft = (1.0 + column - iconWidth) * .5
+        val intensity = if (PrefsHelper.appGenie) PrefsHelper.appGenieStrength * .01 else 0.0
+        val droplet = if (PrefsHelper.appDroplet) AppWindowDeformation.droplet(progress, opening) else 0f
+        if (intensity == 0.0 && droplet == 0f) return null
+        return Frame(matrix, crop, 1.0 - progress, iconLeft, iconWidth, row.toDouble(), response(true),
+            response(false), if (isSwipe(kind)) 1.1 else 1.0, current.width(), current.height(), intensity,
+            droplet, opening, source != null, System.nanoTime(), iconBatch.get(),
+            radius.takeIf { it.isFinite() } ?: 0f, transaction)
+    }
+
     private fun perspective(leash:SurfaceControl,current:Frame?,bounds:Rect?,iconSetter:Method,
                             affine:Matrix?,replayRadius:Float?=null,
                             appTransaction:SurfaceControl.Transaction?=current?.transaction):FloatArray? {
@@ -199,6 +203,114 @@ internal object AppWindowTilt {
             GlassLogger.animation("AppWindowTilt","Applied $key deformation, row=${current.row}, sourceIcon=${current.fromIcon}")
         }
         return matrix
+    }
+
+    private fun installColorOs16(loader: ClassLoader) {
+        val prefix = "com.android.quickstep.util."
+        val helper = XposedHelpers.findClassIfExists(prefix + "animation.RectTransformHelper", loader) ?: return
+        val transaction = XposedHelpers.findClassIfExists(prefix + "SurfaceTransaction", loader) ?: return
+        val params = XposedHelpers.findClassIfExists(helper.name + "\$TransformParams", loader) ?: return
+        val target = XposedHelpers.findClassIfExists("com.android.systemui.shared.system.RemoteAnimationTargetCompat", loader) ?: return
+        val builderMethod = transaction.method("forSurface", SurfaceControl::class.java) ?: return
+        val builder = builderMethod.returnType
+        val setMatrix = builder.method("setMatrix", Matrix::class.java) ?: return
+        val setPerspective = builder.method("setMatrix4x4", FloatArray::class.java) ?: return
+        val setTrackedPerspective = builder.method("zuyqaSetTilt", FloatArray::class.java)
+        val writePerspective = setTrackedPerspective ?: setPerspective
+        val update = helper.declaredMethods.singleOrNull { method ->
+            val types = method.parameterTypes
+            method.name.startsWith("applySurfaceParams\$lambda") &&
+                java.lang.reflect.Modifier.isStatic(method.modifiers) && method.returnType == Void.TYPE &&
+                types.size == 8 && types[0] == target && types[1] == helper && types[2] == transaction &&
+                types[3] == params && types[4] == Boolean::class.javaPrimitiveType &&
+                types[6] == Float::class.javaPrimitiveType && types[7] == RectF::class.java
+        } ?: return
+        val leashField = target.getField("leash")
+        val surfaceField = builder.field("mSurface", SurfaceControl::class.java) ?: return
+        val kindField = helper.declaredFields.singleOrNull { it.name == "mAnimType" && it.type.isEnum }
+            ?.apply { isAccessible = true } ?: return
+        val cropField = helper.field("mClipRect", Rect::class.java) ?: return
+        val fullField = helper.field("mRealWindowRect", Rect::class.java) ?: return
+        val matrixField = helper.field("mTmpMatrix", Matrix::class.java) ?: return
+        val heightField = params.field("originHeight", Float::class.javaPrimitiveType!!) ?: return
+        val radiusField = params.field("radius", Float::class.javaPrimitiveType!!) ?: return
+        val taskView = params.field("isTaskView", Boolean::class.javaPrimitiveType!!) ?: return
+        val flexible = params.field("isFlexibleWindowScene", Boolean::class.javaPrimitiveType!!) ?: return
+        val corner = builder.method("setCornerRadius", Float::class.javaPrimitiveType!!)
+        hookSource(loader, helper)
+        installColorOs16Spring(loader, kindField.type)
+
+        // ColorOS 16 dispatches the app update through a Runnable. Hook its body so
+        // the additional matrix lands in the same transaction after the launcher writes its pose.
+        ModuleHooks.hookMethod(update, object : XC_MethodHook() {
+            override fun afterHookedMethod(param: MethodHookParam) {
+                if (param.hasThrowable() || !enabled()) return
+                try {
+                    val owner = param.args[1]
+                    val input = param.args[3]
+                    if (taskView.getBoolean(input) || flexible.getBoolean(input)) return
+                    val kind = (kindField.get(owner) as Enum<*>).name
+                    val opening = kind in legacyOpening
+                    if (!opening && kind !in closing) return
+                    val leash = leashField.get(param.args[0]) as? SurfaceControl ?: return
+                    if (!leash.isValid) return
+                    val crop = cropField.get(owner) as Rect
+                    val matrix = matrixField.get(owner) as Matrix
+                    val current = makeFrame(
+                        owner, kind, opening, fullField.get(owner) as Rect, param.args[7] as RectF,
+                        heightField.getFloat(input), radiusField.getFloat(input), matrix, crop, null
+                    ) ?: return
+                    val tilt = perspective(leash, current, crop, writePerspective, matrix)
+                    if (tilt == null && current.droplet <= 0f) return
+                    val properties = builderMethod.invoke(param.args[2], leash) ?: return
+                    if (tilt != null) writePerspective.invoke(properties, tilt)
+                    if (current.droplet > 0f && !crop.isEmpty && current.radius in 0f..(minOf(crop.width(), crop.height()) * .5f)) {
+                        corner?.invoke(properties, cornerRadius(current.radius, crop, current.droplet))
+                    }
+                } catch (error: Exception) {
+                    GlassLogger.animationLimited("AppWindowTilt", "colorOs16TiltFailure") {
+                        "Skipped ColorOS 16 perspective: ${error.javaClass.simpleName}"
+                    }
+                }
+            }
+        })
+        if (setTrackedPerspective == null) {
+            // The stock builder does not clear separately written 4x4 transforms.
+            ModuleHooks.hookMethod(setMatrix, object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    if (pitched.isEmpty()) return
+                    val leash = surfaceField.get(param.thisObject) as? SurfaceControl ?: return
+                    if (pitched.remove(leash) && leash.isValid) setPerspective.invoke(param.thisObject, identity)
+                }
+            })
+        }
+        GlassLogger.i("AppWindowTilt", "Native perspective available via ColorOS 16")
+    }
+
+    private fun Class<*>.method(name: String, vararg types: Class<*>) =
+        declaredMethods.singleOrNull { it.name == name && it.parameterTypes.contentEquals(types) }
+            ?.apply { isAccessible = true }
+
+    private fun Class<*>.field(name: String, type: Class<*>) =
+        declaredFields.singleOrNull { it.name == name && it.type == type }?.apply { isAccessible = true }
+
+    private fun installColorOs16Spring(loader: ClassLoader, animationType: Class<*>) {
+        val animator = animationType.enclosingClass ?: return
+        val property = XposedHelpers.findClassIfExists(animator.name + "\$RectAnimType", loader) ?: return
+        val float = Float::class.javaPrimitiveType!!
+        val apply = animator.method("setSpringHolderParamByType", property, float, float) ?: return
+        val kindField = animator.field("mAnimType", animationType) ?: return
+        ModuleHooks.hookMethod(apply, object : XC_MethodHook() {
+            override fun beforeHookedMethod(param: MethodHookParam) {
+                if (!enabled()) return
+                val kind = (kindField.get(param.thisObject) as? Enum<*>)?.name ?: return
+                val opening = kind in legacyOpening
+                if (!opening && kind !in closing) return
+                val frequency = (2 * PI / response(opening)).toFloat()
+                param.args[1] = frequency * frequency
+                param.args[2] = if (isSwipe(kind) && PrefsHelper.appGestureBounce) .85f else 1f
+            }
+        })
     }
 
     private fun finishIconBatch(batch:IconBatch?,deformation:AppWindowDeformation?,setter:Method,
@@ -232,11 +344,15 @@ internal object AppWindowTilt {
     }
 
     private fun installFrameReplay(loader:ClassLoader,record:Class<*>,iconSetter:Method) {
-        if(record.name!="y2c")return
+        val storeName=when(record.name){
+            "y2c" -> "e"
+            "ni.e" -> "f"
+            else -> return
+        }
         val replay=record.declaredMethods.singleOrNull { it.name=="a" && it.returnType==Void.TYPE &&
             it.parameterTypes.contentEquals(arrayOf(SurfaceControl.Transaction::class.java,SurfaceControl::class.java)) } ?: return
         val store=record.declaredMethods.singleOrNull {
-            it.name=="e" && it.returnType==Void.TYPE && it.parameterCount==11 && it.parameterTypes[6]==Rect::class.java
+            it.name==storeName && it.returnType==Void.TYPE && it.parameterCount==11 && it.parameterTypes[6]==Rect::class.java
         } ?: return
         val active=record.getDeclaredField("a").takeIf {it.type==Boolean::class.javaPrimitiveType}
             ?.apply {isAccessible=true} ?: return
@@ -417,7 +533,7 @@ internal object AppWindowTilt {
     }
 
     private fun installDroplet(builder:Class<*>) {
-        if(builder.name!="cla")return
+        if(builder.name !in setOf("cla","xi.q\$b","xi.s\$b"))return
         val float=Float::class.javaPrimitiveType
         val smooth=builder.declaredMethods.singleOrNull { method ->
             method.name=="f" && method.returnType==Void.TYPE &&
@@ -442,13 +558,16 @@ internal object AppWindowTilt {
     }
 
     private fun installSpringTuning(loader:ClassLoader,animationType:Class<*>) {
-        val animator=XposedHelpers.findClassIfExists("nj2",loader) ?: return
-        val spring=XposedHelpers.findClassIfExists("h8a",loader) ?: return
+        val modern=XposedHelpers.findClassIfExists("nj2",loader)
+        val animator=modern ?: XposedHelpers.findClassIfExists(
+            "com.android.quickstep.util.animation.CustomRectFSpringAnim",loader) ?: return
+        val spring=XposedHelpers.findClassIfExists(if(modern!=null)"h8a" else "vi.f",loader) ?: return
+        val setupNames=if(modern!=null)setOf("E","H") else setOf("V","X")
         val kind=animator.declaredFields.singleOrNull {it.name=="v0" && it.type==animationType}
             ?.apply {isAccessible=true} ?: return
         if(animator.declaredFields.count {it.type==spring}!=7)return
         val setup=animator.declaredMethods.filter {
-            it.name in setOf("E","H") && it.parameterCount==0 && it.returnType==Void.TYPE
+            it.name in setupNames && it.parameterCount==0 && it.returnType==Void.TYPE
         }
         if(setup.size!=2)return
         val float=Float::class.javaPrimitiveType

@@ -12,6 +12,9 @@ internal object WallpaperProfiles {
     private val excluded=setOf(SettingsProvider.KEY_ENABLED,SettingsProvider.KEY_DEVELOPER_MODE,
         SettingsProvider.KEY_HIDE_HOME_GESTURE_BAR,SettingsProvider.KEY_SCENE_DRAG_BACKDROP,SettingsProvider.KEY_STATIC_ANIMATION_BLUR,SettingsProvider.KEY_MODULE_LOGGING,SettingsProvider.KEY_FLIGHT_ICON_REVEAL,
         SettingsProvider.KEY_GPU_EFFECTS,SettingsProvider.KEY_DOCK_BLUR_HEIGHT,SettingsProvider.KEY_DOCK_BLUR_Y,SettingsProvider.KEY_MUSIC_ISLAND_EXPANSION,
+        SettingsProvider.KEY_MUSIC_ISLAND_BLUR,SettingsProvider.KEY_MUSIC_ISLAND_GLOW,
+        SettingsProvider.KEY_MUSIC_ISLAND_OUTER,SettingsProvider.KEY_MUSIC_ISLAND_CONTENT_X,SettingsProvider.KEY_MUSIC_ISLAND_CONTENT_Y,
+        SettingsProvider.KEY_MUSIC_ISLAND_RADIUS,
 
         SettingsProvider.KEY_LIMIT_CLOSING_BLUR,
         SettingsProvider.KEY_DISABLE_EDGE_OPTIMIZATION,SettingsProvider.KEY_OPTIMIZE_MINI_ICONS,

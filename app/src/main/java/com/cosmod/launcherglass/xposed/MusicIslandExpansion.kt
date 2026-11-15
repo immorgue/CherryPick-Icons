@@ -40,7 +40,11 @@ internal object MusicIslandExpansion {
             override fun beforeHookedMethod(p:MethodHookParam){
                 val plugin=p.args.firstOrNull() ?: return
                 val context=p.args.filterIsInstance<Context>().firstOrNull() ?: return
-                observe(context.applicationContext)
+                // PluginContext's base is not attached until the OEM callback runs.
+                // Install hooks before native views are constructed, but use the host context.
+                val host=try {XposedHelpers.getObjectField(p.thisObject,"context") as? Context}catch(_:Throwable){null}
+                val settings=host ?: context
+                observe(try {settings.applicationContext ?: settings}catch(_:Throwable){settings})
                 try {installPlugin(plugin.javaClass.classLoader ?: return)}
                 catch(t:Throwable){GlassLogger.e("MusicIsland","Native capsule integration unavailable",t)}
             }
@@ -52,12 +56,20 @@ internal object MusicIslandExpansion {
         settingsContext=context
         val worker=Executors.newSingleThreadExecutor {r->Thread(r,"CherryPick-island-settings").apply {isDaemon=true}}
         fun load(){worker.execute {
-            val value=try {context.contentResolver.call(SettingsProvider.CONTENT_URI,SettingsProvider.METHOD_GET_ALL,null,null)?.let {
-                it.getBoolean(SettingsProvider.KEY_ENABLED,false) && it.getBoolean(SettingsProvider.KEY_MUSIC_ISLAND_EXPANSION,false)
-            } ?: false}catch(_:Throwable){false}
+            val data=try {context.contentResolver.call(SettingsProvider.CONTENT_URI,SettingsProvider.METHOD_GET_ALL,null,null)}catch(_:Throwable){null}
+            val value=data?.let {it.getBoolean(SettingsProvider.KEY_ENABLED,false) && it.getBoolean(SettingsProvider.KEY_MUSIC_ISLAND_EXPANSION,false)} ?: false
             main.post {
-                if(enabled!=value){
+                GlassLogger.enabled=data?.getBoolean(SettingsProvider.KEY_MODULE_LOGGING,false) ?: false
+                val options=MusicIslandMaterial.Options(
+                    data?.getBoolean(SettingsProvider.KEY_MUSIC_ISLAND_BLUR,false) ?: false,
+                    data?.getBoolean(SettingsProvider.KEY_MUSIC_ISLAND_GLOW,true) ?: true,
+                    data?.getInt(SettingsProvider.KEY_MUSIC_ISLAND_OUTER,8) ?: 8,
+                    data?.getInt(SettingsProvider.KEY_MUSIC_ISLAND_CONTENT_X,0) ?: 0,
+                    data?.getInt(SettingsProvider.KEY_MUSIC_ISLAND_CONTENT_Y,8) ?: 8,
+                    data?.getInt(SettingsProvider.KEY_MUSIC_ISLAND_RADIUS,28) ?: 28)
+                if(enabled!=value || MusicIslandMaterial.options!=options){
                     enabled=value
+                    MusicIslandMaterial.configure(options)
                     containers.entries.toList().forEach {(view,update)->
                         if(view.isAttachedToWindow)try {update.invoke(view);view.requestLayout()}catch(_:Throwable){}
                     }
@@ -86,6 +98,10 @@ internal object MusicIslandExpansion {
         // Refuse a different OEM API rather than guessing an obfuscated binding.
         if(container.methods.none {it.name=="getCardUiState"} || card.methods.none {it.name=="getContentView"})return
         loaders[loader]=true
+        try {MusicIslandMaterial.install(loader,card,{enabled},::hasMediaContent)}
+        catch(t:Throwable){GlassLogger.e("MusicIsland","Plain music material unavailable",t)}
+        try {MusicIslandMotion.install(loader,{enabled},{anchor?.let(::Rect)},::hasMediaContent)}
+        catch(t:Throwable){GlassLogger.e("MusicIsland","Native motion integration unavailable",t)}
         XposedBridge.hookAllMethods(capsuleRoot,"dispatchTouchEvent",object:XC_MethodHook(){
             override fun beforeHookedMethod(p:MethodHookParam){
                 if(!enabled)return
@@ -93,9 +109,13 @@ internal object MusicIslandExpansion {
                 if(event.actionMasked!=MotionEvent.ACTION_DOWN)return
                 val root=p.thisObject as? ViewGroup ?: return
                 if(!portraitUnlocked(root.context))return
+                MusicIslandMotion.captureStatusBar(root.rootView)
                 findCapsule(root,event.rawX.toInt(),event.rawY.toInt())?.let {view->
                     val rect=Rect()
-                    if(view.getGlobalVisibleRect(rect) && !rect.isEmpty){anchor=rect;anchorDisplay=view.display?.displayId ?: 0}
+                    if(view.getGlobalVisibleRect(rect) && !rect.isEmpty &&
+                        (anchor==null || MusicIslandMotion.canCaptureAnchor()) && rect.width()>=rect.height()*2){
+                        anchor=rect;anchorDisplay=view.display?.displayId ?: 0
+                    }
                 }
             }
         })
@@ -108,7 +128,7 @@ internal object MusicIslandExpansion {
                 val rect=anchor ?: return
                 val display=try {context.display?.displayId ?: 0}catch(_:Throwable){0}
                 if(musicOnly && portraitUnlocked(context) && display==anchorDisplay){
-                    p.result=rect.top
+                    p.result=MusicIslandMaterial.outerPixels(context)
                     if(scope!=null)retargeted[scope]=true
                 }
             }
@@ -126,6 +146,13 @@ internal object MusicIslandExpansion {
                 // OEM drag/spring recovery also caches its resting Y.
                 // Keep that cache consistent with the retargeted native layout.
                 if(retargeted[view]==true){
+                    if(enabled && musicOnly){
+                        val width=view.resources.displayMetrics.widthPixels-2*MusicIslandMaterial.outerPixels(view.context)
+                        view.layoutParams?.let {lp->
+                            lp.width=width
+                            if(lp is android.widget.FrameLayout.LayoutParams){lp.gravity=android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL;lp.leftMargin=0;lp.rightMargin=0}
+                        }
+                    }
                     try {XposedHelpers.setIntField(view,"r",view.translationY.toInt())}catch(_:Throwable){}
                     if(!enabled || !musicOnly)retargeted.remove(view)
                 }
@@ -141,6 +168,7 @@ internal object MusicIslandExpansion {
                 val view=p.thisObject as? View ?: return
                 val content=try {XposedHelpers.callMethod(view,"getContentView") as? View}catch(_:Throwable){null}
                 musicOnly=content?.let(::hasMediaContent)==true
+                MusicIslandMaterial.refresh(view,content)
             }
         })
     }

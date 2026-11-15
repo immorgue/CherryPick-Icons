@@ -286,5 +286,11 @@
     <string name="ui_dock_blur_height">Dock blur height</string>
     <string name="ui_dock_blur_y">Dock blur vertical position</string>
     <string name="ui_music_island_expansion">Music island: expand in place</string>
+    <string name="ui_music_island_blur">Music island: background blur</string>
+    <string name="ui_music_island_glow">Music island: glow</string>
+    <string name="ui_music_island_outer">Music island: outer spacing</string>
+    <string name="ui_music_island_content_x">Music island: extra side padding</string>
+    <string name="ui_music_island_content_y">Music island: padding below camera</string>
+    <string name="ui_music_island_radius">Music island: expanded corner radius</string>
     <string name="ui_music_island_expansion_hint">Expands the native music card from its island over the status bar. Tap outside to collapse. Experimental ColorOS integration; requires System UI in LSPosed scope.</string>
 </resources>
