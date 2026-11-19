@@ -30,8 +30,9 @@ internal class UiLiquidGlass(
     enum class Surface { REGULAR, LIQUID_SHEET, TAB_TRACK, TAB_THUMB }
     private val density = resources.displayMetrics.density
     private val dark = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
+    private val sheet = initialSurface == Surface.LIQUID_SHEET
     private val radius get() = min(radiusDp * density, min(width, height) / 2f)
-    private val margin = (density * (if(initialSurface==Surface.LIQUID_SHEET)52f else 32f)).roundToInt()
+    private val margin = (density * (if(sheet)56f else 32f)).roundToInt()
     private val scene = RenderNode("CherryPick.uiGlassBackdrop")
     private val lens = if (refract && Build.VERSION.SDK_INT >= 33) LiquidGlassShader.createLifted() else null
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -117,7 +118,13 @@ internal class UiLiquidGlass(
             val image = Bitmap.createBitmap(w, h, Bitmap.Config.ALPHA_8)
             Canvas(image).drawPath(path, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE })
             mask=BitmapShader(image,Shader.TileMode.CLAMP,Shader.TileMode.CLAMP)
-            contour=if(radius<min(w,h)*.499f) com.cosmod.launcherglass.xposed.GlassGeometry.contourField(image) else null
+            contour=if(radius<min(w,h)*.499f) {
+                // Keep the silhouette at full resolution and sample the sheet's broad lens at dp resolution.
+                val fieldScale=if(sheet)min(.5f,1f/density)else 1f
+                val fieldMask=if(fieldScale<1f)Bitmap.createScaledBitmap(image,
+                    (w*fieldScale).roundToInt().coerceAtLeast(1),(h*fieldScale).roundToInt().coerceAtLeast(1),true)else image
+                com.cosmod.launcherglass.xposed.GlassGeometry.contourField(fieldMask)
+            } else null
         }
         configureOptics()
         needsCapture = true
@@ -131,12 +138,12 @@ internal class UiLiquidGlass(
         scene.setPosition(-margin, -margin, w + margin, h + margin)
         val optics=when(initialSurface){
             Surface.REGULAR ->KyantOptics(if(selection)30 else 24,if(selection)22 else 17,28,0,108)
-            Surface.LIQUID_SHEET ->lensDp(24f,48f,26,0,if(dark)65 else 111)
+            Surface.LIQUID_SHEET ->lensDp(19f,26f,15,0,90)
             Surface.TAB_TRACK ->lensDp(12f,10f,25,0,105)
             Surface.TAB_THUMB ->lensDp(20f,14f,31,0,105)
         }
         val blurDp=when(initialSurface){
-            Surface.LIQUID_SHEET ->20f
+            Surface.LIQUID_SHEET ->10f
             Surface.TAB_TRACK ->8f
             Surface.TAB_THUMB ->0f
             Surface.REGULAR ->if(selection)5f else 9f
@@ -146,8 +153,7 @@ internal class UiLiquidGlass(
         val effect = if (alpha!=null && Build.VERSION.SDK_INT >= 33) lens?.let {
             val style = GlassStyle(false, 0, 0, 0, 0, null, kyant = optics, cornerField = contour)
             RenderEffect.createRuntimeShaderEffect(it.updateLifted(alpha, w, h, margin.toFloat(),
-                wrapperWidth, wrapperHeight, null, radius / min(w, h), style,
-                depthEffect=initialSurface==Surface.LIQUID_SHEET), "backdrop")
+                wrapperWidth, wrapperHeight, null, radius / min(w, h), style), "backdrop")
         } else null
         val material=if(effect!=null && blur!=null)RenderEffect.createChainEffect(effect,blur)else effect ?: blur
         scene.setRenderEffect(material)
@@ -166,7 +172,7 @@ internal class UiLiquidGlass(
         val behind = source()
         val recording = scene.beginRecording(width + margin * 2, height + margin * 2)
         try {
-            recording.drawColor(backdropColor ?: if (dark) Color.BLACK else 0xfff1f1f1.toInt())
+            recording.drawColor(backdropColor ?: if(sheet)0xff4b4b4b.toInt()else if(dark)Color.BLACK else 0xfff1f1f1.toInt())
             if (behind != null && behind !== this) {
                 getLocationOnScreen(ownLocation)
                 behind.getLocationOnScreen(sourceLocation)
@@ -210,7 +216,7 @@ internal class UiLiquidGlass(
         if (canvas.isHardwareAccelerated) canvas.drawRenderNode(scene)
         paint.shader = null
         paint.color = tintColor ?: when(initialSurface){
-            Surface.LIQUID_SHEET ->if(dark)0x90171717.toInt()else 0xb6dedede.toInt()
+            Surface.LIQUID_SHEET ->if(canvas.isHardwareAccelerated)0x38606060 else 0xc0484848.toInt()
             Surface.TAB_TRACK ->if(dark)0x8016181d.toInt()else 0x88f5f5fa.toInt()
             Surface.TAB_THUMB ->if(dark)0x39ffffff else 0x65ffffff
             Surface.REGULAR ->if(dark)(if(selection)0x42ffffff else 0x69303030)else

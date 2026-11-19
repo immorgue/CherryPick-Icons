@@ -35,7 +35,7 @@ import kotlin.math.roundToInt
 internal object LauncherAutoMenu {
     private val entries=WeakHashMap<ViewGroup,Entry>()
     private val main=Handler(Looper.getMainLooper())
-    private class Entry(var theme:Int,var popup:Panel?=null)
+    private class Entry(var popup:Panel?=null)
     private fun activity(context:Context):Activity? {
         var value=context
         repeat(12){
@@ -46,7 +46,6 @@ internal object LauncherAutoMenu {
     }
     private fun strings(context:Context)=context.createPackageContext("com.cosmod.launcherglass",Context.CONTEXT_IGNORE_SECURITY)
     private fun dark(context:Context)=context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK==Configuration.UI_MODE_NIGHT_YES
-    private fun ink(context:Context)=if(dark(context))0xfff5f5f7.toInt()else 0xff19191c.toInt()
     private fun dp(context:Context,value:Int)=(context.resources.displayMetrics.density*value).roundToInt()
     private fun lookup(parent:ViewGroup,name:String):View? {
         val id=parent.resources.getIdentifier(name,"id",parent.context.packageName)
@@ -107,7 +106,7 @@ internal object LauncherAutoMenu {
         val paramsType=done.layoutParams.javaClass
         val params=HookReflection.newInstance(paramsType,dp(context,100),dp(context,34)) as ViewGroup.LayoutParams
         parent.addView(button,params)
-        val entry=Entry(context.resources.configuration.uiMode)
+        val entry=Entry()
         entries[parent]=entry
         val secondaryTitle=lookup(parent,"secondary_title_container")
         val blocksDraw=runCatching {done.javaClass.getMethod("getForceBlockDraw")}.getOrNull()
@@ -144,10 +143,6 @@ internal object LauncherAutoMenu {
             button.isClickable=nativeAlpha>.05f
             button.isFocusable=button.isClickable
             if(nativeAlpha<=0f)entry.popup?.dismiss()
-            val theme=context.resources.configuration.uiMode
-            if(entry.theme!=theme){
-                entry.theme=theme;entry.popup?.dismiss()
-            }
             true
         }
         button.setOnClickListener { anchor ->
@@ -180,7 +175,19 @@ internal object LauncherAutoMenu {
         private val transform=Matrix()
         private val scene=RenderNode("CherryPick.editScene")
         private var dirty=true
+        private var wallpaper:Bitmap?=null
+        private var wallpaperRequest=0
         private val layers=listOf("workspace","hotseat","page_indicator","toggle_bar_root_top")
+        fun captureWallpaper(onReady:()->Unit){
+            val request=++wallpaperRequest
+            wallpaper=WallpaperHelper.wallpaperForCustomize(activity.applicationContext){ image ->
+                if(request==wallpaperRequest && image!=null){
+                    wallpaper=image
+                    resize()
+                    onReady()
+                }
+            }
+        }
         fun resize(){
             val w=root.width.coerceAtLeast(1);val h=root.height.coerceAtLeast(1)
             if(width!=w || height!=h){
@@ -199,13 +206,18 @@ internal object LauncherAutoMenu {
             }
             canvas.drawRenderNode(scene)
         }
-        fun release(){scene.discardDisplayList();dirty=true}
+        fun release(){
+            wallpaperRequest++
+            wallpaper=null
+            scene.discardDisplayList()
+            dirty=true
+        }
         private fun drawScene(canvas:Canvas){
-            val image=WallpaperHelper.getBlurredWallpaper(activity)
+            val image=wallpaper
             if(image!=null && !image.isRecycled){
                 val bitmap=WallpaperHelper.forCanvas(image,canvas)
                 canvas.drawBitmap(bitmap,null,Rect(0,0,width,height),paint)
-            }else canvas.drawColor(if(dark(context))0xff292b30.toInt()else 0xffd6d8dc.toInt())
+            }else canvas.drawColor(0xff4b4b4b.toInt())
             // Explicitly compose siblings below the sheet. Never record the decor
             // or toolbar, which can contain the surface we are painting.
             for(name in layers){
@@ -265,10 +277,10 @@ internal object LauncherAutoMenu {
         private val labels=strings(activity)
         private fun s(id:Int)=labels.getString(id)
         private fun d(n:Int)=dp(activity,n)
-        private val inkColor=ink(activity)
-        private val muted=if(dark(activity))0xffc7c7cc.toInt()else 0xff636366.toInt()
+        private val inkColor=0xfff5f5f5.toInt()
+        private val muted=0xffdedede.toInt()
         private val glass=UiLiquidGlass(activity,{source},32f,trackSourceContent=false,
-            initialSurface=UiLiquidGlass.Surface.LIQUID_SHEET,refract=false)
+            initialSurface=UiLiquidGlass.Surface.LIQUID_SHEET)
         private val materialButton=MaterialButton()
         private val tintPicker=headerButton().apply {
             setImageDrawable(labels.getDrawable(R.drawable.ic_tint_eyedropper))
@@ -294,7 +306,7 @@ internal object LauncherAutoMenu {
             override fun onInterceptTouchEvent(event:MotionEvent)=!isEnabled || super.onInterceptTouchEvent(event)
             override fun onTouchEvent(event:MotionEvent)=!isEnabled || super.onTouchEvent(event)
         }.apply {orientation=LinearLayout.VERTICAL}
-        private val warning=TextView(activity).apply {textSize=14f;setTextColor(inkColor);setPadding(d(4),d(8),d(4),d(12))}
+        private val warning=text("").apply {setPadding(d(4),d(8),d(4),d(12))}
         private var settings=AutoMenuBridge.snapshot()
         private var available=AutoMenuBridge.hasSettings
         private var received=AutoMenuBridge.hasRead
@@ -337,12 +349,13 @@ internal object LauncherAutoMenu {
         private fun value(key:String)=settings.getInt(key,Auto.defaults.getValue(key))
         private fun text(label:String,size:Float=14f)=TextView(activity).apply {
             text=label;textSize=size;setTextColor(inkColor);includeFontPadding=false
+            setShadowLayer(d(2).toFloat(),0f,d(1).toFloat(),0x99000000.toInt())
         }
         private fun row()=LinearLayout(activity).apply {gravity=Gravity.CENTER_VERTICAL}
         private fun enabled()=available && value(Auto.ENGINE)==1
         private fun choice(key:String,options:List<Pair<Int,Int>>):FloatingNavigationPill {
             val pill=FloatingNavigationPill(activity,options.map {s(it.second)},null,true,{glass},inkColor,
-                trackBackdrop=false,compactHeight=36,refract=false){index ->
+                trackBackdrop=false,compactHeight=36,refract=false,trackTint=0x60242424,selectionTint=0x38ffffff){index ->
                 choose(key to options[index].first)
             }
             strips.add(Choice(key,options.map {it.first},pill))
@@ -422,6 +435,7 @@ internal object LauncherAutoMenu {
             if(anchor.windowToken==null || activity.isFinishing || activity.isDestroyed)return
             anchor.getLocationOnScreen(windowPosition)
             toolbarBottom=(windowPosition[1]+anchor.height+d(8)).toFloat()
+            source.captureWallpaper {glass.invalidateBackdrop()}
             source.resize()
             panel.alpha=.001f;panel.offsetY=0f
             panel.setLayerType(View.LAYER_TYPE_HARDWARE,null)
@@ -709,13 +723,12 @@ internal object LauncherAutoMenu {
             scaleType=ImageView.ScaleType.CENTER
             imageTintList=android.content.res.ColorStateList.valueOf(inkColor)
             val circle=android.graphics.drawable.RippleDrawable(
-                android.content.res.ColorStateList.valueOf(if(dark(activity))0x30ffffff else 0x20000000),
+                android.content.res.ColorStateList.valueOf(0x30ffffff),
                 GradientDrawable().apply {
                     shape=GradientDrawable.OVAL
-                    val dark=dark(activity)
                     setColor(android.content.res.ColorStateList(
                         arrayOf(intArrayOf(android.R.attr.state_selected),intArrayOf()),
-                        intArrayOf(if(dark)0x50ffffff else 0x32000000,if(dark)0x26ffffff else 0x18000000)))
+                        intArrayOf(0x50ffffff,0x26ffffff)))
                 },null)
             background=InsetDrawable(circle,d(3))
         }

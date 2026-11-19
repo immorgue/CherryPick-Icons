@@ -1,11 +1,12 @@
 # Изменения
 
-## v0.3.239 Beta
+## v0.3.241 Beta
 
 ### Русский
 
 - Новый интерфейс настроек с предпросмотром и отдельными переключателями для функций рабочего стола.
 - Режимы иконок Default, Dark, Clear и Tinted, автоподбор оттенка из обоев и меню Customize прямо в лаунчере. По умолчанию включены Auto Tinted и Auto для дока.
+- У Customize постоянный фон Liquid Glass с лёгким серым оттенком и мягким размытием. Тема устройства и материал рабочего стола не меняют оформление панели.
 - Стекло для виджетов часов и погоды, улучшения размытия и экспериментального музыкального островка.
 - Переход на LSPosed API 102. После обновления нужен перезапуск лаунчера. Анимации приложений выключены по умолчанию и пока не тестировались на ColorOS 16.
 
@@ -13,6 +14,7 @@
 
 - Redesigned settings with previews and separate switches for home screen features.
 - Default, Dark, Clear and Tinted icons, automatic wallpaper-based tint, and a Customize menu in the launcher. Auto Tinted and Dock Auto are selected by default.
+- Customize always uses a translucent Liquid Glass backdrop with a light gray tint and gentle blur, independent of the device theme and home screen material.
 - Glass for clock and weather widgets, plus improvements to blur and the experimental music island.
 - Migrated to LSPosed API 102. Restart the launcher after updating. App animations are off by default and haven’t been tested on ColorOS 16 yet.
 

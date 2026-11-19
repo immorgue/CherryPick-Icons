@@ -29,6 +29,7 @@ internal class FloatingNavigationPill(
     context:Context, labels:List<String>, icons:List<Int>?, private val useCoui:Boolean,
     backdrop: (() -> View?)?=null, private val labelColor:Int?=null,
     private val trackBackdrop:Boolean=true, compactHeight:Int=44, private val refract:Boolean=true,
+    trackTint:Int?=null, selectionTint:Int?=null,
     private val choose:(Int)->Unit
 ):FrameLayout(context) {
     private val compact=icons==null
@@ -38,14 +39,14 @@ internal class FloatingNavigationPill(
     private val inset=dp(if(useCoui)4 else 6)
     private val tabHeight=dp(if(compact)compactHeight else if(useCoui)48 else 56)
     private val glass = if (useCoui && backdrop!=null) UiLiquidGlass(context, backdrop, 999f,
-        trackBackdrop=trackBackdrop,initialSurface=UiLiquidGlass.Surface.TAB_TRACK,refract=refract) else null
+        tintColor=trackTint,trackBackdrop=trackBackdrop,initialSurface=UiLiquidGlass.Surface.TAB_TRACK,refract=refract) else null
     private val refractedThumb=glass!=null && refract
     private val row=LinearLayout(context).apply {orientation=LinearLayout.HORIZONTAL;setPadding(inset,inset,inset,inset)}
     private val indicator= (if (refractedThumb) UiLiquidGlass(context,{glass},999f,selection=true,
         initialSurface=UiLiquidGlass.Surface.TAB_THUMB, foreground=row) else View(context)).apply {
         if (!refractedThumb) background=GradientDrawable().apply {
             val dark=resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK==Configuration.UI_MODE_NIGHT_YES
-            setColor(when {
+            setColor(selectionTint ?: when {
                 glass!=null -> if(dark)0x39ffffff else 0x65ffffff
                 useCoui -> ContextCompat.getColor(context,R.color.coui_accent_surface)
                 else -> color(M.attr.colorSecondaryContainer)

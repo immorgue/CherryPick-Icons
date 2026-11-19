@@ -1,6 +1,6 @@
 # CherryPick Icons
 
-**v0.3.239 Beta** · [Релизы / releases](https://github.com/immorgue/CherryPick-Icons/releases) · [Ченжлог / changelog](CHANGELOG.md) · [Совместимость / compatibility](COMPATIBILITY.md)
+**v0.3.241 Beta** · [Релизы / releases](https://github.com/immorgue/CherryPick-Icons/releases) · [Ченжлог / changelog](CHANGELOG.md) · [Совместимость / compatibility](COMPATIBILITY.md)
 
 Для этой версии нужен LSPosed с поддержкой libxposed API 102. После обновления перезапустите лаунчер.
 

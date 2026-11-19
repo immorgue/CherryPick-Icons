@@ -709,6 +709,19 @@ object WallpaperHelper {
 
 
 
+    /** Use unfiltered wallpaper pixels for the editor sheet, which applies its own blur and tint. */
+    internal fun wallpaperForCustomize(context: Context, onReady: (Bitmap?) -> Unit): Bitmap? {
+        val cached = synchronized(this) {
+            val delivered = launcherWallpaper?.get()?.takeUnless(Bitmap::isRecycled)
+            if (isLiveWallpaper(context)) systemSnapshot?.takeUnless(Bitmap::isRecycled) ?: delivered else delivered
+        }
+        if (cached == null) loader.execute {
+            val image = runCatching { getRawScaledWallpaper(context) }.getOrNull()
+            mainHandler.post { onReady(image) }
+        }
+        return cached
+    }
+
     fun getRawScaledWallpaper(context: Context): Bitmap? {
 
         val raw = loadRawWallpaper(context) ?: return null
