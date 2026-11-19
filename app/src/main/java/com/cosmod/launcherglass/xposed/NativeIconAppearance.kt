@@ -2,7 +2,7 @@ package com.cosmod.launcherglass.xposed
 
 import android.content.Context
 import android.content.res.Configuration
-import de.robv.android.xposed.XposedHelpers
+import com.cosmod.launcherglass.bridge.HookReflection
 import java.lang.reflect.Method
 
 /** Read the same resolved icon appearance as Flux, including its independent light/dark setting. */

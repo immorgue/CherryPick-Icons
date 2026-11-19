@@ -1,5 +1,7 @@
 package com.cosmod.launcherglass.ui
 
+import com.cosmod.launcherglass.util.AutoIconStyle
+
 /** Defaults for absent keys only. Existing installations retain their saved values. */
 object SettingsDefaults {
     internal fun seedOwnGlassSettings(prefs: android.content.SharedPreferences) {
@@ -19,13 +21,35 @@ object SettingsDefaults {
         editor?.apply()
     }
 
+    private val widgetSwitches = listOf(SettingsProvider.KEY_CLOCK_WIDGET_GLASS, SettingsProvider.KEY_WEATHER_WIDGET_GLASS)
+
+    fun migrateWidgetSwitches(values: Map<String, Any>): Map<String, Any> {
+        val original = values[SettingsProvider.KEY_PHOTO_WIDGET_BLUR] as? Boolean ?: return values
+        return values + widgetSwitches.filterNot(values::containsKey).associateWith { original }
+    }
+
     fun initialize(context: android.content.Context, prefs: android.content.SharedPreferences) {
-        // Capture this before migrations populate an otherwise fresh preference file.
+        // Capture before migrations populate an otherwise fresh preference file.
         val hadSavedValues = prefs.all.isNotEmpty()
-        val removed=listOf("refraction_before_blur","folder_refraction_before_blur","photo_widget_refraction_before_blur","artwork_icons",
+        preservePreviousAppearance(prefs, hadSavedValues)
+        // Preserve the current look once, then stop following launcher theme reports.
+        if(!prefs.contains(SettingsProvider.KEY_ICON_COLOR_THEME)){
+            val dark=prefs.getBoolean(SettingsProvider.KEY_NATIVE_ICON_DARK,
+                com.cosmod.launcherglass.util.IconPalette.isSystemDark(context))
+            prefs.edit().putInt(SettingsProvider.KEY_ICON_COLOR_THEME,if(dark)2 else 1).apply()
+        }
+        if(!prefs.getBoolean("automatic_wallpaper_profiles_v2",false))prefs.edit()
+            .putBoolean(WallpaperProfiles.ENABLED,true).putBoolean("automatic_wallpaper_profiles_v2",true).apply()
+        val removed=listOf("ui_md3","settings_cards_v2","refraction_before_blur","folder_refraction_before_blur","photo_widget_refraction_before_blur","artwork_icons",
             "experimental_liquid_optics","dock_event_driven","experimental_compact_dock_effects","experimental_reuse_static_wallpaper",
-            "glass_haze_enabled","experimental_haze_bloom","blur_color_depth_enabled","blur_color_depth_bits","blur_color_depth_stage","blur_dither","blur_dither_strength")
+            "experimental_haze_bloom","blur_color_depth_enabled","blur_color_depth_bits","blur_color_depth_stage","blur_dither","blur_dither_strength",
+            "experimental_ui_header_blur_transparency")
         if(removed.any(prefs::contains))prefs.edit().apply {removed.forEach {remove(it)}}.apply()
+        val newSwitches = widgetSwitches.filterNot(prefs::contains)
+        if (newSwitches.isNotEmpty()) prefs.edit().apply {
+            val old = prefs.getBoolean(SettingsProvider.KEY_PHOTO_WIDGET_BLUR, false)
+            newSwitches.forEach { putBoolean(it, old) }
+        }.apply()
         val modeEditor=prefs.edit()
         (listOf(SettingsProvider.KEY_BLUR_STYLE)+ScopedSettingsKeys.all.map {it.key(SettingsProvider.KEY_BLUR_STYLE)}).forEach {key ->
             if(prefs.contains(key) && prefs.getInt(key,0)==SettingsProvider.BLUR_STYLE_LIQUID)modeEditor.putInt(key,SettingsProvider.BLUR_STYLE_KYANT)
@@ -58,6 +82,33 @@ object SettingsDefaults {
         initializeColors(prefs)
         initializeTone(prefs)
         seedOwnGlassSettings(prefs)
+    }
+
+    private fun preservePreviousAppearance(prefs: android.content.SharedPreferences, hadSavedValues: Boolean) {
+        val marker = "auto_tinted_defaults_v1"
+        if (prefs.getBoolean(marker, false)) return
+        val editor = prefs.edit()
+        if (hadSavedValues) {
+            val oldBooleans = mapOf(
+                SettingsProvider.KEY_DOCK_AUTO_APPEARANCE to false,
+                SettingsProvider.KEY_GLYPH_STROKE to false,
+                SettingsProvider.KEY_VOLUME_ENABLED to true
+            )
+            val oldIntegers = mapOf(
+                AutoIconStyle.ENGINE to 0,
+                AutoIconStyle.LOOK to AutoIconStyle.CLEAR,
+                SettingsProvider.KEY_GLYPH_STROKE_WIDTH to 35,
+                SettingsProvider.KEY_GLYPH_STROKE_BRIGHTNESS to 45,
+                SettingsProvider.KEY_GLYPH_STROKE_OPACITY to 40,
+                SettingsProvider.KEY_GLYPH_BOTTOM_SHADE to 45,
+                SettingsProvider.KEY_STROKE_OPACITY to 40,
+                SettingsProvider.KEY_SHADOW_OPACITY to 40,
+                SettingsProvider.KEY_GRADIENT_OPACITY to 50
+            )
+            oldBooleans.forEach { (key, value) -> if (!prefs.contains(key)) editor.putBoolean(key, value) }
+            oldIntegers.forEach { (key, value) -> if (!prefs.contains(key)) editor.putInt(key, value) }
+        }
+        editor.putBoolean(marker, true).apply()
     }
     private fun initializePhoto(prefs:android.content.SharedPreferences){
         val editor=prefs.edit()
@@ -94,8 +145,6 @@ object SettingsDefaults {
         initializeBlurBrightness(prefs)
         if(prefs.getInt("outline_sliders_revision",0)<1) {
             val editor=prefs.edit()
-            if(!prefs.getBoolean("glyph_stroke_width_enabled",false))editor.putInt(SettingsProvider.KEY_GLYPH_STROKE_WIDTH,35)
-            if(!prefs.getBoolean("glyph_stroke_brightness_enabled",false))editor.putInt(SettingsProvider.KEY_GLYPH_STROKE_BRIGHTNESS,45)
             editor.remove("glyph_stroke_width_enabled").remove("glyph_stroke_brightness_enabled")
                 .putInt("outline_sliders_revision",1).apply()
         }
@@ -118,7 +167,10 @@ object SettingsDefaults {
         editor.remove("color_theme").putInt("color_profiles_revision", 1).apply()
     }
     private val booleans = mapOf(
-        WallpaperProfiles.ENABLED to false,
+        WallpaperProfiles.ENABLED to true,
+        ModuleFeatures.ICONS to true,
+        ModuleFeatures.DESKTOP to true,
+        ModuleFeatures.LAYOUT to true,
         SettingsProvider.KEY_SCENE_DRAG_BACKDROP to false,
         SettingsProvider.KEY_HIDE_HOME_GESTURE_BAR to false,
         SettingsProvider.KEY_MUSIC_ISLAND_EXPANSION to false,
@@ -134,6 +186,7 @@ object SettingsDefaults {
         SettingsProvider.KEY_BOOT_RESTART_TOAST to true,
         SettingsProvider.KEY_DEVELOPER_MODE to false,
         SettingsProvider.KEY_GPU_EFFECTS to true,
+        SettingsProvider.KEY_HAZE_ENABLED to false,
         SettingsProvider.KEY_LIMIT_CLOSING_BLUR to true,
         SettingsProvider.KEY_SMOOTH_SWIPE_LEAD to false,
         SettingsProvider.KEY_SWIPE_LEAD to false,
@@ -141,16 +194,19 @@ object SettingsDefaults {
         SettingsProvider.KEY_KYANT_CONTROL_CENTER to false,
         SettingsProvider.KEY_DISABLE_EDGE_OPTIMIZATION to true,
         SettingsProvider.KEY_OPTIMIZE_MINI_ICONS to true,
-        SettingsProvider.KEY_MD3_UI to true,
+        SettingsProvider.KEY_LEGACY_INTERFACE to false,
         SettingsProvider.KEY_DOCK_ENABLED to true,
         SettingsProvider.KEY_DOCK_AUTO_LENGTH to true,
+        SettingsProvider.KEY_DOCK_AUTO_APPEARANCE to true,
         SettingsProvider.KEY_PHOTO_WIDGET_BLUR to false,
+        SettingsProvider.KEY_CLOCK_WIDGET_GLASS to false,
+        SettingsProvider.KEY_WEATHER_WIDGET_GLASS to false,
         SettingsProvider.KEY_PHOTO_WIDGET_TINT to false,
         SettingsProvider.KEY_FOLDER_ICONS_BLUR_ENABLED to true,
         SettingsProvider.KEY_BLUR_RADIUS_ENABLED to true,
         SettingsProvider.KEY_BLUR_TONE_ENABLED to true,
         SettingsProvider.KEY_BLUR_LOCATIONS_ENABLED to true,
-        SettingsProvider.KEY_GLYPH_STROKE to false,
+        SettingsProvider.KEY_GLYPH_STROKE to true,
         SettingsProvider.KEY_ENABLED to false,
         SettingsProvider.KEY_BLUR_ENABLED to true,
         SettingsProvider.KEY_FOLDER_BLUR_ENABLED to false,
@@ -158,10 +214,13 @@ object SettingsDefaults {
         SettingsProvider.KEY_IDLE_PAUSE to true,
         SettingsProvider.KEY_ICON_STROKE to true,
         SettingsProvider.KEY_GLYPH_SHADOW to true,
+        SettingsProvider.KEY_GLYPH_BOTTOM_SHADE_ENABLED to true,
         SettingsProvider.KEY_DESIGN_ENABLED to true,
-        SettingsProvider.KEY_VOLUME_ENABLED to true
+        SettingsProvider.KEY_VOLUME_ENABLED to false
     )
     private val integers = mapOf(
+        SettingsProvider.KEY_ICON_COLOR_THEME to 2,
+        SettingsProvider.KEY_BLUR_TRANSPARENCY to 15,
         SettingsProvider.KEY_MUSIC_ISLAND_OUTER to 8,
         SettingsProvider.KEY_MUSIC_ISLAND_CONTENT_X to 0,
         SettingsProvider.KEY_MUSIC_ISLAND_CONTENT_Y to 8,
@@ -178,11 +237,14 @@ object SettingsDefaults {
         SettingsProvider.KEY_BLUR_QUALITY to 0,
         SettingsProvider.KEY_LIQUID_WIDTH to 40,
         SettingsProvider.KEY_LIQUID_DISTORTION to 50,
-        SettingsProvider.KEY_GLYPH_STROKE_WIDTH to 35,
-        SettingsProvider.KEY_GLYPH_STROKE_BRIGHTNESS to 45,
-        SettingsProvider.KEY_GLYPH_STROKE_OPACITY to 40,
+        SettingsProvider.KEY_GLYPH_STROKE_WIDTH to 72,
+        SettingsProvider.KEY_GLYPH_STROKE_BRIGHTNESS to 83,
+        SettingsProvider.KEY_GLYPH_STROKE_OPACITY to 76,
+        SettingsProvider.KEY_GLYPH_BOTTOM_SHADE to 80,
         SettingsProvider.KEY_BLUR_VIBRANCY to 0,
         SettingsProvider.KEY_PHOTO_WIDGET_OPACITY to 55,
+        SettingsProvider.KEY_CLOCK_WIDGET_OPACITY to 58,
+        SettingsProvider.KEY_WEATHER_WIDGET_OPACITY to 42,
         SettingsProvider.KEY_PHOTO_WIDGET_LIQUID_WIDTH to 40,
         SettingsProvider.KEY_PHOTO_WIDGET_LIQUID_DISTORTION to 50,
         SettingsProvider.KEY_BLUR_SATURATION to 100,
@@ -203,7 +265,6 @@ object SettingsDefaults {
         SettingsProvider.KEY_BLUR_RADIUS to 10,
         SettingsProvider.KEY_BLUR_MODE to SettingsProvider.BLUR_MODE_LIVE,
         SettingsProvider.KEY_LIVE_FPS to 60,
-        SettingsProvider.KEY_FLIGHT_ICON_REVEAL to 200,
         SettingsProvider.KEY_APP_OPEN_RESPONSE to 300,
         SettingsProvider.KEY_APP_CLOSE_SPEED to 70,
         SettingsProvider.KEY_APP_GENIE_STRENGTH to 200,
@@ -215,16 +276,16 @@ object SettingsDefaults {
         SettingsProvider.KEY_KYANT_DISPERSION to 50,
         SettingsProvider.KEY_KYANT_ZOOM to 28,
         SettingsProvider.KEY_KYANT_VIBRANCY to 100,
-        SettingsProvider.KEY_STROKE_OPACITY to 40,
-        SettingsProvider.KEY_SHADOW_OPACITY to 40,
-        SettingsProvider.KEY_GRADIENT_OPACITY to 50
-    ) + com.cosmod.launcherglass.util.DesktopSizing.defaults
+        SettingsProvider.KEY_STROKE_OPACITY to 52,
+        SettingsProvider.KEY_SHADOW_OPACITY to 38,
+        SettingsProvider.KEY_GRADIENT_OPACITY to 44
+    ) + com.cosmod.launcherglass.util.DesktopSizing.defaults + AutoIconStyle.defaults
     private val dockDefaults=mapOf(
         "dock_kyant_width" to 80,"dock_kyant_dispersion" to 148,"dock_kyant_highlight" to 70,
         "dock_blur_radius" to 8,"dock_bg_opacity" to 7,"dock_blur_saturation" to 30,
         "dock_blur_vibrancy" to 121,"dock_blur_lightening" to 52,"dock_blur_style" to SettingsProvider.BLUR_STYLE_KYANT)
     /** Only portable module preferences. Device reports, language and migration keys stay local. */
-    fun portable(): Map<String, Any> = (booleans - WallpaperProfiles.ENABLED - SettingsProvider.KEY_BOOT_RESTART - SettingsProvider.KEY_BOOT_RESTART_TOAST - SettingsProvider.KEY_MD3_UI) + integers +
+    fun portable(): Map<String, Any> = (booleans - WallpaperProfiles.ENABLED - SettingsProvider.KEY_BOOT_RESTART - SettingsProvider.KEY_BOOT_RESTART_TOAST - SettingsProvider.KEY_LEGACY_INTERFACE) + integers +
         ScopedSettingsKeys.all.flatMap { scope -> listOf(scope.own to false) +
             scope.booleans.map { scope.key(it) to boolean(it) } + scope.integers.map { scope.key(it) to integer(scope.key(it)) } }
     fun boolean(key: String): Boolean = if(ScopedSettingsKeys.isOwnKey(key))false else booleans[key] ?: ScopedSettingsKeys.baseOf(key)?.let(::boolean) ?: booleans.getValue(key)

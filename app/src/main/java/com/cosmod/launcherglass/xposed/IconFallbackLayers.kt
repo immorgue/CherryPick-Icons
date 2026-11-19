@@ -1,7 +1,13 @@
 package com.cosmod.launcherglass.xposed
 
 import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Rect
+import android.graphics.RectF
+import android.graphics.drawable.AdaptiveIconDrawable
+import android.graphics.drawable.ColorDrawable
 import kotlin.math.roundToInt
 
 /** The original picture of an [IconOrigin.ARTWORK] icon, for the tinted variant. */
@@ -120,6 +126,16 @@ internal object IconFallbackLayers {
         val shape=shape(pixels,width,height) ?: return null
         if(!plateLike(shape,width,height))return null
         val distance=shape.distance
+        // A circular holder can touch the bitmap boundary at its four tangents.
+        // Include the outside of the bitmap in the rim so cropped antialiasing
+        // is never interpreted as a cut-out glyph along those straight edges.
+        for(y in 0 until height)for(x in 0 until width){
+            val edge=minOf(x+1,width-x,y+1,height-y)
+            if(edge>RIM)continue
+            val index=y*width+x
+            val d=distance[index]
+            if(d<0 || d>edge)distance[index]=edge
+        }
         // Plate level: the alpha just inside the silhouette's anti-aliased edge.
         val levels=IntArray(256)
         var rimCount=0
@@ -187,10 +203,10 @@ internal object IconFallbackLayers {
         return output(glyph,mask,width,height,plateColor,IconOrigin.ALPHA_GLYPH)
     }
 
-    fun artwork(pixels:IntArray,width:Int,height:Int):ProcessedIcon? {
+    fun artwork(pixels:IntArray,width:Int,height:Int,automatic:Boolean=false):ProcessedIcon? {
         if(width<24 || height<24)return null
         val fade=(minOf(width,height)*.05f).roundToInt().coerceAtLeast(RIM)
-        val shape=shape(pixels,width,height,fade) ?: return null
+        val shape=shape(pixels,width,height,if(automatic)0 else fade) ?: return null
         if(!plateLike(shape,width,height))return null
         val histogram=IntArray(256)
         var opaque=0
@@ -204,12 +220,11 @@ internal object IconFallbackLayers {
         if(opaque<shape.area/2)return null
         val low=percentile(histogram,opaque,.02f)
         val high=percentile(histogram,opaque,.98f)
-        if(high-low<32)return null
+        if(!automatic && high-low<32)return null
         val average=Color.rgb((sumR/opaque).toInt(),(sumG/opaque).toInt(),(sumB/opaque).toInt())
-        // The picture itself is the glyph layer (it is tinted later). Its rim
-        // fades into the plate, so the glyph contour/shadow passes stay inside
-        // the silhouette.
-        val picture=IntArray(pixels.size)
+        // Auto's tonal coverage supplies translucency. A separate wide rim
+        // fade would create a dark, stepped inset around full-bleed artwork.
+        val picture=if(automatic)pixels else IntArray(pixels.size)
         val mask=IntArray(pixels.size)
         val distance=shape.distance
         for(index in pixels.indices){
@@ -217,12 +232,37 @@ internal object IconFallbackLayers {
             val a=p ushr 24
             if(a==0)continue
             mask[index]=(a shl 24) or 0xffffff
-            val d=distance[index]
-            val k=if(d<0)1f else (d.toFloat()/fade).coerceIn(0f,1f)
-            val edge=k*k*(3f-2f*k)
-            picture[index]=((a*edge).roundToInt().coerceIn(0,255) shl 24) or (p and 0xffffff)
+            if(!automatic){
+                val d=distance[index]
+                val k=if(d<0)1f else (d.toFloat()/fade).coerceIn(0f,1f)
+                val edge=k*k*(3f-2f*k)
+                picture[index]=((a*edge).roundToInt().coerceIn(0,255) shl 24) or (p and 0xffffff)
+            }
         }
         val icon=output(picture,mask,width,height,average,IconOrigin.ARTWORK)
         return icon.copy(artwork=ArtworkSource(icon.glyphBitmap,low,high))
+    }
+
+    /** A transparent legacy logo has no plate in its PNG. Supply Android's icon mask. */
+    fun standaloneGlyph(pixels:IntArray,width:Int,height:Int):ProcessedIcon? {
+        if(minOf(width,height)<24 || width.toFloat()/height !in .8f..1.25f)return null
+        val silhouette=shape(pixels,width,height) ?: return null
+        if(plateLike(silhouette,width,height))return null
+        if(pixels.count {it ushr 24>=128}<width*height/65)return null
+        val source=Bitmap.createBitmap(pixels,width,height,Bitmap.Config.ARGB_8888)
+        val glyph=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888)
+        val crop=Rect(silhouette.left,silhouette.top,silhouette.right+1,silhouette.bottom+1)
+        val scale=minOf(1f,width*.70f/crop.width(),height*.70f/crop.height())
+        val halfWidth=crop.width()*scale/2f
+        val halfHeight=crop.height()*scale/2f
+        Canvas(glyph).drawBitmap(source,crop,RectF(width/2f-halfWidth,height/2f-halfHeight,
+            width/2f+halfWidth,height/2f+halfHeight),Paint(Paint.FILTER_BITMAP_FLAG))
+        source.recycle()
+        val mask=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888)
+        val outline=AdaptiveIconDrawable(ColorDrawable(Color.WHITE),ColorDrawable(Color.TRANSPARENT)).apply {
+            setBounds(0,0,width,height)
+        }
+        Canvas(mask).drawPath(outline.iconMask,Paint(Paint.ANTI_ALIAS_FLAG).apply {color=Color.WHITE})
+        return ProcessedIcon(glyph,mask,Color.DKGRAY,IconOrigin.ARTWORK,ArtworkSource(glyph,0,255))
     }
 }

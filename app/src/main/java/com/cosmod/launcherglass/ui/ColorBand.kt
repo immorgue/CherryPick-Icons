@@ -10,8 +10,10 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /** Gradient and thumb are drawn directly; launcher settings are committed on release. */
-class ColorBand(context: Context, val component: Int) : View(context) {
+class ColorBand(context: Context, val component: Int, private val compact: Boolean = false,
+                private val insetDp:Float=20f) : View(context) {
     private val density = resources.displayMetrics.density
+    private val trackRadius = (if (compact) 10f else 16f) * density
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val track = RectF()
     private var shader: Shader? = null
@@ -28,7 +30,7 @@ class ColorBand(context: Context, val component: Int) : View(context) {
     private val maximum get() = if (component == 0) 360 else 100
     private val value get() = (hsv[component] * if (component == 0) 1f else 100f).roundToInt()
 
-    init { isFocusable = true; isClickable = true; minimumHeight = (56 * density).roundToInt() }
+    init { isFocusable = true; isClickable = true; minimumHeight = ((if(compact)48 else 56) * density).roundToInt() }
     fun setColor(hue: Int, saturation: Int, brightness: Int) {
         hsv = floatArrayOf(hue.coerceIn(0,360).toFloat(), saturation.coerceIn(0,100) / 100f, brightness.coerceIn(0,100) / 100f)
         updateShader(); invalidate()
@@ -37,8 +39,8 @@ class ColorBand(context: Context, val component: Int) : View(context) {
         setMeasuredDimension(resolveSize((240 * density).roundToInt(), w), resolveSize(minimumHeight, h))
     }
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
-        val inset = 20 * density
-        track.set(inset, height / 2f - 16 * density, width - inset, height / 2f + 16 * density)
+        val inset = insetDp * density
+        track.set(inset, height / 2f - trackRadius, width - inset, height / 2f + trackRadius)
         updateShader()
     }
     private fun updateShader() {
@@ -53,10 +55,19 @@ class ColorBand(context: Context, val component: Int) : View(context) {
     override fun onDraw(canvas: Canvas) {
         paint.colorFilter = if(monochrome) grayFilter else null
         paint.shader = shader; paint.style = Paint.Style.FILL
-        canvas.drawRoundRect(track, 16 * density, 16 * density, paint)
+        canvas.drawRoundRect(track, trackRadius, trackRadius, paint)
         paint.shader = null
-        val x = track.left + track.width() * value / maximum
+        val rawX = track.left + track.width() * value / maximum
+        val x = if(compact)rawX.coerceIn(track.left+6*density,track.right-6*density)else rawX
         val y = height / 2f
+        if (compact) {
+            paint.colorFilter = null
+            paint.color = 0x33000000
+            canvas.drawCircle(x, y + density, 6.6f * density, paint)
+            paint.color = Color.WHITE
+            canvas.drawCircle(x, y, 6 * density, paint)
+            return
+        }
         paint.color = Color.HSVToColor(hsv)
         canvas.drawCircle(x, y, 16 * density, paint)
         paint.style = Paint.Style.STROKE; paint.strokeWidth = 4 * density; paint.color = 0x55000000

@@ -3,6 +3,7 @@ package com.cosmod.launcherglass.xposed
 import android.graphics.*
 import android.graphics.drawable.Drawable
 import android.os.Build
+import com.cosmod.launcherglass.util.GlassVolume
 import java.util.WeakHashMap
 
 /** Keep native clock/calendar artwork live on the GPU, without per-tick GPU readbacks. */
@@ -13,7 +14,7 @@ internal object DynamicIconForeground {
     fun clear() { entries.values.forEach { it.node.discardDisplayList() }; entries.clear(); plates.clear() }
     fun plate(parts: ProcessedIcon): ProcessedIcon = plates.getOrPut(parts) {
         ProcessedIcon(Bitmap.createBitmap(parts.glyphBitmap.width, parts.glyphBitmap.height, Bitmap.Config.ARGB_8888),
-            parts.plateMaskBitmap, if(PrefsHelper.iconPalette.custom) PrefsHelper.iconPalette.background else parts.bgColor)
+            parts.plateMaskBitmap, if(PrefsHelper.iconPalette.usesThemeColors) PrefsHelper.iconPalette.background else parts.bgColor)
     }
 
     /** [reuse]: an OEM decoration re-records the icon; show the current artwork node as is. */
@@ -37,16 +38,17 @@ internal object DynamicIconForeground {
             entry.source=source
         }
         val palette = PrefsHelper.iconPalette
-        val key = listOf(background, palette, PrefsHelper.gradientOpacity, PrefsHelper.glyphStroke,
+        val key = listOf(background, palette, PrefsHelper.gradientOpacity, PrefsHelper.glyphBottomShade, PrefsHelper.glyphStroke,
             PrefsHelper.glyphStrokeOpacity, PrefsHelper.glyphStrokeWidth, PrefsHelper.glyphStrokeBrightness,
             PrefsHelper.glyphShadow, PrefsHelper.shadowOpacity, bounds.width(), bounds.height())
         if (entry.key != key) {
             val shader = entry.shader
             shader.setFloatUniform("background", Color.red(background)/255f, Color.green(background)/255f, Color.blue(background)/255f)
             shader.setFloatUniform("foreground", Color.red(palette.foreground)/255f, Color.green(palette.foreground)/255f, Color.blue(palette.foreground)/255f)
-            shader.setFloatUniform("recolor", if (palette.custom || palette.whiteGlyph) 1f else 0f)
+            shader.setFloatUniform("recolor", if (palette.usesThemeColors || palette.whiteGlyph) 1f else 0f)
             shader.setFloatUniform("height", bounds.height().toFloat())
             shader.setFloatUniform("volume", PrefsHelper.gradientOpacity / 100f)
+            shader.setFloatUniform("bottomShade", PrefsHelper.glyphBottomShade * GlassVolume.GLYPH_SHADE_STRENGTH / 100f)
             shader.setFloatUniform("stroke", if (PrefsHelper.glyphStroke) PrefsHelper.glyphStrokeOpacity/100f else 0f)
             shader.setFloatUniform("strokeWidth", .4f + PrefsHelper.glyphStrokeWidth*.018f)
             shader.setFloatUniform("strokeTone", PrefsHelper.glyphStrokeBrightness/100f)
@@ -78,6 +80,7 @@ internal object DynamicIconForeground {
         uniform float recolor;
         uniform float height;
         uniform float volume;
+        uniform float bottomShade;
         uniform float stroke;
         uniform float strokeWidth;
         uniform float strokeTone;
@@ -91,17 +94,31 @@ internal object DynamicIconForeground {
             float coverage=clamp((distance-threshold)/max(contrast-threshold,.001),0.0,1.0);
             float3 original = clamp((rgb-background*(1.0-coverage))/max(coverage,.00001),0.0,1.0);
             float3 color = mix(original,foreground,recolor);
-            color *= 1.0 - volume*.16*clamp(p.y/max(height,1.0),0.0,1.0);
+            float y = clamp(p.y/max(height,1.0),0.0,1.0);
+            color *= (1.0 - volume*.16*y) * (1.0 - bottomShade*smoothstep(${GlassVolume.GLYPH_SHADE_START},${GlassVolume.GLYPH_SHADE_END},y));
             float alpha = coverage*float(pixel.a);
             return half4(color*alpha,alpha);
         }
         half4 main(float2 p) {
             half4 glyph = artwork(p);
-            if (stroke > 0.0) {
-                float around = max(max(float(artwork(p+float2(strokeWidth,0)).a),float(artwork(p-float2(strokeWidth,0)).a)),
-                    max(float(artwork(p+float2(0,strokeWidth)).a),float(artwork(p-float2(0,strokeWidth)).a)));
-                float alpha = max(around-float(glyph.a),0.0)*stroke;
-                glyph = glyph + half4(float3(strokeTone)*alpha,alpha)*(1.0-glyph.a);
+            float alpha = float(glyph.a);
+            if (stroke > 0.0 && alpha > 0.0) {
+                float left = float(artwork(p - float2(strokeWidth,0)).a);
+                float right = float(artwork(p + float2(strokeWidth,0)).a);
+                float top = float(artwork(p - float2(0,strokeWidth)).a);
+                float bottom = float(artwork(p + float2(0,strokeWidth)).a);
+                float edge = max(alpha - min(min(left,right),min(top,bottom)),0.0) * stroke;
+                float2 normal = float2(left-right,top-bottom);
+                float light = clamp(-dot(normal,float2(.7071,.7071))/max(length(normal),.001),-1.0,1.0);
+                float3 color = float3(glyph.rgb)/alpha;
+                float luminance = dot(color,float3(.2126,.7152,.0722));
+                float reflectance = mix(${GlassVolume.RIM_MIN_REFLECTANCE},1.0,sqrt(luminance));
+                float lit = max(light,0.0);
+                float unlit = min(light,0.0);
+                float highlight = (.025 + .85*lit*lit)*strokeTone*reflectance;
+                float shadow = .04 + .18*unlit*unlit;
+                float3 rim = light >= 0.0 ? mix(color,float3(1.0),highlight) : color*(1.0-shadow);
+                glyph.rgb = half3(mix(color,rim,edge)*alpha);
             }
             return glyph;
         }

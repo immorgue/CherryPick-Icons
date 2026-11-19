@@ -8,5 +8,52 @@
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowBackground">?attr/colorSurface</item>
         <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:colorAccent">@color/coui_primary</item>
+        <item name="colorPrimary">@color/coui_primary</item>
+        <item name="colorOnPrimary">@color/coui_on_accent</item>
+        <item name="colorPrimaryContainer">@color/coui_accent_surface</item>
+        <item name="colorOnPrimaryContainer">@color/coui_primary</item>
+        <item name="colorSecondary">@color/coui_primary</item>
+        <item name="colorOnSecondary">@color/coui_on_accent</item>
+        <item name="colorSecondaryContainer">@color/coui_accent_surface</item>
+        <item name="colorOnSecondaryContainer">@color/coui_primary</item>
+        <item name="colorTertiary">@color/coui_primary</item>
+        <item name="colorOnTertiary">@color/coui_on_accent</item>
+        <item name="colorTertiaryContainer">@color/coui_accent_surface</item>
+        <item name="colorOnTertiaryContainer">@color/coui_primary</item>
+        <item name="colorError">@color/coui_primary</item>
+        <item name="colorOnError">@color/coui_on_accent</item>
+        <item name="colorErrorContainer">@color/coui_accent_surface</item>
+        <item name="colorOnErrorContainer">@color/coui_primary</item>
+        <item name="android:colorBackground">@color/coui_surface</item>
+        <item name="colorSurface">@color/coui_surface</item>
+        <item name="colorOnBackground">@color/coui_on_surface</item>
+        <item name="colorSurfaceVariant">@color/coui_raised</item>
+        <item name="colorSurfaceContainerLow">@color/coui_card</item>
+        <item name="colorSurfaceContainer">@color/coui_card</item>
+        <item name="colorSurfaceContainerHigh">@color/coui_raised</item>
+        <item name="colorSurfaceContainerHighest">@color/coui_raised</item>
+        <item name="colorOnSurface">@color/coui_on_surface</item>
+        <item name="colorOnSurfaceVariant">@color/coui_secondary_text</item>
+        <item name="colorOutline">@color/coui_divider</item>
+        <item name="colorOutlineVariant">@color/coui_divider</item>
+    </style>
+    <style name="Theme.LauncherGlass.Coui" parent="Theme.LauncherGlass">
+        <item name="colorPrimary">@color/coui_primary</item>
+        <item name="colorOnPrimary">@color/coui_on_accent</item>
+        <item name="colorPrimaryContainer">@color/coui_accent_surface</item>
+        <item name="colorOnPrimaryContainer">@color/coui_primary</item>
+        <item name="colorSecondary">@color/coui_primary</item>
+        <item name="colorSecondaryContainer">@color/coui_accent_surface</item>
+        <item name="colorOnSecondaryContainer">@color/coui_primary</item>
+        <item name="colorSurface">@color/coui_surface</item>
+        <item name="colorSurfaceContainerLow">@color/coui_card</item>
+        <item name="colorSurfaceContainer">@color/coui_card</item>
+        <item name="colorSurfaceContainerHigh">@color/coui_raised</item>
+        <item name="colorSurfaceContainerHighest">@color/coui_raised</item>
+        <item name="colorOnSurface">@color/coui_on_surface</item>
+        <item name="colorOnSurfaceVariant">@color/coui_secondary_text</item>
+        <item name="colorOutline">@color/coui_divider</item>
+        <item name="colorOutlineVariant">@color/coui_divider</item>
     </style>
 </resources>

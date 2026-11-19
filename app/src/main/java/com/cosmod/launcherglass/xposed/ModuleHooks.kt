@@ -1,23 +1,23 @@
 package com.cosmod.launcherglass.xposed
 
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
+import com.cosmod.launcherglass.bridge.HookCallback
+import com.cosmod.launcherglass.bridge.HookRuntime
+import com.cosmod.launcherglass.bridge.HookReflection
 import java.lang.reflect.Member
 import java.lang.reflect.Method
 import com.cosmod.launcherglass.util.GlassLogger
 
 /** Settings/bootstrap observers stay installed; rendering/animation hooks exist only while enabled. */
 internal object ModuleHooks {
-    private data class Entry(val method:Member,val callback:XC_MethodHook,var handle:XC_MethodHook.Unhook?=null)
+    private data class Entry(val method:Member,val callback:HookCallback,var handle:HookCallback.Unhook?=null)
     private val entries=ArrayList<Entry>()
     @Volatile private var active=false
     val isActive get()=active
     /** Incremented on every activation: observers can tell whether they ran without a gap. */
     @Volatile var epoch=0
         private set
-    fun hookMethod(method:Method,callback:XC_MethodHook)=hookMember(method,callback)
-    @Synchronized fun hookMember(method:Member,callback:XC_MethodHook){
+    fun hookMethod(method:Method,callback:HookCallback)=hookMember(method,callback)
+    @Synchronized fun hookMember(method:Member,callback:HookCallback){
         // Abstract launcher APIs have no implementation to intercept. Concrete
         // OEM controllers are registered independently by the callers.
         if(method is Method && java.lang.reflect.Modifier.isAbstract(method.modifiers))return
@@ -27,25 +27,25 @@ internal object ModuleHooks {
     }
     private fun update(entry:Entry,enabled:Boolean){
         try {
-            if(enabled){if(entry.handle==null)entry.handle=XposedBridge.hookMethod(entry.method,entry.callback)}
+            if(enabled){if(entry.handle==null)entry.handle=HookRuntime.hookMethod(entry.method,entry.callback)}
             else {entry.handle?.unhook();entry.handle=null}
         }catch(t:Throwable){GlassLogger.e("Compat","Cannot ${if(enabled)"enable" else "disable"} hook ${entry.method}; remaining hooks continue",t)}
     }
-    fun hookAllConstructors(type:Class<*>,callback:XC_MethodHook){
+    fun hookAllConstructors(type:Class<*>,callback:HookCallback){
         type.declaredConstructors.forEach {hookMember(it,callback)}
     }
-    fun hookAllMethods(type:Class<*>,name:String,callback:XC_MethodHook){
+    fun hookAllMethods(type:Class<*>,name:String,callback:HookCallback){
         type.declaredMethods.filter {it.name==name}.forEach {hookMethod(it,callback)}
     }
     fun findAndHookMethod(type:Class<*>,name:String,vararg arguments:Any?){
-        val callback=arguments.last() as XC_MethodHook
+        val callback=arguments.last() as HookCallback
         val parameters=arguments.dropLast(1).map {
-            when(it){is Class<*> -> it;is String -> XposedHelpers.findClass(it,type.classLoader);else -> error("Invalid hook parameter: $it")}
+            when(it){is Class<*> -> it;is String -> HookReflection.findClass(it,type.classLoader);else -> error("Invalid hook parameter: $it")}
         }.toTypedArray()
-        hookMethod(XposedHelpers.findMethodExact(type,name,*parameters),callback)
+        hookMethod(HookReflection.findMethodExact(type,name,*parameters),callback)
     }
     fun findAndHookMethod(name:String,loader:ClassLoader,method:String,vararg arguments:Any?){
-        findAndHookMethod(XposedHelpers.findClass(name,loader),method,*arguments)
+        findAndHookMethod(HookReflection.findClass(name,loader),method,*arguments)
     }
     @Synchronized fun setEnabled(enabled:Boolean){
         if(active==enabled)return

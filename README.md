@@ -1,21 +1,16 @@
 # CherryPick Icons
 
-**0.2.63-dev** · [Совместимость / compatibility](COMPATIBILITY.md) · [Ченжлог / changelog](CHANGELOG.md) · [Технический отчёт](docs/performance/README.md)
+**v0.3.239 Beta** · [Релизы / releases](https://github.com/immorgue/CherryPick-Icons/releases) · [Ченжлог / changelog](CHANGELOG.md) · [Совместимость / compatibility](COMPATIBILITY.md)
 
-Версия для разработки: три вкладки с перетаскиваемой пилюлей, профили обоев и карусель системных тем ColorOS. Навигация проверена на устройстве с лаунчером 17.5.4. Применение темы пока открывает родной редактор; фоновое применение и круговая смена цветов ещё не реализованы. Отставание блюра при свайпах и окончательная сверка радиусов остаются открытыми задачами.
+Для этой версии нужен LSPosed с поддержкой libxposed API 102. После обновления перезапустите лаунчер.
 
-Экспериментальная оптика Liquid из PR #2 включается отдельно в режиме разработчика, по умолчанию выключена. Редактор рабочего стола доступен независимо. Кнопка репорта создаёт ZIP с логами и APK установленного лаунчера.
-
-PR #2 Liquid optics have a separate developer switch, off by default. The desktop editor remains independent. Bug reports export a ZIP containing diagnostics and the installed launcher APK.
+This version requires LSPosed with libxposed API 102 support. Restart the launcher after updating.
 
 [Русский](#русский) · [English](#english)
 
 ## Русский
 
-Модуль LSPosed, добавляющий стеклянное оформление для лаунчера ColorOS/OxygenOS/RUI
-
-> **Бета-тестирование.** Модуль тестировался только на **ColorOS 17**.
-> На других прошивках могут быть проблемы совместимости.
+Модуль LSPosed для стеклянного оформления системного лаунчера ColorOS, OxygenOS и realme UI.
 
 ### Как создавался проект
 
@@ -24,23 +19,21 @@ PR #2 Liquid optics have a separate developer switch, off by default. The deskto
 
 ### Возможности
 
-\- Frosted на базе Kyant без преломления и Liquid Glass Kyant с настраиваемым преломлением и бликом по краям.<br>
-\- Конструктор рабочего стола: сетка 4–6 столбцов и 5–8 строк, предпросмотр страниц и размеров элементов, штатное перетаскивание иконок и виджетов. Проверка размещения и запрет удаления элементов при переносе. Нестандартные сетки экспериментальны; смена сетки может переставить элементы.<br>
-\- Общие размеры иконок и папок, отступы индикатора, внешние поля совместимых виджетов и выравнивание рабочего стола ближе к доку. Применяются после перезапуска лаунчера без переноса элементов по ячейкам.<br>
-\- Живое и статичное размытие обоев, общий лимит обновлений материала до 60 FPS.<br>
-\- Отдельные настройки подложек папок, миниатюр и фото-виджетов.<br>
-\- Настройки цвета, прозрачности, контура и объёма, русский и английский интерфейс.
+- Автооформление иконок с режимами Default, Dark, Clear и Tinted. Оттенок можно подобрать по обоям или вручную через Customize в режиме редактирования рабочего стола.
+- Liquid Glass на базе Kyant, матовое стекло Frosted и режим «Только цвет». У дока, папок и мультипапок свои настройки.
+- Стекло для совместимых виджетов фото, часов и погоды. Живое и статичное размытие обоев.
+- Интерфейс COUI на русском и английском с предпросмотрами, профилями обоев, импортом и экспортом настроек.
+- Конструктор рабочего стола с предпросмотром сетки, размерами и отступами. Изменение сетки может переставить элементы.
+- Опциональные анимации приложений в стиле iOS и экспериментальный музыкальный островок.
 
 ### Совместимость и установка
 
-Приложению выдать рут доступ, LSPosed и выбрать в нём системный лаунчер, оформление иконок сменить на Flux, другие икон паки не поддерживаются на данный момент.
-
-На данный момент поддерживается ColorOS17/OxygenOS17/RUI7, 16 версия почти не тестировалась, при разных версиях прошивки и системного лаунчера поведение может быть непредсказуемым.
+Бета проверена на устройстве с лаунчером 17.5.4. Для локальных APK лаунчеров 16.x и 17.x сверены классы и ресурсы. Анимации приложений выключены по умолчанию и пока не тестировались на ColorOS 16.
 
 1. Установите APK, выдайте рут и включите CherryPick Icons в LSPosed.
 2. В области действия выберите установленный системный лаунчер и CherryPick Icons.
 3. Выберите Flux в системных настройках иконок.
-4. Откройте модуль, настройте эффекты и перезапустите лаунчер.
+4. Включите основной тумблер CherryPick и перезапустите лаунчер. Для экспериментального островка нужен System UI в области действия LSPosed.
 
 [Подробный гайд по установке](INSTALL.md#русский)
 
@@ -91,10 +84,7 @@ APK появится в `app/build/outputs/apk/release/app-release.apk`.
 
 ## English
 
-An LSPosed module that adds a glass appearance to the ColorOS/OxygenOS/RUI launcher.
-
-> **Beta testing.** The module has only been tested on **ColorOS 17**.
-> Other firmware versions may have compatibility issues.
+An LSPosed module for glass effects in the ColorOS, OxygenOS, and realme UI system launchers.
 
 ### How this project was made
 
@@ -104,23 +94,21 @@ and creating the interface.
 
 ### Features
 
-\- Kyant-based Frosted without refraction and Liquid Glass Kyant with adjustable refraction and edge highlights.<br>
-\- Desktop designer: 4–6 columns and 5–8 rows, page and item-footprint previews, and native icon/widget dragging. Placement validation and item deletion protection during migration. Custom grids are experimental; changing the grid can rearrange items.<br>
-\- Shared icon/folder size, page-indicator spacing, supported widget exterior padding and workspace alignment towards the dock. Applied after restarting the launcher without changing item cell positions.<br>
-\- Live and static wallpaper blur, with a shared material update limit of up to 60 FPS.<br>
-\- Separate settings for folder plates, miniature icons, and photo widgets.<br>
-\- Color, opacity, contour, and depth controls; Russian and English interfaces.
+- Auto icon styling with Default, Dark, Clear, and Tinted. The Customize menu in home screen edit mode lets you use a wallpaper-based tint or pick one manually.
+- Kyant-based Liquid Glass, Frosted, and Color Only. The dock, folders, and large folders have their own settings.
+- Glass for compatible photo, clock, and weather widgets. Live and static wallpaper blur.
+- COUI interface in English and Russian with previews, wallpaper profiles, and settings import and export.
+- Desktop designer with a grid preview, item sizing, and spacing controls. Changing the grid can rearrange items.
+- Optional iOS-style app animations and an experimental music island.
 
 ### Compatibility and installation
 
-Grant the app root access, enable the module in LSPosed and select the system launcher in its scope. Switch the icon style to Flux; other icon packs are currently unsupported.
-
-Currently supports ColorOS17/OxygenOS17/RUI7. Version 16 has barely been tested; behavior may be unpredictable across firmware and system launcher versions.
+This beta was tested on a device running launcher 17.5.4. Classes and resources were verified in local 16.x and 17.x launcher APKs. App animations are off by default and haven’t been tested on ColorOS 16 yet.
 
 1. Install the APK, grant root access and enable CherryPick Icons in LSPosed.
 2. Select the installed system launcher and CherryPick Icons in the module scope.
 3. Select Flux in the system icon settings.
-4. Open the module, adjust the effects, and restart the launcher.
+4. Turn on CherryPick’s main switch and restart the launcher. The experimental music island requires System UI in the LSPosed scope.
 
 [Detailed installation guide](INSTALL.md#english)
 

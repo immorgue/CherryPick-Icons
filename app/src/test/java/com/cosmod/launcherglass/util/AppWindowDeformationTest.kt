@@ -35,6 +35,18 @@ class AppWindowDeformationTest {
         assertNull(sample(motion, 0.0, 120 * 8_333_333L))
     }
 
+    @Test fun closeUsesItsOriginalPathAndOpensSmoothlyWhenReversed() {
+        val motion = AppGenieMotion()
+        sample(motion, .6, 1L, opening = false)
+        assertEquals(0f, motion.openingMix, 0f)
+        sample(motion, .7, 8_333_334L, opening = false)
+        assertEquals(0f, motion.openingMix, 0f)
+        sample(motion, .65, 16_666_667L, opening = false)
+        assertTrue(motion.openingMix in .1f.. .2f)
+        for (frame in 3..12) sample(motion, .65 - (frame - 2) * .04, 1L + frame * 8_333_333L, opening = false)
+        assertEquals(1f, motion.openingMix, .001f)
+    }
+
     @Test fun projectiveMatrixMapsBothEdgesOfAnOffsetCrop() {
         val shape = sample(AppGenieMotion(), .48, 1L, row = -.8)!!
         val matrix = FloatArray(16)

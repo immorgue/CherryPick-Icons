@@ -9,6 +9,14 @@ The Kyant lens adapts the edge refraction and directional highlight from
 Copyright 2025 Kyant. Licensed under Apache-2.0. CherryPick applies these
 effects to its own backdrop, silhouette mask and frame scheduling.
 The license is packaged with the app in `assets/licenses/AndroidLiquidGlass.txt`.
+The draggable glass selection in CherryPick's tabs and segmented controls follows
+the `LiquidBottomTabs` sample from the same release, adapted for Android Views.
+
+The COUI settings theme and switch adapt the Apache-2.0 COUI 1.1.0
+`Colors.kt`, `Switch.kt`, `Slider.kt` and card defaults vendored by
+[ONextBox](https://github.com/MiToverG422/ONextBox/tree/d214396734f56e7ee367abb7d528fd190357e109/third_party/coui).
+CherryPick renders the adapted components using Android Views. The license
+is packaged in `assets/licenses/COUI.txt`.
 
 PixelLauncherEnhanced by Mahmud0808: https://github.com/Mahmud0808/PixelLauncherEnhanced
 
@@ -19,3 +27,5 @@ The ClipIconView floating-background integration was adapted from the FloatingGl
 Thanks to @anime_killer2009 for substantial help: https://t.me/anime_killer2009
 
 Thanks to Kostubet Topics for their help: https://t.me/KostubetTopics
+
+Continuous corner geometry is adapted from [figma-squircle](https://github.com/phamfoo/figma-squircle), copyright 2021 Tien Pham, MIT License. The license is bundled at `app/src/main/assets/licenses/figma-squircle.txt`.

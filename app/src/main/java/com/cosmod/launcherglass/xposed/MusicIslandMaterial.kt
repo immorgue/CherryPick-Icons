@@ -15,9 +15,9 @@ import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.RelativeLayout
 import android.widget.TextView
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
+import com.cosmod.launcherglass.bridge.HookCallback
+import com.cosmod.launcherglass.bridge.HookRuntime
+import com.cosmod.launcherglass.bridge.HookReflection
 import java.util.WeakHashMap
 
 /** Restyle the music card without reparenting OEM views or changing their binding hierarchy. */
@@ -127,13 +127,13 @@ internal object MusicIslandMaterial {
 
     fun install(loader:ClassLoader,card:Class<*>,active:()->Boolean,isMedia:(View)->Boolean){
         enabled=active;media=isMedia
-        XposedBridge.hookAllMethods(card,"n",object:XC_MethodHook(){
+        HookRuntime.hookAllMethods(card,"n",object:HookCallback(){
             override fun beforeHookedMethod(p:MethodHookParam){
                 val view=p.thisObject as? View ?: return
                 if(cards.containsKey(view)){stopHighlight(view);p.result=null}
             }
         })
-        XposedBridge.hookAllMethods(card,"j",object:XC_MethodHook(){
+        HookRuntime.hookAllMethods(card,"j",object:HookCallback(){
             override fun beforeHookedMethod(p:MethodHookParam){
                 val view=p.thisObject as? View ?: return
                 cards[view]?.blurStyle?.view?.let {background->
@@ -143,17 +143,17 @@ internal object MusicIslandMaterial {
                 restore(view)
             }
         })
-        XposedBridge.hookAllMethods(card,"onDetachedFromWindow",object:XC_MethodHook(){
+        HookRuntime.hookAllMethods(card,"onDetachedFromWindow",object:HookCallback(){
             override fun afterHookedMethod(p:MethodHookParam){restore(p.thisObject as? View ?: return)}
         })
-        XposedBridge.hookAllMethods(card,"onLayout",object:XC_MethodHook(){
+        HookRuntime.hookAllMethods(card,"onLayout",object:HookCallback(){
             override fun afterHookedMethod(p:MethodHookParam){layout(p.thisObject as? View ?: return)}
         })
-        val preDraw=XposedHelpers.findClassIfExists("com.oplus.systemui.plugins.seedling.card.ui.view.b",loader)
+        val preDraw=HookReflection.findClassIfExists("com.oplus.systemui.plugins.seedling.card.ui.view.b",loader)
         val target=preDraw?.declaredFields?.singleOrNull {
             it.name=="c" && ViewGroup::class.java.isAssignableFrom(it.type)
         }?.apply {isAccessible=true}
-        if(preDraw!=null && target!=null)XposedBridge.hookAllMethods(preDraw,"onPreDraw",object:XC_MethodHook(){
+        if(preDraw!=null && target!=null)HookRuntime.hookAllMethods(preDraw,"onPreDraw",object:HookCallback(){
             override fun beforeHookedMethod(p:MethodHookParam){
                 val view=target.get(p.thisObject) as? View ?: return
                 val state=cards[view] ?: return
@@ -161,11 +161,11 @@ internal object MusicIslandMaterial {
                 if(!options.blur || state.blurStyle!=null)p.result=true
             }
         })
-        val light=XposedHelpers.findClassIfExists("com.oplus.systemui.plugins.shared.template.component.light.f",loader)
+        val light=HookReflection.findClassIfExists("com.oplus.systemui.plugins.shared.template.component.light.f",loader)
         light?.declaredMethods?.singleOrNull {
             it.name=="c" && it.parameterTypes.contentEquals(arrayOf(View::class.java))
         }?.let { bind ->
-            XposedBridge.hookMethod(bind,object:XC_MethodHook(){
+            HookRuntime.hookMethod(bind,object:HookCallback(){
                 override fun afterHookedMethod(p:MethodHookParam){
                     if(p.hasThrowable())return
                     val source=p.args[0] as? View ?: return
@@ -181,8 +181,8 @@ internal object MusicIslandMaterial {
                 }
             })
         }
-        val bg=XposedHelpers.findClassIfExists("com.oplus.systemui.plugins.seedling.card.ui.view.CardBackgroundView",loader) ?: return
-        XposedBridge.hookAllMethods(bg,"setBlurRadiusFollowAlpha",object:XC_MethodHook(){
+        val bg=HookReflection.findClassIfExists("com.oplus.systemui.plugins.seedling.card.ui.view.CardBackgroundView",loader) ?: return
+        HookRuntime.hookAllMethods(bg,"setBlurRadiusFollowAlpha",object:HookCallback(){
             override fun beforeHookedMethod(p:MethodHookParam){
                 val view=p.thisObject as? View ?: return
                 val host=view.parent as? View ?: return
@@ -211,14 +211,14 @@ internal object MusicIslandMaterial {
                 if(style.finish.alpha!=alpha)style.finish.alpha=alpha
             }
         })
-        XposedBridge.hookAllMethods(card,"m",object:XC_MethodHook(){
+        HookRuntime.hookAllMethods(card,"m",object:HookCallback(){
             override fun afterHookedMethod(p:MethodHookParam){
                 val host=p.thisObject as? View ?: return
                 val state=cards[host] ?: return
                 if(options.blur)syncBlur(host,state)
             }
         })
-        XposedBridge.hookAllMethods(bg,"onAttachedToWindow",object:XC_MethodHook(){
+        HookRuntime.hookAllMethods(bg,"onAttachedToWindow",object:HookCallback(){
             override fun afterHookedMethod(p:MethodHookParam){
                 val view=p.thisObject as? View ?: return
                 val host=owner(view) ?: return
@@ -231,7 +231,7 @@ internal object MusicIslandMaterial {
                     applyBlurStyle(host,state,view)
                     state.lastBlurLevel=-1
                     state.lastBlurUpdateNs=0L
-                    XposedHelpers.callMethod(view,"setBlurRadiusFollowAlpha",host.alpha)
+                    HookReflection.callMethod(view,"setBlurRadiusFollowAlpha",host.alpha)
                 }
             }
         })
@@ -371,20 +371,20 @@ internal object MusicIslandMaterial {
             if(type=="MediaBackGroundView" && options.glow)attachGlow(card,state,view)
             if(type=="CardBackgroundView" && options.blur){
                 applyBlurStyle(card,state,view)
-                try {XposedHelpers.callMethod(view,"setBlurRadiusFollowAlpha",card.alpha)}catch(_:Throwable){}
+                try {HookReflection.callMethod(view,"setBlurRadiusFollowAlpha",card.alpha)}catch(_:Throwable){}
             }
             if(!options.glow && type=="DirectionAwareSeekBar" && !state.controls.containsKey(view)){
-                state.controls[view]=(try {XposedHelpers.getBooleanField(view,"p0")}catch(_:Throwable){null}) to
-                    (try {XposedHelpers.callMethod(view,"getUseMaterialEffect") as? Int}catch(_:Throwable){null})
-                try {XposedHelpers.callMethod(view,"setConicLightEnabled",false)}catch(_:Throwable){}
-                try {XposedHelpers.callMethod(view,"setUseMaterialEffect",0)}catch(_:Throwable){}
+                state.controls[view]=(try {HookReflection.getBooleanField(view,"p0")}catch(_:Throwable){null}) to
+                    (try {HookReflection.callMethod(view,"getUseMaterialEffect") as? Int}catch(_:Throwable){null})
+                try {HookReflection.callMethod(view,"setConicLightEnabled",false)}catch(_:Throwable){}
+                try {HookReflection.callMethod(view,"setUseMaterialEffect",0)}catch(_:Throwable){}
             }
             if((type=="CardBackgroundView" && !options.blur) || type=="PageBackgroundView" || (!options.glow && type=="MediaBackGroundView")){
                 if(!state.children.containsKey(view))state.children[view]=Saved(view.background,view.visibility,
-                    if(type=="PageBackgroundView")try {XposedHelpers.getBooleanField(view,"c")}catch(_:Throwable){null}else null)
+                    if(type=="PageBackgroundView")try {HookReflection.getBooleanField(view,"c")}catch(_:Throwable){null}else null)
                 when(type){
                     "CardBackgroundView"->stopBlur(view)
-                    "PageBackgroundView"->try {XposedHelpers.callMethod(view,"setAnimationState",false)}catch(_:Throwable){}
+                    "PageBackgroundView"->try {HookReflection.callMethod(view,"setAnimationState",false)}catch(_:Throwable){}
                     "MediaBackGroundView"->stopMediaGlow(view)
                 }
                 view.background=null;view.visibility=View.INVISIBLE
@@ -397,7 +397,7 @@ internal object MusicIslandMaterial {
     fun configure(value:Options){
         options=value
         cards.keys.toList().forEach {card->
-            val content=try {XposedHelpers.callMethod(card,"getContentView") as? View}catch(_:Throwable){null}
+            val content=try {HookReflection.callMethod(card,"getContentView") as? View}catch(_:Throwable){null}
             restore(card);refresh(card,content)
         }
     }
@@ -407,10 +407,10 @@ internal object MusicIslandMaterial {
         return null
     }
     private fun stopHighlight(card:View){
-        try {XposedHelpers.getObjectField(card,"f")?.let {XposedHelpers.callMethod(it,"e")};XposedHelpers.setObjectField(card,"f",null)}catch(_:Throwable){}
+        try {HookReflection.getObjectField(card,"f")?.let {HookReflection.callMethod(it,"e")};HookReflection.setObjectField(card,"f",null)}catch(_:Throwable){}
     }
     private fun stopBlur(view:View){
-        try {XposedHelpers.getObjectField(view,"c")?.let {XposedHelpers.callMethod(it,"setBlurRadius",0)}}catch(_:Throwable){}
+        try {HookReflection.getObjectField(view,"c")?.let {HookReflection.callMethod(it,"setBlurRadius",0)}}catch(_:Throwable){}
     }
     private fun baseBackground(state: Card): Drawable? = if(options.blur)state.original else state.fill
 
@@ -432,13 +432,13 @@ internal object MusicIslandMaterial {
         try {
             // The compositor reads the blur view's actual bounds, independently of the card outline.
             if(view.left!=rect.left || view.top!=rect.top || view.right!=rect.right || view.bottom!=rect.bottom){
-                XposedHelpers.callMethod(view,"setLeftTopRightBottom",rect)
+                HookReflection.callMethod(view,"setLeftTopRightBottom",rect)
             }
             val cameraSection=(state.cameraBottom-rect.top).toFloat()/rect.height()
             style.finish.keepTopOpaque(cameraSection)
             val radius=(state.blurRadius.takeIf {it>=0f} ?: radiusPixels(card))
                 .coerceAtMost(minOf(rect.width(),rect.height())*.5f)
-            val manager=XposedHelpers.getObjectField(view,"c")
+            val manager=HookReflection.getObjectField(view,"c")
             if(manager!==style.manager){
                 restoreBlurCorners(style)
                 style.manager=manager
@@ -448,8 +448,8 @@ internal object MusicIslandMaterial {
             if(state.appliedRadius!=radius){
                 style.finish.cornerRadius=radius
                 if(manager!=null)try {
-                    XposedHelpers.callMethod(manager,"setCornerRadius",radius,radius,radius,radius)
-                }catch(_:NoSuchMethodError){XposedHelpers.callMethod(manager,"setCornerRadius",radius)}
+                    HookReflection.callMethod(manager,"setCornerRadius",radius,radius,radius,radius)
+                }catch(_:NoSuchMethodError){HookReflection.callMethod(manager,"setCornerRadius",radius)}
                 state.appliedRadius=radius
             }
         }catch(_:Throwable){}
@@ -457,19 +457,19 @@ internal object MusicIslandMaterial {
 
     private fun useCircularBlurCorners(manager: Any): Any? {
         try {
-            val blur=XposedHelpers.callMethod(manager,"getBackgroundBlurDrawable") ?: return null
-            val wrapper=XposedHelpers.callMethod(blur,"getWrapper") ?: return null
-            val extension=XposedHelpers.callMethod(wrapper,"getExtImpl") ?: return null
-            val params=XposedHelpers.getObjectField(extension,"mBlurParams") ?: return null
+            val blur=HookReflection.callMethod(manager,"getBackgroundBlurDrawable") ?: return null
+            val wrapper=HookReflection.callMethod(blur,"getWrapper") ?: return null
+            val extension=HookReflection.callMethod(wrapper,"getExtImpl") ?: return null
+            val params=HookReflection.getObjectField(extension,"mBlurParams") ?: return null
             // ColorOS defines 2 as the weight for circular round-rect corners.
-            if(XposedHelpers.callMethod(params,"getSmoothCornerWeight")==2f)return null
-            val values=XposedHelpers.callMethod(params,"toFloatArray") as? FloatArray ?: return null
-            val original=XposedHelpers.newInstance(params.javaClass)
-            XposedHelpers.callMethod(original,"fromFloatArray",values)
-            val adjusted=XposedHelpers.newInstance(params.javaClass)
-            XposedHelpers.callMethod(adjusted,"fromFloatArray",values)
-            XposedHelpers.callMethod(adjusted,"setSmoothCornerWeight",2f)
-            XposedHelpers.callMethod(manager,"setBlurParams",adjusted)
+            if(HookReflection.callMethod(params,"getSmoothCornerWeight")==2f)return null
+            val values=HookReflection.callMethod(params,"toFloatArray") as? FloatArray ?: return null
+            val original=HookReflection.newInstance(params.javaClass)
+            HookReflection.callMethod(original,"fromFloatArray",values)
+            val adjusted=HookReflection.newInstance(params.javaClass)
+            HookReflection.callMethod(adjusted,"fromFloatArray",values)
+            HookReflection.callMethod(adjusted,"setSmoothCornerWeight",2f)
+            HookReflection.callMethod(manager,"setBlurParams",adjusted)
             return original
         }catch(_:Throwable){return null}
     }
@@ -477,7 +477,7 @@ internal object MusicIslandMaterial {
     private fun restoreBlurCorners(style: BlurStyle) {
         val params=style.nativeParams ?: return
         style.nativeParams=null
-        try {style.manager?.let {XposedHelpers.callMethod(it,"setBlurParams",params)}}catch(_:Throwable){}
+        try {style.manager?.let {HookReflection.callMethod(it,"setBlurParams",params)}}catch(_:Throwable){}
     }
 
     private fun applyBlurStyle(card: View, state: Card, view: View) {
@@ -525,7 +525,7 @@ internal object MusicIslandMaterial {
 
     private fun attachGlow(card: View, state: Card, source: View) {
         val drawable=source.background ?: return
-        val native=try {XposedHelpers.getObjectField(source,"F")}catch(_:Throwable){null}
+        val native=try {HookReflection.getObjectField(source,"F")}catch(_:Throwable){null}
         if(drawable!==native)return
         releaseGlow(card,state)
         source.background=null
@@ -568,7 +568,7 @@ internal object MusicIslandMaterial {
     }
 
     private fun stopMediaGlow(view: View) {
-        try {XposedHelpers.getObjectField(view,"F")?.let {XposedHelpers.callMethod(it,"i")}}catch(_:Throwable){}
+        try {HookReflection.getObjectField(view,"F")?.let {HookReflection.callMethod(it,"i")}}catch(_:Throwable){}
         view.background=null
         view.visibility=View.INVISIBLE
     }
@@ -585,16 +585,16 @@ internal object MusicIslandMaterial {
         state.translations.forEach { (view, base) -> view.translationY=base }
         state.children.entries.toList().forEach {(view,base)->
             view.background=base.background;view.visibility=base.visibility
-            base.animation?.let {try {XposedHelpers.callMethod(view,"setAnimationState",it)}catch(_:Throwable){}}
+            base.animation?.let {try {HookReflection.callMethod(view,"setAnimationState",it)}catch(_:Throwable){}}
             if(view.javaClass.simpleName=="MediaBackGroundView" && base.visibility==View.VISIBLE)try {
-                XposedHelpers.getObjectField(view,"F")?.let {XposedHelpers.callMethod(it,"k")}
+                HookReflection.getObjectField(view,"F")?.let {HookReflection.callMethod(it,"k")}
             }catch(_:Throwable){}
         }
         state.controls.entries.toList().forEach {(view,base)->
-            base.first?.let {try {XposedHelpers.callMethod(view,"setConicLightEnabled",it)}catch(_:Throwable){}}
-            base.second?.let {try {XposedHelpers.callMethod(view,"setUseMaterialEffect",it)}catch(_:Throwable){}}
+            base.first?.let {try {HookReflection.callMethod(view,"setConicLightEnabled",it)}catch(_:Throwable){}}
+            base.second?.let {try {HookReflection.callMethod(view,"setUseMaterialEffect",it)}catch(_:Throwable){}}
         }
-        try {XposedHelpers.callMethod(card,"n")}catch(_:Throwable){}
+        try {HookReflection.callMethod(card,"n")}catch(_:Throwable){}
         card.invalidate()
     }
 }

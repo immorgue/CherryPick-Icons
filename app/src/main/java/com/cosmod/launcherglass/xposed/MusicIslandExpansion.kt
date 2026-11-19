@@ -12,9 +12,9 @@ import android.view.View
 import android.view.ViewGroup
 import com.cosmod.launcherglass.ui.SettingsProvider
 import com.cosmod.launcherglass.util.GlassLogger
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
+import com.cosmod.launcherglass.bridge.HookCallback
+import com.cosmod.launcherglass.bridge.HookRuntime
+import com.cosmod.launcherglass.bridge.HookReflection
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
 import java.util.WeakHashMap
@@ -35,14 +35,14 @@ internal object MusicIslandExpansion {
     private val layoutScope=ThreadLocal<View?>()
 
     fun install(loader:ClassLoader){
-        val manager=XposedHelpers.findClassIfExists("com.oplus.systemui.statusbar.seeding.SeedlingPluginManager",loader) ?: return
-        XposedBridge.hookAllMethods(manager,"onPluginConnectedImpl",object:XC_MethodHook(){
+        val manager=HookReflection.findClassIfExists("com.oplus.systemui.statusbar.seeding.SeedlingPluginManager",loader) ?: return
+        HookRuntime.hookAllMethods(manager,"onPluginConnectedImpl",object:HookCallback(){
             override fun beforeHookedMethod(p:MethodHookParam){
                 val plugin=p.args.firstOrNull() ?: return
                 val context=p.args.filterIsInstance<Context>().firstOrNull() ?: return
                 // PluginContext's base is not attached until the OEM callback runs.
                 // Install hooks before native views are constructed, but use the host context.
-                val host=try {XposedHelpers.getObjectField(p.thisObject,"context") as? Context}catch(_:Throwable){null}
+                val host=try {HookReflection.getObjectField(p.thisObject,"context") as? Context}catch(_:Throwable){null}
                 val settings=host ?: context
                 observe(try {settings.applicationContext ?: settings}catch(_:Throwable){settings})
                 try {installPlugin(plugin.javaClass.classLoader ?: return)}
@@ -84,10 +84,10 @@ internal object MusicIslandExpansion {
 
     private fun installPlugin(loader:ClassLoader){
         if(loaders.containsKey(loader))return
-        val card=XposedHelpers.findClassIfExists(PLUGIN+"card.ui.view.CardView",loader) ?: return
-        val container=XposedHelpers.findClassIfExists(PLUGIN+"card.ui.view.CardContainer",loader) ?: return
-        val capsuleRoot=XposedHelpers.findClassIfExists(PLUGIN+"capsule.ui.view.CapsuleContainerRoot",loader) ?: return
-        val utils=XposedHelpers.findClassIfExists(PLUGIN+"util.c",loader) ?: return
+        val card=HookReflection.findClassIfExists(PLUGIN+"card.ui.view.CardView",loader) ?: return
+        val container=HookReflection.findClassIfExists(PLUGIN+"card.ui.view.CardContainer",loader) ?: return
+        val capsuleRoot=HookReflection.findClassIfExists(PLUGIN+"capsule.ui.view.CapsuleContainerRoot",loader) ?: return
+        val utils=HookReflection.findClassIfExists(PLUGIN+"util.c",loader) ?: return
         val top=utils.declaredMethods.singleOrNull {
             it.name=="b" && Modifier.isStatic(it.modifiers) && it.returnType==Int::class.javaPrimitiveType &&
                 it.parameterTypes.contentEquals(arrayOf(Context::class.java))
@@ -102,7 +102,7 @@ internal object MusicIslandExpansion {
         catch(t:Throwable){GlassLogger.e("MusicIsland","Plain music material unavailable",t)}
         try {MusicIslandMotion.install(loader,{enabled},{anchor?.let(::Rect)},::hasMediaContent)}
         catch(t:Throwable){GlassLogger.e("MusicIsland","Native motion integration unavailable",t)}
-        XposedBridge.hookAllMethods(capsuleRoot,"dispatchTouchEvent",object:XC_MethodHook(){
+        HookRuntime.hookAllMethods(capsuleRoot,"dispatchTouchEvent",object:HookCallback(){
             override fun beforeHookedMethod(p:MethodHookParam){
                 if(!enabled)return
                 val event=p.args.firstOrNull() as? MotionEvent ?: return
@@ -119,7 +119,7 @@ internal object MusicIslandExpansion {
                 }
             }
         })
-        XposedBridge.hookMethod(top,object:XC_MethodHook(){
+        HookRuntime.hookMethod(top,object:HookCallback(){
             override fun afterHookedMethod(p:MethodHookParam){
                 if(!enabled || p.hasThrowable())return
                 val context=p.args.firstOrNull() as? Context ?: return
@@ -133,7 +133,7 @@ internal object MusicIslandExpansion {
                 }
             }
         })
-        XposedBridge.hookMethod(update,object:XC_MethodHook(){
+        HookRuntime.hookMethod(update,object:HookCallback(){
             override fun beforeHookedMethod(p:MethodHookParam){
                 val view=p.thisObject as? View ?: return
                 containers[view]=update
@@ -153,7 +153,7 @@ internal object MusicIslandExpansion {
                             if(lp is android.widget.FrameLayout.LayoutParams){lp.gravity=android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL;lp.leftMargin=0;lp.rightMargin=0}
                         }
                     }
-                    try {XposedHelpers.setIntField(view,"r",view.translationY.toInt())}catch(_:Throwable){}
+                    try {HookReflection.setIntField(view,"r",view.translationY.toInt())}catch(_:Throwable){}
                     if(!enabled || !musicOnly)retargeted.remove(view)
                 }
             }
@@ -163,10 +163,10 @@ internal object MusicIslandExpansion {
                 View::class.java.isAssignableFrom(it.type)
             } && !View::class.java.isAssignableFrom(method.parameterTypes[0])
         }
-        if(bind!=null)XposedBridge.hookMethod(bind,object:XC_MethodHook(){
+        if(bind!=null)HookRuntime.hookMethod(bind,object:HookCallback(){
             override fun afterHookedMethod(p:MethodHookParam){
                 val view=p.thisObject as? View ?: return
-                val content=try {XposedHelpers.callMethod(view,"getContentView") as? View}catch(_:Throwable){null}
+                val content=try {HookReflection.callMethod(view,"getContentView") as? View}catch(_:Throwable){null}
                 musicOnly=content?.let(::hasMediaContent)==true
                 MusicIslandMaterial.refresh(view,content)
             }
@@ -177,8 +177,8 @@ internal object MusicIslandExpansion {
         (context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager)?.isKeyguardLocked!=true
 
     private fun isOnlyMusic(view:View):Boolean {
-        val state=try {XposedHelpers.callMethod(view,"getCardUiState")}catch(_:Throwable){null} ?: return false
-        val items=try {XposedHelpers.getObjectField(state,"a") as? List<*>}catch(_:Throwable){null} ?: return false
+        val state=try {HookReflection.callMethod(view,"getCardUiState")}catch(_:Throwable){null} ?: return false
+        val items=try {HookReflection.getObjectField(state,"a") as? List<*>}catch(_:Throwable){null} ?: return false
         if(items.size!=1)return false
         val item=items.firstOrNull() ?: return false
         val content=item.javaClass.declaredFields.firstNotNullOfOrNull {

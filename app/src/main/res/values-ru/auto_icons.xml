@@ -1,0 +1,27 @@
+<resources>
+    <string name="ui_auto_launcher_unavailable">Настройки CherryPick недоступны. Открой CherryPick и попробуй снова.</string>
+    <string name="ui_auto_launcher_open_failed">Не удалось открыть оформление. Попробуй ещё раз.</string>
+    <string name="ui_auto_launcher_customize">Оформление</string>
+    <string name="ui_auto_launcher_haze_on">Включить дымку iOS</string>
+    <string name="ui_auto_launcher_haze_off">Выключить дымку iOS</string>
+    <string name="ui_auto_launcher_haze_unavailable">Для дымки iOS нужен Android 13 или новее</string>
+    <string name="ui_auto_launcher_frosted">Матовое</string>
+    <string name="ui_auto_launcher_liquid">Жидкое</string>
+    <string name="ui_auto_launcher_switch_material">Изменить стекло лаунчера на %1$s</string>
+    <string name="ui_auto_launcher_custom_warning">Включи Auto в приложении CherryPick, чтобы менять оформление здесь. Сейчас выбран режим «Своё».</string>
+    <string name="ui_auto_icons_auto">Auto</string>
+    <string name="ui_auto_icons_custom">Своё</string>
+    <string name="ui_auto_icons_default">Default</string>
+    <string name="ui_auto_icons_dark">Dark</string>
+    <string name="ui_auto_icons_clear">Clear</string>
+    <string name="ui_auto_icons_tinted">Tinted</string>
+    <string name="ui_auto_icons_wallpaper">Обои</string>
+    <string name="ui_auto_icons_manual">Свой цвет</string>
+    <string name="ui_auto_icons_hue">Оттенок</string>
+    <string name="ui_auto_icons_saturation">Насыщенность</string>
+    <string name="ui_auto_icons_default_hint">Фон и символ используют цвета из настроек Flux.</string>
+    <string name="ui_auto_icons_dark_hint">Глубокое тёмное стекло, цвет Flux применяется к символу.</string>
+    <string name="ui_auto_icons_clear_hint">Нейтральное прозрачное стекло с отдельным балансом для светлого и тёмного вида.</string>
+    <string name="ui_auto_icons_tinted_hint">Light красит фон. Dark красит символ поверх тёмного фона.</string>
+    <string name="ui_auto_icons_theme_hint">Auto выбирает светлый или тёмный вид по обоям. Настройки «Своё» сохраняются отдельно.</string>
+</resources>

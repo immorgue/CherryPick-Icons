@@ -20,7 +20,7 @@ internal class ModeChoiceCard(context:Context,title:String,description:String):M
     private fun color(attribute:Int)=MaterialColors.getColor(this,attribute)
     private val mark=ImageView(context).apply {
         setImageResource(R.drawable.ic_check)
-        imageTintList=ColorStateList.valueOf(color(M.attr.colorPrimary))
+        imageTintList=ColorStateList.valueOf(androidx.core.content.ContextCompat.getColor(context,R.color.ui_control_accent))
         importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO
     }
     var chosen=false

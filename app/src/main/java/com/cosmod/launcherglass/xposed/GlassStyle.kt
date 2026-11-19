@@ -1,12 +1,14 @@
 package com.cosmod.launcherglass.xposed
 
 import android.graphics.ColorMatrixColorFilter
+import android.graphics.Bitmap
 import android.os.Bundle
 import com.cosmod.launcherglass.ui.SettingsDefaults
 import com.cosmod.launcherglass.ui.SettingsProvider
 
 data class GlassStyle(val liquid:Boolean,val width:Int,val distortion:Int,
-    val radius:Int,val opacity:Int,val filter:ColorMatrixColorFilter?,val folder:Boolean=false,val plateColor:Int?=null,val extendedLens:Boolean=false,val exactLensRadius:Boolean=false,val colorOnly:Boolean=false,val kyant:KyantOptics?=null){
+    val radius:Int,val opacity:Int,val filter:ColorMatrixColorFilter?,val folder:Boolean=false,val plateColor:Int?=null,val extendedLens:Boolean=false,val exactLensRadius:Boolean=false,val colorOnly:Boolean=false,val kyant:KyantOptics?=null,val finish:GlassFinish=PrefsHelper.glassFinish,val cornerField:Bitmap?=null){
+    val needsBackdrop get()=!colorOnly && (radius>0 || kyant?.needsBackdrop==true)
     companion object {
         fun icons()=GlassStyle(PrefsHelper.liquidGlass,PrefsHelper.liquidWidth,PrefsHelper.liquidDistortion,
             if(PrefsHelper.colorOnly)0 else PrefsHelper.blurRadius,if(PrefsHelper.colorOnly)100 else PrefsHelper.bgOpacity,
@@ -25,6 +27,7 @@ data class KyantOptics @JvmOverloads constructor(val width:Int,val distortion:In
     fun amount(edge:Float)=edge*distortion*.0018f
 
     companion object {
+        internal val automatic=KyantOptics(55,350,24,15,100)
         internal fun read(bundle:Bundle?=null,key:(String)->String={it}):KyantOptics {
             fun number(base:String):Int {
                 val default=SettingsDefaults.integer(base)

@@ -10,8 +10,8 @@ import android.provider.Settings
 import android.view.View
 import com.cosmod.launcherglass.BuildConfig
 import com.cosmod.launcherglass.util.GlassLogger
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedHelpers
+import com.cosmod.launcherglass.bridge.HookCallback
+import com.cosmod.launcherglass.bridge.HookReflection
 import java.io.File
 import java.lang.reflect.Field
 import java.util.WeakHashMap
@@ -71,23 +71,23 @@ internal object LiftedBackdrop {
     }
     private fun register(loader:ClassLoader){
         try {
-            val drag=XposedHelpers.findClassIfExists(dragClassNames[0],loader)
-            val layer=XposedHelpers.findClassIfExists("com.android.launcher3.views.BaseDragLayer",loader)
+            val drag=HookReflection.findClassIfExists(dragClassNames[0],loader)
+            val layer=HookReflection.findClassIfExists("com.android.launcher3.views.BaseDragLayer",loader)
             if(drag==null || layer==null){
                 GlassLogger.i("LiftedBackdrop","DragView/BaseDragLayer not found; lifted backdrop unavailable")
                 return
             }
-            viewNode=XposedHelpers.findField(View::class.java,"mRenderNode")
-            recordingCanvas=XposedHelpers.findField(RenderNode::class.java,"mCurrentRecordingCanvas")
-            canvasNode=XposedHelpers.findField(RecordingCanvas::class.java,"mNode")
+            viewNode=HookReflection.findField(View::class.java,"mRenderNode")
+            recordingCanvas=HookReflection.findField(RenderNode::class.java,"mCurrentRecordingCanvas")
+            canvasNode=HookReflection.findField(RecordingCanvas::class.java,"mNode")
             dragViewClass=drag;dragLayerClass=layer
-            ModuleHooks.hookAllConstructors(drag,object:XC_MethodHook(){
+            ModuleHooks.hookAllConstructors(drag,object:HookCallback(){
                 override fun afterHookedMethod(param:MethodHookParam){
                     val view=param.thisObject as? View ?: return
                     if(main)dragViews[view]=ModuleHooks.epoch
                 }
             })
-            val hostHook=object:XC_MethodHook(){
+            val hostHook=object:HookCallback(){
                 override fun beforeHookedMethod(param:MethodHookParam){
                     if(!main)return
                     // OplusDragView.draw() calls DragView.draw(): place one host
@@ -104,7 +104,7 @@ internal object LiftedBackdrop {
                     if(main && drawDepth>0)drawDepth--
                 }
             }
-            val releaseHook=object:XC_MethodHook(){
+            val releaseHook=object:HookCallback(){
                 override fun beforeHookedMethod(param:MethodHookParam){
                     val view=param.thisObject as? View ?: return
                     if(!main)return
@@ -116,7 +116,7 @@ internal object LiftedBackdrop {
             }
             var hosts=0
             for(name in dragClassNames){
-                val type=XposedHelpers.findClassIfExists(name,loader) ?: continue
+                val type=HookReflection.findClassIfExists(name,loader) ?: continue
                 for(method in type.declaredMethods){
                     if(method.name=="draw" && method.parameterTypes.size==1 && method.parameterTypes[0]==Canvas::class.java){
                         ModuleHooks.hookMethod(method,hostHook);hosts++
@@ -130,7 +130,7 @@ internal object LiftedBackdrop {
             }
             // Observer only: a launcher layer that records a DragView (or one of
             // its ancestors) into a foreign display list could close a cycle.
-            ModuleHooks.hookMethod(XposedHelpers.findMethodExact(View::class.java,"draw",Canvas::class.java),object:XC_MethodHook(){
+            ModuleHooks.hookMethod(HookReflection.findMethodExact(View::class.java,"draw",Canvas::class.java),object:HookCallback(){
                 override fun beforeHookedMethod(param:MethodHookParam){
                     if(!main || dragViews.isEmpty())return
                     val canvas=param.args.getOrNull(0) as? Canvas ?: return

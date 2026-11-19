@@ -6,12 +6,11 @@
 
 ### Перед установкой
 
-Понадобятся рут-права, работающий LSPosed и системный лаунчер с оформлением иконок Flux.
+Понадобятся рут-права, LSPosed с поддержкой libxposed API 102 и системный лаунчер с оформлением иконок Flux.
 Другие икон паки сейчас не поддерживаются.
 
-Модуль находится в бета-тестировании. Проверялся только на ColorOS 17.
-Поддерживаемые ветки - ColorOS17/OxygenOS17/RUI7; версия 16 почти не тестировалась.
-Совместимость зависит от прошивки и версии системного лаунчера.
+Бета проверена на устройстве с лаунчером 17.5.4. Классы и ресурсы также сверены в локальных APK лаунчеров 16.x и 17.x.
+Анимации приложений выключены по умолчанию и пока не тестировались на ColorOS 16.
 
 ### Пошаговая установка
 
@@ -20,7 +19,7 @@
 3. Откройте LSPosed, найдите CherryPick Icons в списке модулей и включите его.
 4. В области действия модуля выберите установленный системный лаунчер и CherryPick Icons. Нужен именно лаунчер, которым вы пользуетесь.
 5. В системных настройках оформления иконок выберите **Flux**.
-6. Вернитесь в CherryPick Icons и включите основной переключатель модуля. Включите размытие фона и выберите Frosted или Liquid Glass.
+6. Вернитесь в CherryPick Icons и включите основной переключатель модуля. На новой установке уже выбраны Auto Tinted для иконок и Auto для дока.
 7. Нажмите кнопку перезапуска лаунчера на главном экране CherryPick Icons. Дождитесь возвращения рабочего стола.
 
 ### Если что-то работает неправильно
@@ -39,12 +38,11 @@
 
 ### Before installation
 
-You need root access, a working LSPosed installation and the system launcher with the Flux icon style.
+You need root access, LSPosed with libxposed API 102 support, and the system launcher with the Flux icon style.
 Other icon packs are not currently supported.
 
-The module is in beta testing and has only been tested on ColorOS 17.
-Supported branches are ColorOS17/OxygenOS17/RUI7; version 16 has barely been tested.
-Compatibility depends on the firmware and system launcher version.
+This beta was tested on a device running launcher 17.5.4. Classes and resources were also verified in local 16.x and 17.x launcher APKs.
+App animations are off by default and haven’t been tested on ColorOS 16 yet.
 
 ### Step-by-step installation
 
@@ -53,7 +51,7 @@ Compatibility depends on the firmware and system launcher version.
 3. Open LSPosed, find CherryPick Icons in the module list and enable it.
 4. Select your installed system launcher and CherryPick Icons in the module scope. Select the launcher you actually use.
 5. Choose **Flux** in the system icon style settings.
-6. Return to CherryPick Icons and enable the main module switch. Enable background blur and select Frosted or Liquid Glass.
+6. Return to CherryPick Icons and enable the main module switch. New installations start with Auto Tinted for icons and Auto for the dock.
 7. Use the launcher restart button on the CherryPick Icons home screen. Wait for the home screen to return.
 
 ### If something does not work correctly

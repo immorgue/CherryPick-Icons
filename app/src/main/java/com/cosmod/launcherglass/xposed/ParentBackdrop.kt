@@ -7,7 +7,7 @@ import android.view.View
 import com.cosmod.launcherglass.util.GlassLogger
 import com.cosmod.launcherglass.util.GlassVolume
 import com.cosmod.launcherglass.util.WallpaperHelper
-import de.robv.android.xposed.XposedHelpers
+import com.cosmod.launcherglass.bridge.HookReflection
 import java.lang.ref.WeakReference
 import java.util.WeakHashMap
 
@@ -20,6 +20,7 @@ internal object ParentBackdrop {
         var sample:Sample?=null
         var lens:LiquidGlassShader?=null
         var colors:RuntimeShader?=null
+        var finish:RuntimeShader?=null
         var frame=-1L
         var frameImage:Bitmap?=null
     }
@@ -33,6 +34,8 @@ internal object ParentBackdrop {
     fun clear(){plates.clear();observed.clear();revision++;failed=false}
     fun record(view:View,identity:Drawable,bounds:RectF,mask:Bitmap,radius:Float,style:GlassStyle,decorate:Boolean) {
         if(style.colorOnly)return
+        val style=if(style.exactLensRadius && style.kyant!=null && radius>0f)
+            style.copy(cornerField=GlassGeometry.contourField(mask))else style
         // Expanded folder backgrounds are siblings of the icon content. Bind
         // their material to the folder scope, retaining the background's own
         // coordinate system rather than treating the folder as its canvas.
@@ -49,7 +52,7 @@ internal object ParentBackdrop {
         if(scope===view && view.javaClass.name.let {
                 !it.endsWith(".GridRecyclerView") && !it.endsWith(".ShortcutContainer") &&
                     !it.endsWith(".FolderIcon") && !it.endsWith(".FolderRoundImageView") &&
-                    !it.endsWith(".OplusFolder") && !it.endsWith(".Folder") && !it.endsWith(".OplusHotseat")})return
+                    !it.endsWith(".OplusFolder") && !it.endsWith(".Folder")})return
         val entries=plates.getOrPut(scope){WeakHashMap()}
         val old=entries[identity]
         if(old!=null && old.bounds==bounds && old.mask===mask && old.radius==radius && old.style==style && old.decorate==decorate)return
@@ -79,28 +82,13 @@ internal object ParentBackdrop {
         return null
     }
     private fun sample(owner:View,plate:Plate,wallpaper:Bitmap):Sample? {
-        val dock=owner.javaClass.name.endsWith(".OplusHotseat")
-        if(dock && com.cosmod.launcherglass.util.LiveBlurEngine.freezeAnimationWallpaper && plate.sample!=null)
-            return plate.sample
         if(plate.frame==frame && plate.frameImage===wallpaper)return plate.sample
         plate.frame=frame;plate.frameImage=wallpaper
         val image=if(plate.style.folder)WallpaperHelper.getFolderWallpaper(owner.context) ?: wallpaper
-            else if(owner.javaClass.name.endsWith(".OplusHotseat"))WallpaperHelper.getDockWallpaper(owner.context) ?: wallpaper
             else WallpaperHelper.getBlurredWallpaper(owner.context) ?: wallpaper
         if(image.isRecycled || plate.mask.isRecycled)return null
         val world=Matrix()
-        if(dock && !WallpaperHelper.isLiveWallpaper(owner.context)){
-            // The plate renderer pins its resting crop. Its child backdrop
-            // must use that same crop, not the hotseat's temporary home zoom.
-            var x=0f;var y=0f;var current:View?=owner
-            while(current!=null){
-                val parent=current.parent as? View
-                x+=current.left-(parent?.scrollX ?: 0)
-                y+=current.top-(parent?.scrollY ?: 0)
-                current=parent
-            }
-            world.setTranslate(x,y)
-        }else XposedHelpers.callMethod(owner,"transformMatrixToGlobal",world)
+        WallpaperSampleCoordinates.world(owner,world)
         val values=FloatArray(9).also {world.getValues(it)}
         val key=listOf(wallpaper,image,values.toList(),PrefsHelper.gradientOpacity,
             PrefsHelper.gpuEffects,com.cosmod.launcherglass.util.LiveBlurEngine.wallpaperScrollRatio)
@@ -128,6 +116,9 @@ internal object ParentBackdrop {
             colors.setFloatUniform("rowB",matrix[10],matrix[11],matrix[12],matrix[13])
             colors.setFloatUniform("bias",matrix[4]/255f,matrix[9]/255f,matrix[14]/255f)
             material=colors
+        }
+        material=MaterialFinish.shader(material,w,h,plate.style.finish,plate.finish).also {
+            if(Build.VERSION.SDK_INT>=33 && plate.style.finish.haze && it is RuntimeShader)plate.finish=it
         }
         val color=(plate.style.opacity.coerceIn(0,100)*255/100 shl 24) or
             ((plate.style.plateColor ?: PrefsHelper.plateColor(SurfaceTone.base())) and 0xffffff)

@@ -17,7 +17,21 @@ internal class LiquidGlassShader private constructor(private val shader:RuntimeS
     private var previousRounding=Float.NaN
     private var previousFilter:ColorMatrixColorFilter?=null
     private var filterSet=false
+    private var contourImage:Bitmap?=null
+    private var contourShader:BitmapShader?=null
+    private fun contour(style:GlassStyle,mask:Shader){
+        val field=style.cornerField
+        if(field!=null){
+            if(contourImage!==field){
+                    contourShader=GlassGeometry.wallpaperShader(field);contourImage=field
+            }
+            // RG is a normal, B is geometric depth. Color-managing this data
+            // changes the lens with the destination surface's color space.
+            shader.setInputBuffer("contour",contourShader!!)
+        }else shader.setInputShader("contour",mask)
+    }
     fun update(wallpaper:Bitmap,mask:Shader,source:RectF,width:Int,height:Int,filter:ColorMatrixColorFilter?,rounding:Float,style:GlassStyle=GlassStyle.icons(),backdropOverride:Shader?=null):Shader {
+        contour(style,mask)
         if(backdropOverride!=null){
             shader.setInputShader("backdrop",backdropOverride)
             image=null
@@ -41,24 +55,28 @@ internal class LiquidGlassShader private constructor(private val shader:RuntimeS
         return shader
     }
     /** Lens over a RenderEffect input of [wrapperW]x[wrapperH] whose plate starts at [margin]. */
-    fun updateLifted(mask:Shader,width:Int,height:Int,margin:Float,wrapperW:Int,wrapperH:Int,filter:ColorMatrixColorFilter?,rounding:Float,style:GlassStyle):RuntimeShader {
+    fun updateLifted(mask:Shader,width:Int,height:Int,margin:Float,wrapperW:Int,wrapperH:Int,filter:ColorMatrixColorFilter?,rounding:Float,style:GlassStyle,depthEffect:Boolean=false):RuntimeShader {
+        contour(style,mask)
         shader.setInputShader("mask",mask)
-        geometry(width,height,rounding,style)
+        geometry(width,height,rounding,style,depthEffect)
         shader.setFloatUniform("origin",margin,margin)
         shader.setFloatUniform("limit",wrapperW.toFloat(),wrapperH.toFloat())
         colors(filter)
         return shader
     }
-    private fun geometry(width:Int,height:Int,rounding:Float,style:GlassStyle){
+    private fun geometry(width:Int,height:Int,rounding:Float,style:GlassStyle,depthEffect:Boolean=false){
         val edge=minOf(width,height).toFloat()
         shader.setFloatUniform("size",width.toFloat(),height.toFloat())
         shader.setFloatUniform("rounding",rounding)
+        shader.setFloatUniform("useContour",if(style.cornerField!=null)1f else 0f)
+        shader.setFloatUniform("contourSize",(style.cornerField?.width ?: width).toFloat(),(style.cornerField?.height ?: height).toFloat())
         val kyant=style.kyant
         shader.setFloatUniform("kyantBand",kyant?.band(edge) ?: 0f)
         shader.setFloatUniform("kyantAmount",kyant?.amount(edge) ?: 0f)
         shader.setFloatUniform("kyantLight",kyant?.light ?: 0f)
         shader.setFloatUniform("kyantDispersion",kyant?.dispersionFactor ?: 0f)
         shader.setFloatUniform("kyantVibrancy",kyant?.vibrancyFactor ?: 1f)
+        shader.setFloatUniform("kyantDepth",if(depthEffect)1f else 0f)
     }
     private fun colors(filter:ColorMatrixColorFilter?){
         val matrix=ColorMatrix();filter?.getColorMatrix(matrix)
@@ -78,6 +96,12 @@ internal class LiquidGlassShader private constructor(private val shader:RuntimeS
             return try {LiquidGlassShader(RuntimeShader(SOURCE))}catch(t:Throwable){
                 failed=true;GlassLogger.e("LiquidGlass","GPU lens unavailable; keeping frosted material",t);null
             }
+        }
+        /** Independent effect for an app surface with its own retained backdrop. */
+        fun createLifted(): LiquidGlassShader? {
+            if (Build.VERSION.SDK_INT < 33 || failed || liftedFailed) return null
+            return try { LiquidGlassShader(RuntimeShader(LIFTED_SOURCE)) }
+            catch (_: Throwable) { liftedFailed = true; null }
         }
         /** UI-thread lens for RenderEffect snapshots only, never for a Paint. */
         fun shared():LiquidGlassShader? {
@@ -100,6 +124,9 @@ internal class LiquidGlassShader private constructor(private val shader:RuntimeS
         private const val HEADER="""
             uniform shader backdrop;
             uniform shader mask;
+            uniform shader contour;
+            uniform float useContour;
+            uniform float2 contourSize;
             uniform float2 size;
             uniform float rounding;
             uniform float kyantBand;
@@ -107,6 +134,7 @@ internal class LiquidGlassShader private constructor(private val shader:RuntimeS
             uniform float kyantLight;
             uniform float kyantDispersion;
             uniform float kyantVibrancy;
+            uniform float kyantDepth;
             uniform float4 rowR;
             uniform float4 rowG;
             uniform float4 rowB;
@@ -116,6 +144,16 @@ internal class LiquidGlassShader private constructor(private val shader:RuntimeS
         // Copyright 2025 Kyant. Licensed under Apache-2.0.
         private const val LENS="""
             float3 kyantEdge(float2 xy) {
+                if(useContour>.5){
+                    float4 field=float4(contour.eval(xy/size*contourSize));
+                    float2 normal=field.rg*2.0-1.0;
+                    // Keep the softened gradient where edges meet; normalizing
+                    // a nearly zero vector puts the seam back into the lens.
+                    normal/=max(length(normal),.82);
+                    float scale=max(size.x/contourSize.x,size.y/contourSize.y);
+                    float distance=-field.b*max(contourSize.x,contourSize.y)*scale;
+                    return float3(normal,distance);
+                }
                 float2 center=xy-size*.5;
                 float r=min(size.x,size.y)*clamp(rounding,0.0,.5);
                 float2 q=abs(center)-size*.5+r;
@@ -128,7 +166,13 @@ internal class LiquidGlassShader private constructor(private val shader:RuntimeS
             }
             float2 lensOffset(float2 xy,float3 edge) {
                 float t=clamp(1.0+edge.z/max(kyantBand,.5),0.0,1.0);
-                return -edge.xy*(1.0-sqrt(max(0.0,1.0-t*t)))*kyantAmount;
+                float2 normal=edge.xy;
+                if(kyantDepth>.5){
+                    float2 radial=xy-size*.5;
+                    normal+=radial/max(length(radial),.001);
+                    normal/=max(length(normal),.001);
+                }
+                return -normal*(1.0-sqrt(max(0.0,1.0-t*t)))*kyantAmount;
             }
             half4 shade(half4 sampled,float2 xy,float3 glow,float3 edge) {
                 float4 sampleColor=float4(sampled);

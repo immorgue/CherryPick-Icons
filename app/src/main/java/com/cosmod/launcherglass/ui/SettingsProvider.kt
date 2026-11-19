@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Binder
 import android.os.Bundle
 import android.os.Process
+import com.cosmod.launcherglass.util.AutoIconStyle
 
 class SettingsProvider : ContentProvider() {
 
@@ -33,6 +34,39 @@ class SettingsProvider : ContentProvider() {
     override fun call(method: String, arg: String?, extras: Bundle?): Bundle {
         val bundle = Bundle()
         when (method) {
+            METHOD_SET_AUTO_APPEARANCE -> {
+                enforceCaller(allowLauncher=true)
+                val enabled=prefs.getInt(AutoIconStyle.ENGINE,AutoIconStyle.DEFAULT_ENGINE)==1
+                bundle.putBoolean("enabled",enabled)
+                var saved = true
+                if(enabled && extras!=null){
+                    val editor=prefs.edit()
+                    var changed=false
+                    for(key in com.cosmod.launcherglass.util.AutoIconStyle.defaults.keys){
+                        if(key==com.cosmod.launcherglass.util.AutoIconStyle.ENGINE || !extras.containsKey(key))continue
+                        val value=extras.getInt(key).coerceIn(com.cosmod.launcherglass.util.AutoIconStyle.range(key))
+                        if (prefs.getInt(key, com.cosmod.launcherglass.util.AutoIconStyle.defaults.getValue(key)) != value) changed = true
+                        editor.putInt(key, value)
+                    }
+                    if(extras.containsKey(KEY_HAZE_ENABLED)){
+                        val value=extras.getBoolean(KEY_HAZE_ENABLED)
+                        changed=changed || prefs.getBoolean(KEY_HAZE_ENABLED,false)!=value
+                        editor.putBoolean(KEY_HAZE_ENABLED,value)
+                    }
+                    saved = editor.commit()
+                    if (changed && saved) context!!.contentResolver.notifyChange(CONTENT_URI, null)
+                }
+                bundle.putBoolean("saved", saved)
+            }
+            com.cosmod.launcherglass.util.FolderPreviewShape.METHOD -> {
+                enforceCaller(allowLauncher=true)
+                val bytes=extras?.getByteArray("mask") ?: return bundle
+                if(bytes.size in 1..65536){
+                    val encoded=android.util.Base64.encodeToString(bytes,android.util.Base64.NO_WRAP)
+                    val key=com.cosmod.launcherglass.util.FolderPreviewShape.KEY
+                    if(prefs.getString(key,null)!=encoded)prefs.edit().putString(key,encoded).apply()
+                }
+            }
             METHOD_WALLPAPER_CHANGED -> {
                 enforceCaller(allowLauncher=true)
                 val identity=extras?.getString("identity") ?: return bundle
@@ -68,6 +102,11 @@ class SettingsProvider : ContentProvider() {
                 }
             }
             METHOD_GET_ALL -> {
+                com.cosmod.launcherglass.util.AutoIconStyle.defaults.forEach { (key, fallback) ->
+                    val range = com.cosmod.launcherglass.util.AutoIconStyle.range(key)
+                    bundle.putInt(key, prefs.getInt(key, fallback).coerceIn(range))
+                }
+                for(key in ModuleFeatures.keys)bundle.putBoolean(key,prefs.getBoolean(key,true))
                 // Profiles and older installs can have an enabled scope with missing newer keys.
                 SettingsDefaults.seedOwnGlassSettings(prefs)
                 com.cosmod.launcherglass.util.DesktopSizing.defaults.forEach {(key,fallback) ->
@@ -82,7 +121,6 @@ class SettingsProvider : ContentProvider() {
                 bundle.putBoolean(KEY_MUSIC_ISLAND_GLOW,prefs.getBoolean(KEY_MUSIC_ISLAND_GLOW,true))
                 for((key,default) in MUSIC_ISLAND_SPACING)bundle.putInt(key,prefs.getInt(key,default).coerceIn(0,48))
                 bundle.putBoolean(KEY_STATIC_ANIMATION_BLUR,prefs.getBoolean(KEY_STATIC_ANIMATION_BLUR,false))
-                bundle.putInt(KEY_FLIGHT_ICON_REVEAL,prefs.getInt(KEY_FLIGHT_ICON_REVEAL,155).coerceIn(100,400))
                 bundle.putBoolean(KEY_MODULE_LOGGING,prefs.getBoolean(KEY_MODULE_LOGGING,SettingsDefaults.boolean(KEY_MODULE_LOGGING)))
                 for(key in APP_ANIMATION_SWITCHES)
                     bundle.putBoolean(key,prefs.getBoolean(key,SettingsDefaults.boolean(key)))
@@ -100,12 +138,20 @@ class SettingsProvider : ContentProvider() {
                     }
                 }
                 bundle.putBoolean(KEY_PHOTO_WIDGET_BLUR,prefs.getBoolean(KEY_PHOTO_WIDGET_BLUR,false))
+                for (kind in listOf(com.cosmod.launcherglass.xposed.WidgetKind.CLOCK, com.cosmod.launcherglass.xposed.WidgetKind.WEATHER)) {
+                    val enabled = requireNotNull(kind.switchKey)
+                    val opacity = requireNotNull(kind.opacityKey)
+                    bundle.putBoolean(enabled, prefs.getBoolean(enabled, prefs.getBoolean(KEY_PHOTO_WIDGET_BLUR, false)))
+                    bundle.putInt(opacity, prefs.getInt(opacity, SettingsDefaults.integer(opacity)).coerceIn(0, 100))
+                }
                 bundle.putBoolean(KEY_PHOTO_WIDGET_TINT,prefs.getBoolean(KEY_PHOTO_WIDGET_TINT,false))
                 bundle.putInt(KEY_PHOTO_WIDGET_LIQUID_WIDTH,prefs.getInt(KEY_PHOTO_WIDGET_LIQUID_WIDTH,SettingsDefaults.integer(KEY_PHOTO_WIDGET_LIQUID_WIDTH)))
                 bundle.putInt(KEY_PHOTO_WIDGET_LIQUID_DISTORTION,prefs.getInt(KEY_PHOTO_WIDGET_LIQUID_DISTORTION,SettingsDefaults.integer(KEY_PHOTO_WIDGET_LIQUID_DISTORTION)))
                 bundle.putBoolean(KEY_FOLDER_ICONS_BLUR_ENABLED,prefs.getBoolean(KEY_FOLDER_ICONS_BLUR_ENABLED,true))
                 bundle.putInt(KEY_PHOTO_WIDGET_OPACITY,prefs.getInt(KEY_PHOTO_WIDGET_OPACITY,55))
                 bundle.putBoolean(KEY_DEVELOPER_MODE,prefs.getBoolean(KEY_DEVELOPER_MODE,SettingsDefaults.boolean(KEY_DEVELOPER_MODE)))
+                bundle.putBoolean(KEY_HAZE_ENABLED,prefs.getBoolean(KEY_HAZE_ENABLED,false))
+                bundle.putInt(KEY_BLUR_TRANSPARENCY,prefs.getInt(KEY_BLUR_TRANSPARENCY,SettingsDefaults.integer(KEY_BLUR_TRANSPARENCY)).coerceIn(0,100))
                 bundle.putBoolean(KEY_SMOOTH_SWIPE_LEAD,prefs.getBoolean(KEY_SMOOTH_SWIPE_LEAD,false))
                 bundle.putBoolean(KEY_SWIPE_LEAD,prefs.getBoolean(KEY_SWIPE_LEAD,SettingsDefaults.boolean(KEY_SWIPE_LEAD)))
                 bundle.putBoolean(KEY_KYANT_MAGNIFIER,prefs.getBoolean(KEY_KYANT_MAGNIFIER,false))
@@ -114,6 +160,8 @@ class SettingsProvider : ContentProvider() {
                 bundle.putBoolean(KEY_OPTIMIZE_MINI_ICONS,prefs.getBoolean(KEY_OPTIMIZE_MINI_ICONS,SettingsDefaults.boolean(KEY_OPTIMIZE_MINI_ICONS)))
                 bundle.putBoolean(KEY_DOCK_ENABLED,prefs.getBoolean(KEY_DOCK_ENABLED,SettingsDefaults.boolean(KEY_DOCK_ENABLED)))
                 bundle.putBoolean(KEY_DOCK_AUTO_LENGTH,prefs.getBoolean(KEY_DOCK_AUTO_LENGTH,SettingsDefaults.boolean(KEY_DOCK_AUTO_LENGTH)))
+                bundle.putBoolean(KEY_DOCK_AUTO_APPEARANCE,
+                    prefs.getBoolean(KEY_DOCK_AUTO_APPEARANCE,SettingsDefaults.boolean(KEY_DOCK_AUTO_APPEARANCE)))
                 for(key in listOf(KEY_DOCK_SIDE_PADDING,KEY_DOCK_VERTICAL_PADDING,KEY_DOCK_RADIUS,KEY_DOCK_BLUR_HEIGHT,KEY_DOCK_BLUR_Y))bundle.putInt(key,prefs.getInt(key,SettingsDefaults.integer(key)))
                 bundle.putInt(KEY_ARTWORK_TRANSPARENCY,prefs.getInt(KEY_ARTWORK_TRANSPARENCY,SettingsDefaults.integer(KEY_ARTWORK_TRANSPARENCY)).coerceIn(0,100))
                 bundle.putInt(KEY_NATIVE_FLUX_SUPPORT,prefs.getInt(KEY_NATIVE_FLUX_SUPPORT,0))
@@ -125,6 +173,7 @@ class SettingsProvider : ContentProvider() {
                 bundle.putInt(KEY_DARK_SATURATION, prefs.getInt(KEY_DARK_SATURATION, SettingsDefaults.integer(KEY_DARK_SATURATION)))
                 bundle.putInt(KEY_DARK_BRIGHTNESS, prefs.getInt(KEY_DARK_BRIGHTNESS, SettingsDefaults.integer(KEY_DARK_BRIGHTNESS)))
                 bundle.putInt(KEY_ICON_APPEARANCE, prefs.getInt(KEY_ICON_APPEARANCE, SettingsDefaults.integer(KEY_ICON_APPEARANCE)))
+                bundle.putInt(KEY_ICON_COLOR_THEME,prefs.getInt(KEY_ICON_COLOR_THEME,SettingsDefaults.integer(KEY_ICON_COLOR_THEME)).coerceIn(0,2))
                 bundle.putInt(KEY_CLEAR_BRIGHTNESS, prefs.getInt(KEY_CLEAR_BRIGHTNESS, SettingsDefaults.integer(KEY_CLEAR_BRIGHTNESS)))
                 bundle.putInt(KEY_COLOR_MODE, prefs.getInt(KEY_COLOR_MODE, SettingsDefaults.integer(KEY_COLOR_MODE)))
                 bundle.putInt(KEY_COLOR_HUE, prefs.getInt(KEY_COLOR_HUE, SettingsDefaults.integer(KEY_COLOR_HUE)))
@@ -154,6 +203,8 @@ class SettingsProvider : ContentProvider() {
                 bundle.putInt(KEY_GLYPH_STROKE_BRIGHTNESS, prefs.getInt(KEY_GLYPH_STROKE_BRIGHTNESS, SettingsDefaults.integer(KEY_GLYPH_STROKE_BRIGHTNESS)))
                 bundle.putBoolean(KEY_GLYPH_STROKE, prefs.getBoolean(KEY_GLYPH_STROKE, SettingsDefaults.boolean(KEY_GLYPH_STROKE)))
                 bundle.putInt(KEY_GLYPH_STROKE_OPACITY, prefs.getInt(KEY_GLYPH_STROKE_OPACITY, SettingsDefaults.integer(KEY_GLYPH_STROKE_OPACITY)))
+                bundle.putInt(KEY_GLYPH_BOTTOM_SHADE, prefs.getInt(KEY_GLYPH_BOTTOM_SHADE, SettingsDefaults.integer(KEY_GLYPH_BOTTOM_SHADE)))
+                bundle.putBoolean(KEY_GLYPH_BOTTOM_SHADE_ENABLED,prefs.getBoolean(KEY_GLYPH_BOTTOM_SHADE_ENABLED,SettingsDefaults.boolean(KEY_GLYPH_BOTTOM_SHADE_ENABLED)))
                 bundle.putBoolean(KEY_ICON_STROKE, prefs.getBoolean(KEY_ICON_STROKE, SettingsDefaults.boolean(KEY_ICON_STROKE)))
                 bundle.putInt(KEY_STROKE_OPACITY, prefs.getInt(KEY_STROKE_OPACITY, SettingsDefaults.integer(KEY_STROKE_OPACITY)))
                 bundle.putBoolean(KEY_GLYPH_SHADOW, prefs.getBoolean(KEY_GLYPH_SHADOW, SettingsDefaults.boolean(KEY_GLYPH_SHADOW)))
@@ -166,6 +217,10 @@ class SettingsProvider : ContentProvider() {
                 enforceCaller()
                 extras?.let { b ->
                     val editor = prefs.edit()
+                    com.cosmod.launcherglass.util.AutoIconStyle.defaults.keys.forEach { key ->
+                        if (b.containsKey(key)) editor.putInt(key, b.getInt(key).coerceIn(com.cosmod.launcherglass.util.AutoIconStyle.range(key)))
+                    }
+                    for(key in ModuleFeatures.keys)if(b.containsKey(key))editor.putBoolean(key,b.getBoolean(key))
                     com.cosmod.launcherglass.util.DesktopSizing.ranges.forEach {(key,range) ->
                         if(b.containsKey(key))editor.putInt(key,b.getInt(key).coerceIn(range))
                     }
@@ -177,7 +232,6 @@ class SettingsProvider : ContentProvider() {
                     for(key in listOf(KEY_MUSIC_ISLAND_BLUR,KEY_MUSIC_ISLAND_GLOW))if(b.containsKey(key))editor.putBoolean(key,b.getBoolean(key))
                     for(key in MUSIC_ISLAND_SPACING.keys)if(b.containsKey(key))editor.putInt(key,b.getInt(key).coerceIn(0,48))
                     if(b.containsKey(KEY_STATIC_ANIMATION_BLUR))editor.putBoolean(KEY_STATIC_ANIMATION_BLUR,b.getBoolean(KEY_STATIC_ANIMATION_BLUR))
-                    if(b.containsKey(KEY_FLIGHT_ICON_REVEAL))editor.putInt(KEY_FLIGHT_ICON_REVEAL,b.getInt(KEY_FLIGHT_ICON_REVEAL).coerceIn(100,400))
                     if(b.containsKey(KEY_MODULE_LOGGING))editor.putBoolean(KEY_MODULE_LOGGING,b.getBoolean(KEY_MODULE_LOGGING))
                     for(key in APP_ANIMATION_SWITCHES)
                         if(b.containsKey(key))editor.putBoolean(key,b.getBoolean(key))
@@ -189,12 +243,18 @@ class SettingsProvider : ContentProvider() {
                         for(base in scope.booleans){val key=scope.key(base);if(b.containsKey(key))editor.putBoolean(key,b.getBoolean(key))}
                     }
                     if(b.containsKey(KEY_PHOTO_WIDGET_BLUR))editor.putBoolean(KEY_PHOTO_WIDGET_BLUR,b.getBoolean(KEY_PHOTO_WIDGET_BLUR))
+                    for (key in listOf(KEY_CLOCK_WIDGET_GLASS, KEY_WEATHER_WIDGET_GLASS))
+                        if (b.containsKey(key)) editor.putBoolean(key, b.getBoolean(key))
+                    for (key in listOf(KEY_CLOCK_WIDGET_OPACITY, KEY_WEATHER_WIDGET_OPACITY))
+                        if (b.containsKey(key)) editor.putInt(key, b.getInt(key).coerceIn(0, 100))
                     if(b.containsKey(KEY_PHOTO_WIDGET_TINT))editor.putBoolean(KEY_PHOTO_WIDGET_TINT,b.getBoolean(KEY_PHOTO_WIDGET_TINT))
                     if(b.containsKey(KEY_PHOTO_WIDGET_LIQUID_WIDTH))editor.putInt(KEY_PHOTO_WIDGET_LIQUID_WIDTH,b.getInt(KEY_PHOTO_WIDGET_LIQUID_WIDTH).coerceIn(0,100))
                     if(b.containsKey(KEY_PHOTO_WIDGET_LIQUID_DISTORTION))editor.putInt(KEY_PHOTO_WIDGET_LIQUID_DISTORTION,b.getInt(KEY_PHOTO_WIDGET_LIQUID_DISTORTION).coerceIn(0,300))
                     if(b.containsKey(KEY_FOLDER_ICONS_BLUR_ENABLED))editor.putBoolean(KEY_FOLDER_ICONS_BLUR_ENABLED,b.getBoolean(KEY_FOLDER_ICONS_BLUR_ENABLED))
                     if(b.containsKey(KEY_PHOTO_WIDGET_OPACITY))editor.putInt(KEY_PHOTO_WIDGET_OPACITY,b.getInt(KEY_PHOTO_WIDGET_OPACITY).coerceIn(0,100))
                     if(b.containsKey(KEY_DEVELOPER_MODE))editor.putBoolean(KEY_DEVELOPER_MODE,b.getBoolean(KEY_DEVELOPER_MODE))
+                    if(b.containsKey(KEY_HAZE_ENABLED))editor.putBoolean(KEY_HAZE_ENABLED,b.getBoolean(KEY_HAZE_ENABLED))
+                    if(b.containsKey(KEY_BLUR_TRANSPARENCY))editor.putInt(KEY_BLUR_TRANSPARENCY,b.getInt(KEY_BLUR_TRANSPARENCY).coerceIn(0,100))
                     if(b.containsKey(KEY_SMOOTH_SWIPE_LEAD))editor.putBoolean(KEY_SMOOTH_SWIPE_LEAD,b.getBoolean(KEY_SMOOTH_SWIPE_LEAD))
                     if(b.containsKey(KEY_SWIPE_LEAD))editor.putBoolean(KEY_SWIPE_LEAD,b.getBoolean(KEY_SWIPE_LEAD))
                     if(b.containsKey(KEY_KYANT_MAGNIFIER))editor.putBoolean(KEY_KYANT_MAGNIFIER,b.getBoolean(KEY_KYANT_MAGNIFIER))
@@ -203,6 +263,7 @@ class SettingsProvider : ContentProvider() {
                     if(b.containsKey(KEY_OPTIMIZE_MINI_ICONS))editor.putBoolean(KEY_OPTIMIZE_MINI_ICONS,b.getBoolean(KEY_OPTIMIZE_MINI_ICONS))
                     if(b.containsKey(KEY_DOCK_ENABLED))editor.putBoolean(KEY_DOCK_ENABLED,b.getBoolean(KEY_DOCK_ENABLED))
                     if(b.containsKey(KEY_DOCK_AUTO_LENGTH))editor.putBoolean(KEY_DOCK_AUTO_LENGTH,b.getBoolean(KEY_DOCK_AUTO_LENGTH))
+                    if(b.containsKey(KEY_DOCK_AUTO_APPEARANCE))editor.putBoolean(KEY_DOCK_AUTO_APPEARANCE,b.getBoolean(KEY_DOCK_AUTO_APPEARANCE))
                     for(key in listOf(KEY_DOCK_SIDE_PADDING,KEY_DOCK_VERTICAL_PADDING))if(b.containsKey(key))editor.putInt(key,b.getInt(key).coerceIn(0,DOCK_PADDING_MAX))
                     if(b.containsKey(KEY_DOCK_BLUR_HEIGHT))editor.putInt(KEY_DOCK_BLUR_HEIGHT,b.getInt(KEY_DOCK_BLUR_HEIGHT).coerceIn(50,200))
                     if(b.containsKey(KEY_DOCK_BLUR_Y))editor.putInt(KEY_DOCK_BLUR_Y,b.getInt(KEY_DOCK_BLUR_Y).coerceIn(-120,120))
@@ -215,6 +276,7 @@ class SettingsProvider : ContentProvider() {
                     if (b.containsKey(KEY_DARK_SATURATION)) editor.putInt(KEY_DARK_SATURATION, b.getInt(KEY_DARK_SATURATION))
                     if (b.containsKey(KEY_DARK_BRIGHTNESS)) editor.putInt(KEY_DARK_BRIGHTNESS, b.getInt(KEY_DARK_BRIGHTNESS))
                     if (b.containsKey(KEY_ICON_APPEARANCE)) editor.putInt(KEY_ICON_APPEARANCE, b.getInt(KEY_ICON_APPEARANCE))
+                    if(b.containsKey(KEY_ICON_COLOR_THEME))editor.putInt(KEY_ICON_COLOR_THEME,b.getInt(KEY_ICON_COLOR_THEME).coerceIn(0,2))
                     if (b.containsKey(KEY_CLEAR_BRIGHTNESS)) editor.putInt(KEY_CLEAR_BRIGHTNESS, b.getInt(KEY_CLEAR_BRIGHTNESS))
                     if (b.containsKey(KEY_COLOR_MODE)) editor.putInt(KEY_COLOR_MODE, b.getInt(KEY_COLOR_MODE))
                     if (b.containsKey(KEY_COLOR_HUE)) editor.putInt(KEY_COLOR_HUE, b.getInt(KEY_COLOR_HUE))
@@ -244,6 +306,8 @@ class SettingsProvider : ContentProvider() {
                     if (b.containsKey(KEY_GLYPH_STROKE_BRIGHTNESS)) editor.putInt(KEY_GLYPH_STROKE_BRIGHTNESS, b.getInt(KEY_GLYPH_STROKE_BRIGHTNESS))
                     if (b.containsKey(KEY_GLYPH_STROKE)) editor.putBoolean(KEY_GLYPH_STROKE, b.getBoolean(KEY_GLYPH_STROKE))
                     if (b.containsKey(KEY_GLYPH_STROKE_OPACITY)) editor.putInt(KEY_GLYPH_STROKE_OPACITY, b.getInt(KEY_GLYPH_STROKE_OPACITY))
+                    if (b.containsKey(KEY_GLYPH_BOTTOM_SHADE)) editor.putInt(KEY_GLYPH_BOTTOM_SHADE, b.getInt(KEY_GLYPH_BOTTOM_SHADE).coerceIn(0,100))
+                    if (b.containsKey(KEY_GLYPH_BOTTOM_SHADE_ENABLED)) editor.putBoolean(KEY_GLYPH_BOTTOM_SHADE_ENABLED,b.getBoolean(KEY_GLYPH_BOTTOM_SHADE_ENABLED))
                     if (b.containsKey(KEY_ICON_STROKE)) editor.putBoolean(KEY_ICON_STROKE, b.getBoolean(KEY_ICON_STROKE))
                     if (b.containsKey(KEY_STROKE_OPACITY)) editor.putInt(KEY_STROKE_OPACITY, b.getInt(KEY_STROKE_OPACITY))
                     if (b.containsKey(KEY_GLYPH_SHADOW)) editor.putBoolean(KEY_GLYPH_SHADOW, b.getBoolean(KEY_GLYPH_SHADOW))
@@ -285,6 +349,7 @@ class SettingsProvider : ContentProvider() {
         const val METHOD_OPEN_DESKTOP = "openDesktopDesigner"
         const val METHOD_CONSUME_DESKTOP = "consumeDesktopDesigner"
         const val METHOD_SET = "set"
+        const val METHOD_SET_AUTO_APPEARANCE="setAutoAppearance"
         const val METHOD_WALLPAPER_CHANGED="wallpaperChanged"
         const val KEY_HIDE_HOME_GESTURE_BAR="hide_home_gesture_bar"
         const val KEY_MUSIC_ISLAND_EXPANSION="experimental_music_island_expansion"
@@ -296,7 +361,6 @@ class SettingsProvider : ContentProvider() {
         const val KEY_MUSIC_ISLAND_RADIUS="music_island_radius"
         val MUSIC_ISLAND_SPACING=mapOf(KEY_MUSIC_ISLAND_OUTER to 8,KEY_MUSIC_ISLAND_CONTENT_X to 0,KEY_MUSIC_ISLAND_CONTENT_Y to 8,KEY_MUSIC_ISLAND_RADIUS to 28)
         const val KEY_STATIC_ANIMATION_BLUR="experimental_static_animation_blur"
-        const val KEY_FLIGHT_ICON_REVEAL="flight_icon_reveal"
         const val KEY_MODULE_LOGGING="module_logging"
         const val KEY_APP_WINDOW_TILT="app_window_tilt"
         const val KEY_APP_GENIE="app_genie"
@@ -324,6 +388,7 @@ class SettingsProvider : ContentProvider() {
         else listOf(KEY_LIGHT_HUE, KEY_LIGHT_SATURATION, KEY_LIGHT_BRIGHTNESS)
 
         const val KEY_ICON_APPEARANCE = "icon_appearance"
+        const val KEY_ICON_COLOR_THEME = "icon_color_theme"
         const val KEY_CLEAR_BRIGHTNESS = "clear_brightness"
         const val KEY_COLOR_MODE = "color_mode"
         const val KEY_COLOR_HUE = "color_hue"
@@ -335,10 +400,14 @@ class SettingsProvider : ContentProvider() {
         const val KEY_ENABLED = "enabled"
         const val KEY_DEVELOPER_MODE = "developer_mode"
         const val KEY_GPU_EFFECTS = "gpu_effects"
+        const val KEY_HAZE_ENABLED = "glass_haze_enabled"
+        const val KEY_BLUR_TRANSPARENCY = "experimental_blur_transparency"
         const val KEY_LIMIT_CLOSING_BLUR = "limit_closing_blur_fps"
         /** Developer: event-driven dock refresh and frame-aligned material sampling. */
         const val KEY_BLUR_TONE_ENABLED = "blur_tone_enabled"
         const val KEY_PHOTO_WIDGET_BLUR = "photo_widget_blur"
+        const val KEY_CLOCK_WIDGET_GLASS = "clock_widget_glass"
+        const val KEY_WEATHER_WIDGET_GLASS = "weather_widget_glass"
         const val KEY_SMOOTH_SWIPE_LEAD = "experimental_smooth_swipe_lead"
         const val KEY_SWIPE_LEAD = "swipe_blur_lead"
         const val KEY_DISABLE_EDGE_OPTIMIZATION = "disable_edge_optimization"
@@ -352,16 +421,19 @@ class SettingsProvider : ContentProvider() {
         const val KEY_DOCK_RADIUS = "dock_radius"
         /** On: the dock fits the hotseat icons and animates its width; off: it spans the full hotseat row. */
         const val KEY_DOCK_AUTO_LENGTH = "dock_auto_length"
+        const val KEY_DOCK_AUTO_APPEARANCE = "dock_auto_appearance"
         const val DOCK_PADDING_MAX = 150
         /** Experimental (developer mode): transparency (0..100 %) of the tint over icons that are a full picture without a plate. */
         const val KEY_ARTWORK_TRANSPARENCY = "artwork_transparency"
         /** Local UI preference of the settings app; never sent to the launcher or exported in presets. */
-        const val KEY_MD3_UI = "ui_md3"
+        const val KEY_LEGACY_INTERFACE = "ui_legacy_interface"
         const val KEY_PHOTO_WIDGET_TINT = "photo_widget_tint"
         const val KEY_PHOTO_WIDGET_LIQUID_WIDTH = "photo_widget_liquid_width"
         const val KEY_PHOTO_WIDGET_LIQUID_DISTORTION = "photo_widget_liquid_distortion"
         const val KEY_FOLDER_ICONS_BLUR_ENABLED = "folder_icons_blur_enabled"
         const val KEY_PHOTO_WIDGET_OPACITY = "photo_widget_opacity"
+        const val KEY_CLOCK_WIDGET_OPACITY = "clock_widget_opacity"
+        const val KEY_WEATHER_WIDGET_OPACITY = "weather_widget_opacity"
         const val KEY_BLUR_VIBRANCY = "blur_vibrancy"
         const val KEY_BLUR_SATURATION = "blur_saturation"
         const val KEY_BLUR_LIGHTENING = "blur_lightening"
@@ -396,6 +468,8 @@ class SettingsProvider : ContentProvider() {
         const val KEY_GLYPH_STROKE_BRIGHTNESS = "glyph_stroke_brightness"
         const val KEY_GLYPH_STROKE = "glyph_stroke"
         const val KEY_GLYPH_STROKE_OPACITY = "glyph_stroke_opacity"
+        const val KEY_GLYPH_BOTTOM_SHADE = "glyph_bottom_shade"
+        const val KEY_GLYPH_BOTTOM_SHADE_ENABLED = "glyph_bottom_shade_enabled"
         const val KEY_ICON_STROKE = "icon_stroke"
         const val KEY_STROKE_OPACITY = "stroke_opacity"
         const val KEY_GLYPH_SHADOW = "glyph_shadow"

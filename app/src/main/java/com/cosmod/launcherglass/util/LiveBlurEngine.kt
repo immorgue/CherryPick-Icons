@@ -416,6 +416,7 @@ object LiveBlurEngine {
     }
 
     fun onActivityResumed() = onMainThread {
+        if (!isResumed) com.cosmod.launcherglass.xposed.WidgetFlight.onLauncherReturning()
         holdReturningWallpaper()
         isAppLaunchInProgress = false
         isResumed = true

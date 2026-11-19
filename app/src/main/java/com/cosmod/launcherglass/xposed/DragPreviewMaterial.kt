@@ -6,8 +6,8 @@ import android.os.Looper
 import android.view.View
 import com.cosmod.launcherglass.util.GlassLogger
 import com.cosmod.launcherglass.util.WallpaperHelper
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedHelpers
+import com.cosmod.launcherglass.bridge.HookCallback
+import com.cosmod.launcherglass.bridge.HookReflection
 import java.util.WeakHashMap
 import kotlin.math.roundToInt
 
@@ -53,7 +53,7 @@ internal object DragPreviewMaterial {
     private val main get()=Looper.myLooper()===Looper.getMainLooper()
 
     fun install(loader:ClassLoader){
-        val recordingHook=object:XC_MethodHook(){
+        val recordingHook=object:HookCallback(){
             override fun afterHookedMethod(param:MethodHookParam){
                 val capture=active.get() ?: return
                 // The first Picture begun by createDrawable is the preview itself.
@@ -64,15 +64,15 @@ internal object DragPreviewMaterial {
             }
         }
         try {
-            ModuleHooks.hookMethod(XposedHelpers.findMethodExact(Picture::class.java,"beginRecording",Int::class.javaPrimitiveType,Int::class.javaPrimitiveType),recordingHook)
+            ModuleHooks.hookMethod(HookReflection.findMethodExact(Picture::class.java,"beginRecording",Int::class.javaPrimitiveType,Int::class.javaPrimitiveType),recordingHook)
         }catch(t:Throwable){
             GlassLogger.e("DragPreview","Picture recording unavailable; drag previews keep the native snapshot",t)
             return
         }
-        val createHook=object:XC_MethodHook(){
+        val createHook=object:HookCallback(){
             override fun beforeHookedMethod(param:MethodHookParam){
                 if(!main || !PrefsHelper.enabled)return
-                val view=try {XposedHelpers.getObjectField(param.thisObject,"mView") as? View}catch(_:Throwable){null} ?: return
+                val view=try {HookReflection.getObjectField(param.thisObject,"mView") as? View}catch(_:Throwable){null} ?: return
                 param.setObjectExtra("priorDragCapture",active.get())
                 param.setObjectExtra("dragCapture",true)
                 active.set(Capture(view))
@@ -93,7 +93,7 @@ internal object DragPreviewMaterial {
         }
         var hooks=0
         for(name in listOf("com.android.launcher3.graphics.DragPreviewProvider","com.android.launcher3.shortcuts.ShortcutDragPreviewProvider")){
-            val type=XposedHelpers.findClassIfExists(name,loader) ?: continue
+            val type=HookReflection.findClassIfExists(name,loader) ?: continue
             for(method in type.declaredMethods){
                 if(method.name=="createDrawable" && method.parameterTypes.isEmpty()){ModuleHooks.hookMethod(method,createHook);hooks++}
             }

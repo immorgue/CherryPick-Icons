@@ -5,9 +5,9 @@ import android.view.View
 import android.view.ViewGroup
 import com.cosmod.launcherglass.ui.SettingsProvider
 import com.cosmod.launcherglass.util.DesktopSizing
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
+import com.cosmod.launcherglass.bridge.HookCallback
+import com.cosmod.launcherglass.bridge.HookRuntime
+import com.cosmod.launcherglass.bridge.HookReflection
 import java.lang.ref.WeakReference
 import java.util.WeakHashMap
 import kotlin.math.roundToInt
@@ -39,8 +39,8 @@ internal object DesktopOffsets {
     fun install(loader:ClassLoader) {
         // OEM spring drops calculate absolute Y from DeviceProfile rather
         // than the laid-out hotseat. Apply the same desktop offset there.
-        XposedHelpers.findClassIfExists("com.android.launcher3.OplusHotseat",loader)?.let {hotseat ->
-            ModuleHooks.hookAllMethods(hotseat,"getFinalXY",object:XC_MethodHook(){
+        HookReflection.findClassIfExists("com.android.launcher3.OplusHotseat",loader)?.let {hotseat ->
+            ModuleHooks.hookAllMethods(hotseat,"getFinalXY",object:HookCallback(){
                 override fun afterHookedMethod(param:MethodHookParam){
                     val view=param.thisObject as? View ?: return
                     if(!enabled || param.hasThrowable() || view.resources.configuration.orientation!=android.content.res.Configuration.ORIENTATION_PORTRAIT)return
@@ -51,20 +51,20 @@ internal object DesktopOffsets {
                     }
                 }
             })
-            ModuleHooks.hookAllMethods(hotseat,"getFinalDestRect",object:XC_MethodHook(){
+            ModuleHooks.hookAllMethods(hotseat,"getFinalDestRect",object:HookCallback(){
                 override fun afterHookedMethod(param:MethodHookParam){
                     if(!enabled || param.hasThrowable())return
                     val rect=param.args.firstOrNull() as? android.graphics.Rect ?: return
                     val child=param.args.getOrNull(1) as? View ?: return
                     if(child.resources.configuration.orientation!=android.content.res.Configuration.ORIENTATION_PORTRAIT)return
                     val bounds=android.graphics.Rect()
-                    try {XposedHelpers.callMethod(child,"getWorkspaceVisualDragBounds",bounds)}catch(_:Throwable){return}
+                    try {HookReflection.callMethod(child,"getWorkspaceVisualDragBounds",bounds)}catch(_:Throwable){return}
                     if(!bounds.isEmpty)rect.set(bounds)
                 }
             })
         }
-        var owner:Class<*>?=XposedHelpers.findClassIfExists("com.android.launcher3.OplusDragLayer",loader)
-            ?: XposedHelpers.findClassIfExists("com.android.launcher3.dragndrop.DragLayer",loader)
+        var owner:Class<*>?=HookReflection.findClassIfExists("com.android.launcher3.OplusDragLayer",loader)
+            ?: HookReflection.findClassIfExists("com.android.launcher3.dragndrop.DragLayer",loader)
         val signature=arrayOf(Boolean::class.javaPrimitiveType,Int::class.javaPrimitiveType,
             Int::class.javaPrimitiveType,Int::class.javaPrimitiveType,Int::class.javaPrimitiveType)
         while(owner!=null){
@@ -72,7 +72,7 @@ internal object DesktopOffsets {
             if(method!=null){
                 val layout=View::class.java.getDeclaredMethod("layout",Int::class.javaPrimitiveType,
                     Int::class.javaPrimitiveType,Int::class.javaPrimitiveType,Int::class.javaPrimitiveType)
-                XposedBridge.hookMethod(layout,object:XC_MethodHook(){
+                HookRuntime.hookMethod(layout,object:HookCallback(){
                     override fun beforeHookedMethod(param:MethodHookParam){
                         val dock=dockLayouts.get() ?: return
                         if(param.thisObject!==dock.view)return
@@ -81,7 +81,7 @@ internal object DesktopOffsets {
                         dock.laidOut=true
                     }
                 })
-                XposedBridge.hookMethod(method,object:XC_MethodHook(){
+                HookRuntime.hookMethod(method,object:HookCallback(){
                     override fun beforeHookedMethod(param:MethodHookParam){
                         val root=param.thisObject as? View ?: return
                         param.setObjectExtra("previousDockLayout",dockLayouts.get())

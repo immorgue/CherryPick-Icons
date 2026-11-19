@@ -9,6 +9,7 @@ import kotlin.math.*
 internal object GlassGeometry {
     private data class ShapeKey(val w:Int,val h:Int,val hash:Long)
     private class Geometry(val key:ShapeKey,val alpha:ByteArray,val rounding:Float){
+        var field:Bitmap?=null
         // Only the contour rim needs the distance field; material creation
         // with the contour switched off reads alpha and rounding only.
         var depth:FloatArray?=null
@@ -16,6 +17,7 @@ internal object GlassGeometry {
     private class NativeMask(val generation:Int,val geometry:Geometry)
     private data class RimKey(val shape:ShapeKey,val opacity:Int,val edgeOnly:Boolean)
     private val nativeMasks=WeakHashMap<Bitmap,NativeMask>()
+    private val contourFields=WeakHashMap<Bitmap,Bitmap>()
     // Sized for all plate, cluster and panel masks in use plus a history:
     // a 2 MiB limit held two large masks, so alternating shapes recomputed
     // their distance fields on the UI thread during drag and animations.
@@ -95,6 +97,50 @@ internal object GlassGeometry {
         return depth
     }
     @Synchronized fun rounding(mask:Bitmap)=geometry(mask).rounding
+    /** Cached floating-point normals/depth of the actual contour, not a circular approximation. */
+    // putShort writes the raw FP16 channel bits expected by RGBA_F16.
+    @android.annotation.SuppressLint("HalfFloat")
+    @Synchronized fun contourField(mask:Bitmap):Bitmap {
+        contourFields[mask]?.let {return it}
+        val scale=minOf(1f,384f/maxOf(mask.width,mask.height))
+        val input=if(scale<1f)Bitmap.createScaledBitmap(mask,(mask.width*scale).roundToInt().coerceAtLeast(1),
+            (mask.height*scale).roundToInt().coerceAtLeast(1),true)else mask
+        val shape=geometry(input)
+        shape.field?.let {contourFields[mask]=it;return it}
+        val depth=depth(shape);val w=input.width;val h=input.height
+        // Raster-mask stair steps become visible streaks when the lens displaces
+        // by tens of pixels. Smooth only its normal field, leaving the mask intact.
+        val horizontal=FloatArray(depth.size)
+        val smooth=FloatArray(depth.size)
+        val kernel=intArrayOf(1,4,6,4,1)
+        for(y in 0 until h)for(x in 0 until w){
+            var value=0f
+            for(offset in -2..2)value+=depth[y*w+(x+offset).coerceIn(0,w-1)]*kernel[offset+2]
+            horizontal[y*w+x]=value/16f
+        }
+        for(y in 0 until h)for(x in 0 until w){
+            var value=0f
+            for(offset in -2..2)value+=horizontal[(y+offset).coerceIn(0,h-1)*w+x]*kernel[offset+2]
+            smooth[y*w+x]=value/16f
+        }
+        val range=maxOf(w,h).toFloat()
+        val bytes=java.nio.ByteBuffer.allocateDirect(w*h*8).order(java.nio.ByteOrder.nativeOrder())
+        for(y in 0 until h)for(x in 0 until w){
+            val i=y*w+x
+            val dx=smooth[y*w+(x-1).coerceAtLeast(0)]-smooth[y*w+(x+1).coerceAtMost(w-1)]
+            val dy=smooth[(y-1).coerceAtLeast(0)*w+x]-smooth[(y+1).coerceAtMost(h-1)*w+x]
+            val length=sqrt(dx*dx+dy*dy).coerceAtLeast(1f)
+            bytes.putShort(android.util.Half.toHalf(dx/length*.5f+.5f))
+            bytes.putShort(android.util.Half.toHalf(dy/length*.5f+.5f))
+            bytes.putShort(android.util.Half.toHalf(max(0f,smooth[i]-.5f)/range))
+            bytes.putShort(android.util.Half.toHalf(1f))
+        }
+        bytes.rewind()
+        val field=Bitmap.createBitmap(w,h,Bitmap.Config.RGBA_F16)
+        field.copyPixelsFromBuffer(bytes)
+        shape.field=field;contourFields[mask]=field
+        return field
+    }
     @Synchronized fun rim(mask:Bitmap,edgeOnly:Boolean=false):Bitmap {
         val shape=geometry(mask)
         val key=RimKey(shape.key,if(PrefsHelper.iconStroke)PrefsHelper.strokeOpacity.coerceIn(0,100)else 0,edgeOnly)

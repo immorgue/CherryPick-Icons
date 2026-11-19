@@ -33,7 +33,11 @@ def main():
         assert not verify(classes)['errors'],item['file']
         p='Lcom/android/launcher3/'
         ns=p+'anim/iconsurfacemanager/'+('surface/' if p+'anim/iconsurfacemanager/surface/IconSurfaceRenderer;' in classes else '')
+        toggle='Lcom/android/launcher/togglebar/views/'
+        secondary=toggle+'ToggleToolbarSecondaryContainer;'
+        toolbar=secondary if secondary in classes else toggle+'ToggleStateToolbar;'
         cases=[
+            ('customize_toolbar',toolbar,'methods','onFinishInflate'),
             ('folder_geometry',p+'folder/big/SmoothRoundDrawable;','fields','mPath'),
             ('folder_geometry',p+'folder/OplusPreviewBackground;','methods','getNormalDrawable'),
             ('folder_backdrops',p+'folder/OplusFolder;','fields','mContentBackground'),

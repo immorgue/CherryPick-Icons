@@ -4,8 +4,8 @@ import android.graphics.drawable.Drawable
 import android.os.Looper
 import android.view.View
 import com.cosmod.launcherglass.util.GlassLogger
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedHelpers
+import com.cosmod.launcherglass.bridge.HookCallback
+import com.cosmod.launcherglass.bridge.HookReflection
 
 /**
  * OEM edit mode re-records launcher elements into its own select-dot nodes:
@@ -31,10 +31,10 @@ internal object ForeignDraw {
 
     fun install(loader:ClassLoader){
         canvasTag=try {
-            XposedHelpers.getStaticIntField(XposedHelpers.findClass("com.android.launcher3.R\$id",loader),"key_edit_mode_view_canvas_tag")
+            HookReflection.getStaticIntField(HookReflection.findClass("com.android.launcher3.R\$id",loader),"key_edit_mode_view_canvas_tag")
         }catch(_:Throwable){0}
         var hooked=0
-        val scope=object:XC_MethodHook(){
+        val scope=object:HookCallback(){
             override fun beforeHookedMethod(param:MethodHookParam){
                 if(Looper.myLooper()!==Looper.getMainLooper())return
                 val host=param.thisObject as? View ?: NativeIconAccess.field(param.thisObject,"mHostView") as? View ?: return
@@ -48,7 +48,7 @@ internal object ForeignDraw {
             }
         }
         for((name,methods) in scopes){
-            val type=XposedHelpers.findClassIfExists(name,loader) ?: continue
+            val type=HookReflection.findClassIfExists(name,loader) ?: continue
             for(method in type.declaredMethods){
                 if(method.name !in methods)continue
                 ModuleHooks.hookMethod(method,scope);hooked++

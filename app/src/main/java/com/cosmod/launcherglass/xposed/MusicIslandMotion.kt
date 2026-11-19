@@ -15,9 +15,9 @@ import android.view.animation.PathInterpolator
 import android.view.animation.LinearInterpolator
 import com.cosmod.launcherglass.util.IslandSpring
 import com.cosmod.launcherglass.util.GlassLogger
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
+import com.cosmod.launcherglass.bridge.HookCallback
+import com.cosmod.launcherglass.bridge.HookRuntime
+import com.cosmod.launcherglass.bridge.HookReflection
 import java.util.WeakHashMap
 import java.lang.ref.WeakReference
 
@@ -76,30 +76,30 @@ internal object MusicIslandMotion {
 
     fun install(loader:ClassLoader,enabled:()->Boolean,anchor:()->Rect?,media:(View)->Boolean){
         val prefix="com.oplus.systemui.plugins.seedling."
-        val graph=XposedHelpers.findClassIfExists(prefix+"engine.animatorengine.h",loader) ?: return
-        val fragment=XposedHelpers.findClassIfExists(prefix+"card.animation.b",loader) ?: return
-        nativeStateType=XposedHelpers.findClassIfExists(prefix+"capsule.animation.c",loader)
+        val graph=HookReflection.findClassIfExists(prefix+"engine.animatorengine.h",loader) ?: return
+        val fragment=HookReflection.findClassIfExists(prefix+"card.animation.b",loader) ?: return
+        nativeStateType=HookReflection.findClassIfExists(prefix+"capsule.animation.c",loader)
         // A real OEM fragment retains the engine's view ownership and interruption bookkeeping.
-        XposedBridge.hookAllMethods(fragment,"g",object:XC_MethodHook(){
+        HookRuntime.hookAllMethods(fragment,"g",object:HookCallback(){
             override fun beforeHookedMethod(p:MethodHookParam){
                 @Suppress("UNCHECKED_CAST")
-                val payload=XposedHelpers.getAdditionalInstanceField(p.thisObject,"CherryPickMusicMorph") as? Array<Any> ?: return
+                val payload=HookReflection.getAdditionalInstanceField(p.thisObject,"CherryPickMusicMorph") as? Array<Any> ?: return
                 p.result=animate(payload[0] as View,payload[1] as View,payload[2] as Rect,payload[3] as Boolean)
                 GlassLogger.i("MusicIsland","fragment animator created")
             }
         })
         @Suppress("UNCHECKED_CAST")
-        fun parts(scene: Any) = XposedHelpers.getObjectField(scene, "o") as MutableList<Any>
+        fun parts(scene: Any) = HookReflection.getObjectField(scene, "o") as MutableList<Any>
 
         for((name,opening) in listOf("H" to true,"G" to true,"I" to false,"k" to false)){
-            val factory=XposedHelpers.findClassIfExists(prefix+"card.animation."+name,loader) ?: continue
+            val factory=HookReflection.findClassIfExists(prefix+"card.animation."+name,loader) ?: continue
             val build=factory.declaredMethods.singleOrNull {it.name=="k" && it.parameterCount==0 && it.returnType==graph} ?: continue
-            XposedBridge.hookMethod(build,object:XC_MethodHook(){
+            HookRuntime.hookMethod(build,object:HookCallback(){
                 override fun afterHookedMethod(p:MethodHookParam){
                     if(!enabled() || p.hasThrowable())return
-                    val target=XposedHelpers.getObjectField(p.thisObject,"b")
+                    val target=HookReflection.getObjectField(p.thisObject,"b")
                     val card=(if(name=="k") (target as? List<*>)?.singleOrNull() else target) as? View ?: return
-                    val content=try {XposedHelpers.callMethod(card,"getContentView") as? View}catch(_:Throwable){null} ?: return
+                    val content=try {HookReflection.callMethod(card,"getContentView") as? View}catch(_:Throwable){null} ?: return
                     val source=anchor() ?: return
                     GlassLogger.i("MusicIsland","factory $name media=${media(content)} size=${card.measuredWidth}x${card.measuredHeight}")
                     if(!media(content) || card.measuredWidth<=0 || card.measuredHeight<=0)return
@@ -107,8 +107,8 @@ internal object MusicIslandMotion {
                     // The interrupted close factory returns a parent graph. Keep its
                     // listeners and replace only the fragments belonging to the music card.
                     val scene=if(name=="k") parts(root).singleOrNull()?.takeIf(graph::isInstance) ?: return else root
-                    val part=XposedHelpers.newInstance(fragment,card,1f,1f,420L,curve,0)
-                    XposedHelpers.setAdditionalInstanceField(part,"CherryPickMusicMorph",arrayOf(card,content,source,opening))
+                    val part=HookReflection.newInstance(fragment,card,1f,1f,420L,curve,0)
+                    HookReflection.setAdditionalInstanceField(part,"CherryPickMusicMorph",arrayOf(card,content,source,opening))
                     parts(scene).apply {clear();add(part)}
                     // Native factories create an opaque black foreground while building discarded
                     // fragments. Restore it before returning, not later when the chosen animator starts.
@@ -116,8 +116,8 @@ internal object MusicIslandMotion {
                 }
             })
         }
-        val card=XposedHelpers.findClassIfExists(prefix+"card.ui.view.CardView",loader) ?: return
-        XposedBridge.hookAllMethods(card,"dispatchTouchEvent",object:XC_MethodHook(){
+        val card=HookReflection.findClassIfExists(prefix+"card.ui.view.CardView",loader) ?: return
+        HookRuntime.hookAllMethods(card,"dispatchTouchEvent",object:HookCallback(){
             override fun beforeHookedMethod(p:MethodHookParam){
                 val view=p.thisObject as? ViewGroup ?: return
                 val state=states[view] ?: return
@@ -131,7 +131,7 @@ internal object MusicIslandMotion {
                 }
             }
         })
-        XposedBridge.hookAllMethods(card,"dispatchDraw",object:XC_MethodHook(){
+        HookRuntime.hookAllMethods(card,"dispatchDraw",object:HookCallback(){
             override fun beforeHookedMethod(p:MethodHookParam){
                 val view=p.thisObject as? View ?: return
                 val state=states[view] ?: return
@@ -148,44 +148,44 @@ internal object MusicIslandMotion {
                 state.content?.get()?.let {if(it.alpha!=state.contentOpacity)it.alpha=state.contentOpacity}
             }
         })
-        XposedBridge.hookAllMethods(card,"setAlpha",object:XC_MethodHook(){
+        HookRuntime.hookAllMethods(card,"setAlpha",object:HookCallback(){
             override fun beforeHookedMethod(p:MethodHookParam){
                 val view=p.thisObject as? View ?: return
                 val state=states[view] ?: return
                 if(!state.writingAlpha && ownsRunningMotion(view))p.args[0]=state.opacity
             }
         })
-        XposedHelpers.findClassIfExists(prefix+"animatorscenes.I",loader)?.let {listener->
-            XposedBridge.hookAllMethods(listener,"onAnimationEnd",object:XC_MethodHook(){
+        HookReflection.findClassIfExists(prefix+"animatorscenes.I",loader)?.let {listener->
+            HookRuntime.hookAllMethods(listener,"onAnimationEnd",object:HookCallback(){
                 override fun beforeHookedMethod(p:MethodHookParam){
-                    val view=try {XposedHelpers.getObjectField(p.thisObject,"b") as? View}catch(_:Throwable){null} ?: return
+                    val view=try {HookReflection.getObjectField(p.thisObject,"b") as? View}catch(_:Throwable){null} ?: return
                     // Completion of a cancelled scene must not hide/reset its replacement.
                     if(ownsRunningMotion(view))p.result=null
                 }
             })
         }
-        XposedBridge.hookAllMethods(card,"g",object:XC_MethodHook(){
+        HookRuntime.hookAllMethods(card,"g",object:HookCallback(){
             override fun beforeHookedMethod(p:MethodHookParam){
                 val state=states[p.thisObject as? View] ?: return
                 if(!state.cancelled || state.retargeting)p.result=null
             }
         })
-        for(method in listOf("f","k"))XposedBridge.hookAllMethods(card,method,object:XC_MethodHook(){
+        for(method in listOf("f","k"))HookRuntime.hookAllMethods(card,method,object:HookCallback(){
             override fun beforeHookedMethod(p:MethodHookParam){
                 val view=p.thisObject as? View ?: return
                 if(ownsRunningMotion(view))p.result=null
             }
         })
-        XposedBridge.hookAllMethods(card,"j",object:XC_MethodHook(){
+        HookRuntime.hookAllMethods(card,"j",object:HookCallback(){
             override fun beforeHookedMethod(p:MethodHookParam){
                 val view=p.thisObject as? View ?: return
                 cleanup(view)
             }
         })
-        XposedBridge.hookAllMethods(card,"onDetachedFromWindow",object:XC_MethodHook(){
+        HookRuntime.hookAllMethods(card,"onDetachedFromWindow",object:HookCallback(){
             override fun afterHookedMethod(p:MethodHookParam){cleanup(p.thisObject as? View ?: return)}
         })
-        XposedBridge.hookAllMethods(card,"onLayout",object:XC_MethodHook(){
+        HookRuntime.hookAllMethods(card,"onLayout",object:HookCallback(){
             override fun afterHookedMethod(p:MethodHookParam){
                 val view=p.thisObject as? View ?: return
                 val state=states[view] ?: return
@@ -222,8 +222,8 @@ internal object MusicIslandMotion {
         val spring=IslandSpring(from,if(opening)state.velocity else state.velocity.coerceAtMost(0f),to,opening)
         val heightSpring=IslandSpring(state.heightProgress,
             if(opening)state.heightVelocity else state.heightVelocity.coerceAtMost(0f),to,opening,if(opening)1.0 else 1.35)
-        val nativeState=nativeStateType?.let {XposedHelpers.newInstance(it,width.toFloat(),height.toFloat())}
-        if(nativeState!=null)XposedHelpers.callMethod(card,"setAnimatorState",nativeState)
+        val nativeState=nativeStateType?.let {HookReflection.newInstance(it,width.toFloat(),height.toFloat())}
+        if(nativeState!=null)HookReflection.callMethod(card,"setAnimatorState",nativeState)
         fun smooth(value:Float):Float=value.coerceIn(0f,1f).let {it*it*(3-2*it)}
         fun frame(progress:Float,heightProgress:Float){
             state.progress=progress
@@ -250,10 +250,10 @@ internal object MusicIslandMotion {
             state.writingAlpha=true
             try {card.alpha=state.opacity}finally {state.writingAlpha=false}
             if(nativeState!=null){
-                XposedHelpers.setFloatField(nativeState,"a",state.rect.width())
-                XposedHelpers.setFloatField(nativeState,"b",state.rect.height())
-                XposedHelpers.setFloatField(nativeState,"c",0f)
-                XposedHelpers.setFloatField(nativeState,"d",0f)
+                HookReflection.setFloatField(nativeState,"a",state.rect.width())
+                HookReflection.setFloatField(nativeState,"b",state.rect.height())
+                HookReflection.setFloatField(nativeState,"c",0f)
+                HookReflection.setFloatField(nativeState,"d",0f)
             }
             val hide=(progress/.3f).coerceIn(0f,1f)
             statusOpacity(1-hide*hide*(3-2*hide))
@@ -315,7 +315,7 @@ internal object MusicIslandMotion {
         card.alpha=0f;card.scaleX=1f;card.scaleY=1f
         card.outlineProvider=state.outline;card.clipToOutline=state.clip;card.clipBounds=state.bounds
         card.foreground=null;card.invalidateOutline()
-        try {(XposedHelpers.callMethod(card,"getContentView") as? View)?.alpha=1f}catch(_:Throwable){}
+        try {(HookReflection.callMethod(card,"getContentView") as? View)?.alpha=1f}catch(_:Throwable){}
         statusOpacity(1f)
         status.clear()
     }

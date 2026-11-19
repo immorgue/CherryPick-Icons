@@ -41,6 +41,12 @@ def verify(d):
  method('dock_visibility',p+'OplusHotseat;','hasVerticalHotseat','()Z')
  method('dock_visibility',p+'OplusBubbleTextView;','getIconBounds','(Landroid/graphics/Rect;)V')
  check('dock_visibility',p+'OplusDragLayer;' in d,'OplusDragLayer view for expanded dock')
+ toggle='Lcom/android/launcher/togglebar/views/'
+ secondary=toggle+'ToggleToolbarSecondaryContainer;'
+ toolbar=secondary if secondary in d else toggle+'ToggleStateToolbar;'
+ method('customize_toolbar',toolbar,'onFinishInflate','()V',declared=True)
+ feedback='Lcom/android/launcher/views/PressFeedbackButton;'
+ method('customize_toolbar',feedback,'<init>','(Landroid/content/Context;Landroid/util/AttributeSet;)V',declared=True)
  # ParentBackdrop uses these stable scopes by name; the recycler base class
  # can be obfuscated (17.5) because no recycler-specific API is called.
  for n in ['folder/FolderIcon','folder/Folder','folder/OplusFolder','folder/FolderRoundImageView',

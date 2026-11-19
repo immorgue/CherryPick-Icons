@@ -16,6 +16,10 @@ import kotlin.math.roundToInt
  */
 object GlassVolume {
     private const val STOPS = 65
+    internal const val GLYPH_SHADE_START = .32f
+    internal const val GLYPH_SHADE_END = .94f
+    internal const val GLYPH_SHADE_STRENGTH = .38f
+    internal const val RIM_MIN_REFLECTANCE = .22f
 
     fun shader(height: Float, opacity: Int): Shader {
         val strength = opacity.coerceIn(0, 100) / 100f
@@ -35,4 +39,15 @@ object GlassVolume {
 
     /** A dithered paint for the volume gradient. */
     fun paint(flags: Int = Paint.ANTI_ALIAS_FLAG): Paint = Paint(flags or Paint.DITHER_FLAG)
+
+    fun glyphShade(height: Float, opacity: Int): Shader {
+        val strength = GLYPH_SHADE_STRENGTH * opacity.coerceIn(0, 100) / 100f
+        val start = GLYPH_SHADE_START
+        val span = GLYPH_SHADE_END - start
+        val stops = floatArrayOf(0f, start, start + span * .25f, start + span * .5f, start + span * .75f,
+            GLYPH_SHADE_END, 1f)
+        val levels = floatArrayOf(0f, 0f, .15625f, .5f, .84375f, 1f, 1f)
+        val colors = IntArray(levels.size) { (levels[it] * strength * 255f).roundToInt() shl 24 }
+        return LinearGradient(0f, 0f, 0f, height.coerceAtLeast(1f), colors, stops, Shader.TileMode.CLAMP)
+    }
 }

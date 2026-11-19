@@ -21,7 +21,6 @@ class KyantMaterialTest {
         assertEquals(300,SettingsDefaults.integer(SettingsProvider.KEY_APP_OPEN_RESPONSE))
         assertEquals(70,SettingsDefaults.integer(SettingsProvider.KEY_APP_CLOSE_SPEED))
         assertEquals(200,SettingsDefaults.integer(SettingsProvider.KEY_APP_GENIE_STRENGTH))
-        assertEquals(200,SettingsDefaults.integer(SettingsProvider.KEY_FLIGHT_ICON_REVEAL))
         assertTrue(SettingsDefaults.boolean(SettingsProvider.KEY_DOCK_ENABLED))
         assertEquals(45,SettingsDefaults.integer(SettingsProvider.KEY_KYANT_WIDTH))
         assertEquals(300,SettingsDefaults.integer(SettingsProvider.KEY_KYANT_DISTORTION))

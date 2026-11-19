@@ -1,5 +1,21 @@
 # Изменения
 
+## v0.3.239 Beta
+
+### Русский
+
+- Новый интерфейс настроек с предпросмотром и отдельными переключателями для функций рабочего стола.
+- Режимы иконок Default, Dark, Clear и Tinted, автоподбор оттенка из обоев и меню Customize прямо в лаунчере. По умолчанию включены Auto Tinted и Auto для дока.
+- Стекло для виджетов часов и погоды, улучшения размытия и экспериментального музыкального островка.
+- Переход на LSPosed API 102. После обновления нужен перезапуск лаунчера. Анимации приложений выключены по умолчанию и пока не тестировались на ColorOS 16.
+
+### English
+
+- Redesigned settings with previews and separate switches for home screen features.
+- Default, Dark, Clear and Tinted icons, automatic wallpaper-based tint, and a Customize menu in the launcher. Auto Tinted and Dock Auto are selected by default.
+- Glass for clock and weather widgets, plus improvements to blur and the experimental music island.
+- Migrated to LSPosed API 102. Restart the launcher after updating. App animations are off by default and haven’t been tested on ColorOS 16 yet.
+
 ## 0.2.90-dev — родные углы, режим «Только цвет» и новое меню
 
 - Обычные папки используют сохранённый родной контур GPU; мультипапки обрезаются родным векторным контуром на конечном Canvas, без второй скруглённой альфа-маски. Исправление углов подтверждено пользователем на 17.5.4.

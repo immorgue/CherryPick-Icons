@@ -5,7 +5,7 @@ import android.os.Build
 import android.view.View
 import com.cosmod.launcherglass.util.GlassVolume
 import com.cosmod.launcherglass.util.WallpaperHelper
-import de.robv.android.xposed.XposedHelpers
+import com.cosmod.launcherglass.bridge.HookReflection
 
 /** Dock-specific, direct-resolution path rendering; no nested sampler RenderNode. */
 internal class DockRenderer {
@@ -64,7 +64,7 @@ internal class DockRenderer {
                 }
                 staticSource!!
             }else{
-                val world=Matrix();XposedHelpers.callMethod(view,"transformMatrixToGlobal",world)
+                val world=Matrix();HookReflection.callMethod(view,"transformMatrixToGlobal",world)
                 val screen=RectF(rect);world.mapRect(screen)
                 WallpaperFootprint.source(it,dm.widthPixels,dm.heightPixels,screen)
             }
@@ -90,7 +90,7 @@ internal class DockRenderer {
                 sampleWidth=w;sampleHeight=h;sampleClock.record(now,fps)
             }
         }
-        val shape=path ?: Path().apply {addRoundRect(RectF(rect),radius,radius,Path.Direction.CW)}
+        val shape=path ?: com.cosmod.launcherglass.util.ContinuousCorners.path(Path(),RectF(rect),radius)
         if(canvas.isHardwareAccelerated){
             val prefsKey=PrefsHelper.gpuEffects.hashCode()*31+PrefsHelper.gradientOpacity*7+
                 PrefsHelper.iconStroke.hashCode()*13+PrefsHelper.strokeOpacity*17
@@ -104,6 +104,8 @@ internal class DockRenderer {
             // Static content changes only on invalidation; apply that event now.
             val due=structureChanged || !liveWallpaper || plateClock.remainingNs(nowNs,30)==0L
             if((changed && due) || !plate.hasDisplayList()){
+                if(structureChanged && com.cosmod.launcherglass.util.GlassLogger.enabled)
+                    com.cosmod.launcherglass.util.GlassLogger.animation("Dock", "Recording plate: rect=$rect radius=$radius optics=${style.kyant} source=$source image=${wallpaper?.width}x${wallpaper?.height} hardware=${canvas.isHardwareAccelerated}")
                 android.os.Trace.beginSection("CherryPick.dockRecord")
                 plate.setPosition(0,0,w,h)
                 val recording=plate.beginRecording(w,h)
@@ -123,8 +125,10 @@ internal class DockRenderer {
         }else drawPlate(canvas,rect,shape,radius,alpha,wallpaper,source,style)
         return true
     }
-    private fun drawPlate(canvas:Canvas,rect:Rect,shape:Path,radius:Float,alpha:Float,wallpaper:Bitmap?,source:RectF?,style:GlassStyle){
+    internal fun drawPlate(canvas:Canvas,rect:Rect,shape:Path,radius:Float,alpha:Float,wallpaper:Bitmap?,source:RectF?,style:GlassStyle){
         val w=rect.width();val h=rect.height()
+        val style=if(style.kyant!=null && radius>0f)
+            style.copy(cornerField=GlassGeometry.contourField(contourMask(w,h,radius,shape,rect)))else style
         val saved=if(alpha<.999f)canvas.saveLayerAlpha(RectF(rect),(alpha.coerceIn(0f,1f)*255).toInt()) else canvas.save()
         try {
             canvas.clipPath(shape)
@@ -136,23 +140,41 @@ internal class DockRenderer {
                 val gpu=if(style.kyant!=null && PrefsHelper.gpuEffects && canvas.isHardwareAccelerated && Build.VERSION.SDK_INT>=33){
                     val l=lens ?: LiquidGlassShader.create().also {lens=it}
                     l?.update(image,solid,source,w,h,style.filter,(radius/minOf(w,h)).coerceIn(0f,.5f),style)
-                }else null
+                }else if(style.kyant!=null && (!PrefsHelper.gpuEffects || !canvas.isHardwareAccelerated))
+                    CpuLiquidGlass.shader(image,contourMask(w,h,radius,shape,rect),w,h,source,(radius/minOf(w,h)).coerceIn(0f,.5f),style)
+                else null
+                if(com.cosmod.launcherglass.util.GlassLogger.enabled)
+                    com.cosmod.launcherglass.util.GlassLogger.animationLimited("Dock","lensDraw",500) {"Lens=${gpu!=null} field=${style.cornerField?.width}x${style.cornerField?.height} finish=${style.finish}"}
                 paint.shader=gpu ?: GlassGeometry.wallpaperShader(image).apply {
                     setLocalMatrix(Matrix().apply {setRectToRect(source,localRect,Matrix.ScaleToFit.FILL)})
                 }
                 if(gpu==null)paint.colorFilter=style.filter
-                canvas.drawRect(localRect,paint)
+                if(style.finish.active && canvas.isHardwareAccelerated){
+                    val node=finishNode ?: RenderNode("CherryPick.dockFinish").also {finishNode=it}
+                    node.setPosition(0,0,w,h)
+                    node.setRenderEffect(MaterialFinish.effect(null,w,h,style.finish))
+                    val recording=node.beginRecording(w,h)
+                    try {recording.drawRect(localRect,paint)}finally{node.endRecording()}
+                    canvas.drawRenderNode(node)
+                }else if(style.finish.active){
+                    val bitmap=Bitmap.createBitmap(w,h,Bitmap.Config.ARGB_8888)
+                    Canvas(bitmap).drawRect(localRect,paint)
+                    val finished=MaterialFinish.applyCpu(bitmap,style.finish)
+                    canvas.drawBitmap(finished,0f,0f,null)
+                    if(finished!==bitmap)finished.recycle()
+                    bitmap.recycle()
+                }else canvas.drawRect(localRect,paint)
                 paint.shader=null;paint.colorFilter=null
             }
             paint.color=(style.opacity.coerceIn(0,100)*255/100 shl 24) or ((style.plateColor ?: PrefsHelper.plateColor(SurfaceTone.base())) and 0xffffff)
             canvas.drawRect(0f,0f,w.toFloat(),h.toFloat(),paint)
-            if(PrefsHelper.gradientOpacity>0){
+            if(!DockSettings.auto && PrefsHelper.gradientOpacity>0){
                 paint.color=Color.WHITE;paint.shader=GlassVolume.shader(h.toFloat(),PrefsHelper.gradientOpacity)
                 canvas.drawRect(0f,0f,w.toFloat(),h.toFloat(),paint);paint.shader=null
             }
         } finally {canvas.restoreToCount(saved)}
         // Draw a directional antialiased contour directly at device resolution.
-        if(PrefsHelper.iconStroke && PrefsHelper.strokeOpacity>0 && alpha>0f){
+        if(!DockSettings.auto && PrefsHelper.iconStroke && PrefsHelper.strokeOpacity>0 && alpha>0f){
             val edge=Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG).apply {
                 this.style=Paint.Style.STROKE;strokeWidth=2f
                 val a=(PrefsHelper.strokeOpacity.coerceIn(0,100)*.8f*alpha).toInt().coerceIn(0,255)
@@ -161,5 +183,21 @@ internal class DockRenderer {
             }
             val save=canvas.save();canvas.clipPath(shape);canvas.drawPath(shape,edge);canvas.restoreToCount(save)
         }
+    }
+    private var finishNode:RenderNode?=null
+    private var maskImage:Bitmap?=null
+    private var maskWidth=0
+    private var maskHeight=0
+    private var maskRadius=Float.NaN
+    private fun contourMask(w:Int,h:Int,radius:Float,shape:Path,rect:Rect):Bitmap {
+        maskImage?.takeIf {maskWidth==w && maskHeight==h && maskRadius==radius}?.let {return it}
+        val scale=minOf(1f,384f/maxOf(w,h))
+        val mask=Bitmap.createBitmap((w*scale).toInt().coerceAtLeast(1),(h*scale).toInt().coerceAtLeast(1),Bitmap.Config.ARGB_8888)
+        val canvas=Canvas(mask)
+        canvas.scale(mask.width.toFloat()/w,mask.height.toFloat()/h)
+        canvas.translate(-rect.left.toFloat(),-rect.top.toFloat())
+        canvas.drawPath(shape,Paint(Paint.ANTI_ALIAS_FLAG).apply {color=Color.WHITE})
+        maskWidth=w;maskHeight=h;maskRadius=radius;maskImage=mask
+        return mask
     }
 }

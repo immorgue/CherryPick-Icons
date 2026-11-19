@@ -7,10 +7,6 @@ import android.graphics.RectF
 import android.graphics.drawable.Drawable
 import android.os.Looper
 import android.graphics.Matrix
-import android.graphics.Bitmap
-import android.graphics.Paint
-import android.graphics.RenderNode
-import android.graphics.HardwareRenderer
 import android.animation.ValueAnimator
 import android.animation.Animator
 import android.animation.AnimatorListenerAdapter
@@ -22,8 +18,8 @@ import java.lang.ref.WeakReference
 import android.view.View
 import android.view.ViewGroup
 import com.cosmod.launcherglass.util.GlassLogger
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedHelpers
+import com.cosmod.launcherglass.bridge.HookCallback
+import com.cosmod.launcherglass.bridge.HookReflection
 import java.lang.reflect.Method
 import java.util.WeakHashMap
 import kotlin.math.roundToInt
@@ -42,15 +38,6 @@ internal object DockMaterial {
     private const val NATIVE="cherrypick.nativeDock"
     private class Dock {
         val renderer=DockRenderer()
-        val iconRenderer=DockRenderer()
-        val parentIdentity=android.graphics.drawable.ColorDrawable()
-        val parentProbeIdentity=android.graphics.drawable.ColorDrawable()
-        @Volatile var parentSample:ParentBackdrop.Sample?=null
-        var parentMask:Bitmap?=null
-        var parentGeometry:List<Any?>?=null
-        var iconKey:List<Any?>?=null
-        var iconWallpaper:Bitmap?=null
-        var iconSource:Bitmap?=null
         var target=Rect()
         var observing:ViewTreeObserver?=null
         var listener:ViewTreeObserver.OnPreDrawListener?=null
@@ -78,147 +65,35 @@ internal object DockMaterial {
     private var weight=Float.NaN
     private val failures=HashSet<String>()
     private var logged=false
-    // Event-driven gate: the composite backdrop and the hotseat signature are
-    // rebuilt only when the wallpaper, the dock layout or the settings change.
     private var layoutRevision=0L
-    private var lastFrameWallpaper:Bitmap?=null
-    private var lastStamp=Long.MIN_VALUE
-    private var lastLayout=-1L
     fun noteLayout(){layoutRevision++}
 
-    fun enabled()=PrefsHelper.enabled && PrefsHelper.blurEnabled && PrefsHelper.dockEnabled
-
-    /**
-     * Called once per pre-draw from the shared frame listener. Returns after a
-     * single volatile read unless the wallpaper, the dock layout or the
-     * settings changed, so a stationary launcher does no dock work per frame.
-     */
-    fun onFrame(){
-        if(!enabled() || DockSettings.style().colorOnly || docks.isEmpty())return
-        val context=WallpaperHelper.appContext ?: return
-        val wallpaper=WallpaperHelper.getBlurredWallpaper(context)
-        val stamp=WallpaperHelper.stamp()
-        // A live frame is an event too. Never invalidate the layer merely
-        // because pre-draw ran: that schedules another pre-draw indefinitely.
-        if(stamp==lastStamp && layoutRevision==lastLayout &&
-            wallpaper===lastFrameWallpaper)return
-        if(!WallpaperHelper.sourceReady())return
-        // Keep the pending publication for the handoff frame. Do not enqueue
-        // more draws while the OEM owns the launch/return animation.
-        if(LiveBlurEngine.isAppLaunchInProgress || NativeSurfaceLive.active)return
-        lastFrameWallpaper=wallpaper
-        lastStamp=stamp;lastLayout=layoutRevision
-        prepareIconWallpaper(wallpaper)
-        // The plate lives in its own full-screen layer. Refresh it once here
-        // instead of invalidating it on every hotseat draw.
-        for(dock in docks.values){
-            val layer=dock.layer ?: continue
-            if(!layer.isAttachedToWindow)continue
-            layer.active=enabled();layer.sync();layer.invalidate()
-        }
-    }
-
-    /** Independent pixels only: never reference hotseat/icon RenderNodes. */
-    fun prepareIconWallpaper(wallpaper:Bitmap?) {
-        if(!enabled() || wallpaper==null || wallpaper.isRecycled)return
-        for((owner,dock) in docks.entries.toList()) {
-            val hotseat=owner as? ViewGroup ?: continue
-            if(!hotseat.isAttachedToWindow || !hotseat.isShown)continue
-            try {
-                val rect=geometry(hotseat) ?: continue
-                if(PrefsHelper.gpuEffects && android.os.Build.VERSION.SDK_INT>=33){
-                    // Compose the parent plate in the child shader, like folder
-                    // plates. No full-screen bitmap/readback per live frame.
-                    val r=radius(rect)
-                    val maskKey=listOf(Rect(rect),r,SurfaceMaterial.geometryRevision,DockSettings.style().kyant!=null)
-                    if(dock.parentGeometry!=maskKey || dock.parentMask==null){
-                        val mask=Bitmap.createBitmap(rect.width(),rect.height(),Bitmap.Config.ARGB_8888)
-                        val c=Canvas(mask);c.translate(-rect.left.toFloat(),-rect.top.toFloat())
-                        val outline=path(hotseat,rect,r,dock) ?: Path().apply {addRoundRect(RectF(rect),r,r,Path.Direction.CW)}
-                        c.drawPath(outline,Paint(Paint.ANTI_ALIAS_FLAG).apply {color=android.graphics.Color.WHITE})
-                        dock.parentMask=mask;dock.parentGeometry=maskKey
-                    }
-                    ParentBackdrop.record(hotseat,dock.parentIdentity,RectF(rect),dock.parentMask!!,r,DockSettings.style(),true)
-                    dock.parentSample=ParentBackdrop.resolve(hotseat,dock.parentProbeIdentity,wallpaper)
-                    dock.iconSource=wallpaper
-                    continue
-                }
-                val dm=hotseat.resources.displayMetrics
-                val scale=maxOf(dm.widthPixels.toFloat()/wallpaper.width,dm.heightPixels.toFloat()/wallpaper.height)
-                val offset=(wallpaper.width-dm.widthPixels/scale).coerceAtLeast(0f)*LiveBlurEngine.wallpaperScrollRatio
-                // Resting coordinates keep unlock/press transforms out of the
-                // static dock cache, exactly like its own renderer.
-                var x=0f;var y=0f;var node:View?=hotseat
-                while(node!=null){
-                    val parent=node.parent as? View
-                    x+=node.left;y+=node.top
-                    node=parent
-                }
-                val radius=radius(rect)
-                val live=WallpaperHelper.isLiveWallpaper(hotseat.context)
-                val key=listOf(if(live)wallpaper else null,wallpaper.width,wallpaper.height,
-                    WallpaperHelper.getDockWallpaper(hotseat.context),Rect(rect),radius,x,y,scale,if(live)offset else 0f,
-                    DockSettings.style(),PrefsHelper.gradientOpacity,PrefsHelper.iconStroke,PrefsHelper.strokeOpacity,SurfaceMaterial.geometryRevision)
-                if(dock.iconKey==key && dock.iconWallpaper?.isRecycled==false){dock.iconSource=wallpaper;continue}
-                android.os.Trace.beginSection("CherryPick.dockIconBackdrop")
-                try {
-                val recording=RenderNode("CherryPick.dockIconBackdrop")
-                recording.setPosition(0,0,wallpaper.width,wallpaper.height)
-                val canvas=recording.beginRecording(wallpaper.width,wallpaper.height)
-                try {
-                    canvas.drawBitmap(wallpaper,0f,0f,Paint(Paint.FILTER_BITMAP_FLAG))
-                    canvas.translate(offset,0f);canvas.scale(1f/scale,1f/scale);canvas.translate(x,y)
-                    dock.iconRenderer.draw(canvas,hotseat,rect,path(hotseat,rect,radius,dock),radius,1f)
-                }finally{recording.endRecording()}
-                val image=try {
-                    XposedHelpers.callStaticMethod(HardwareRenderer::class.java,"createHardwareBitmap",recording,wallpaper.width,wallpaper.height) as? Bitmap
-                }finally{recording.discardDisplayList()}
-                if(image!=null){
-                    if(!live)BackdropCoordinates.register(image,offset)
-                    dock.iconWallpaper=image;dock.iconSource=wallpaper;dock.iconKey=key
-                }
-                }finally{android.os.Trace.endSection()}
-            }catch(t:Throwable){fail(t)}
-        }
-    }
-
-    fun nativeParentBackdrop(view:View?):ParentBackdrop.Sample? {
-        var current=view
-        repeat(16){
-            val owner=current ?: return null
-            docks[owner]?.let {return if(enabled())it.parentSample else null}
-            current=owner.parent as? View
-        }
-        return null
-    }
-
-    fun iconWallpaper(view:View?,wallpaper:Bitmap):Bitmap {
-        if(!enabled() || view==null || (PrefsHelper.gpuEffects && android.os.Build.VERSION.SDK_INT>=33))return wallpaper
-        var current:View?=view
-        repeat(16){
-            val owner=current ?: return wallpaper
-            docks[owner]?.let {dock ->
-                if(dock.iconSource===wallpaper)return dock.iconWallpaper?.takeUnless {it.isRecycled} ?: wallpaper
-            }
-            current=owner.parent as? View
-        }
-        return wallpaper
-    }
+    fun enabled()=PrefsHelper.enabled && PrefsHelper.dockEnabled &&
+        (PrefsHelper.blurEnabled || DockSettings.hasOwnAppearance)
 
     fun install(loader:ClassLoader){
         DockLayer.install()
-        val type=XposedHelpers.findClassIfExists("com.android.launcher3.OplusHotseat",loader)
+        val type=HookReflection.findClassIfExists("com.android.launcher3.OplusHotseat",loader)
         if(type==null){GlassLogger.i("Dock","OplusHotseat not found; dock unavailable");return}
         val rowBackground=type.declaredFields.none {it.name=="mDockerBackgroundDrawable"}
+        // COS17 onDraw refreshes this field AFTER our before-hook temporarily
+        // clears it. Without this guard it rebuilds and paints a stock frosted
+        // plate over the independent Kyant layer in that same draw.
+        ModuleHooks.hookAllMethods(type,"updateDockerBgIfNecessary",object:HookCallback(){
+            override fun beforeHookedMethod(param:MethodHookParam){
+                val owner=param.thisObject as? View ?: return
+                if(enabled() && docks[owner]?.suppressNative==true)param.result=null
+            }
+        })
         if(rowBackground) {
-            ModuleHooks.hookAllMethods(type,"setDockerBackground",object:XC_MethodHook(){
+            ModuleHooks.hookAllMethods(type,"setDockerBackground",object:HookCallback(){
                 override fun afterHookedMethod(param:MethodHookParam) {
                     val owner=param.thisObject as? ViewGroup ?: return
                     wrapRowBackground(owner,docks.getOrPut(owner){Dock()})
                 }
             })
-            XposedHelpers.findClassIfExists("com.android.launcher.custom.OplusToolUtils",loader)?.let {tools ->
-                ModuleHooks.hookAllMethods(tools,"drawDockerBack",object:XC_MethodHook(){
+            HookReflection.findClassIfExists("com.android.launcher.custom.OplusToolUtils",loader)?.let {tools ->
+                ModuleHooks.hookAllMethods(tools,"drawDockerBack",object:HookCallback(){
                     override fun beforeHookedMethod(param:MethodHookParam) {
                         val owner=param.args.getOrNull(1) as? ViewGroup ?: return
                         if(enabled() && docks[owner]?.suppressNative==true)param.result=null
@@ -226,7 +101,7 @@ internal object DockMaterial {
                 })
             }
         }
-        ModuleHooks.hookAllMethods(type,"onDraw",object:XC_MethodHook(){
+        ModuleHooks.hookAllMethods(type,"onDraw",object:HookCallback(){
             override fun beforeHookedMethod(param:MethodHookParam){
                 val view=param.thisObject as? ViewGroup ?: return
                 val dock=docks.getOrPut(view){Dock()}
@@ -240,7 +115,7 @@ internal object DockMaterial {
                     if(rowBackground)return
                     // One dock: skip the native plate for this frame.
                     val native=NativeIconAccess.field(view,"mDockerBackgroundDrawable") as? Drawable ?: return
-                    XposedHelpers.setObjectField(view,"mDockerBackgroundDrawable",null)
+                    HookReflection.setObjectField(view,"mDockerBackgroundDrawable",null)
                     param.setObjectExtra(NATIVE,native)
                 }catch(t:Throwable){suppressNative(view,dock,false);fail(t)}
             }
@@ -248,13 +123,13 @@ internal object DockMaterial {
                 val native=param.getObjectExtra(NATIVE) as? Drawable ?: return
                 try {
                     if(NativeIconAccess.field(param.thisObject,"mDockerBackgroundDrawable")==null)
-                        XposedHelpers.setObjectField(param.thisObject,"mDockerBackgroundDrawable",native)
+                        HookReflection.setObjectField(param.thisObject,"mDockerBackgroundDrawable",native)
                 }catch(t:Throwable){fail(t)}
             }
         })
         // Children move without invalidating the hotseat itself: re-record the
         // dock when the row geometry changes (icon added, removed, re-centred).
-        ModuleHooks.hookAllMethods(type,"onLayout",object:XC_MethodHook(){
+        ModuleHooks.hookAllMethods(type,"onLayout",object:HookCallback(){
             override fun afterHookedMethod(param:MethodHookParam){
                 val view=param.thisObject as? ViewGroup ?: return
                 val dock=docks.getOrPut(view){Dock()}
@@ -319,9 +194,8 @@ internal object DockMaterial {
         for(view in docks.keys.toList()){
             docks[view]?.apply {
                 animator?.cancel();animator=null;presence=DockPresence()
-                lastStamp=Long.MIN_VALUE;layoutRevision++
-                rect.setEmpty();target.setEmpty();renderer.reset();iconRenderer.reset();signature=null
-                iconKey=null;iconSource=null
+                layoutRevision++
+                rect.setEmpty();target.setEmpty();renderer.reset();signature=null
                 layer?.apply {active=enabled();retainWhenHidden=false;sync();invalidate()}
                 if(!enabled()){
                     listener?.let {if(observing?.isAlive==true)observing?.removeOnPreDrawListener(it)}
@@ -369,7 +243,7 @@ internal object DockMaterial {
         val weak=WeakReference(view)
         val listener=ViewTreeObserver.OnPreDrawListener {
             val v=weak.get()
-            if(v!=null && enabled())try {
+            if(v!=null && v.isShown && enabled() && !LiveBlurEngine.isWorkspaceBlurSuspended)try {
                 // Cheap exit: nothing the dock draws changed this frame.
                 val stamp=WallpaperHelper.stamp()
                 if(stamp==dock.stamp && layoutRevision==dock.layout && dock.animator==null &&
@@ -377,7 +251,7 @@ internal object DockMaterial {
                 dock.stamp=stamp;dock.layout=layoutRevision
                 val live=WallpaperHelper.isLiveWallpaper(v.context)
                 val values=if(live){
-                    val matrix=Matrix();XposedHelpers.callMethod(v,"transformMatrixToGlobal",matrix)
+                    val matrix=Matrix();HookReflection.callMethod(v,"transformMatrixToGlobal",matrix)
                     FloatArray(9).also {matrix.getValues(it)}.toList()
                 }else emptyList()
                 val wall=if(!IconMaterialRenderer.clearGlass(DockSettings.style()))WallpaperHelper.getDockWallpaper(v.context) else null
@@ -385,7 +259,11 @@ internal object DockMaterial {
                 updatePresence(v,dock,geometry!=null)
                 val signature=listOf(values,System.identityHashCode(wall),wall?.generationId,
                     if(live)LiveBlurEngine.wallpaperScrollRatio else 0f,rowAlpha(v),DockSettings.style(),geometry)
-                if(signature!=dock.signature){dock.signature=signature;v.invalidate()}
+                if(signature!=dock.signature){
+                    dock.signature=signature
+                    dock.layer?.invalidate()
+                    v.invalidate()
+                }
             }catch(_:Throwable){}
             true
         }
@@ -443,7 +321,7 @@ internal object DockMaterial {
     }
 
     private var iconSize=0f
-    private fun radius(rect:Rect)=(iconSize*PrefsHelper.dockRadius/100f).coerceAtMost(minOf(rect.width(),rect.height())/2f).coerceAtLeast(0f)
+    private fun radius(rect:Rect)=DockGeometry.radius(iconSize,rect.width().toFloat(),rect.height().toFloat(),PrefsHelper.dockRadius)
 
     /** Dock bounds in hotseat coordinates, or null without visible icons. */
     private fun geometry(hotseat:ViewGroup):Rect? {
@@ -497,25 +375,9 @@ internal object DockMaterial {
 
     /** ColorOS continuous ("smooth") corners like the icons; a plain round rect otherwise. */
     private fun path(view:View,rect:Rect,radius:Float,dock:Dock):Path? {
-        // Kyant's edge distance/highlight use a circular rounded rectangle.
-        // Clip and contour must use that same silhouette, not OEM smooth corners.
-        if(DockSettings.style().kyant!=null)return null
-        if(smoothUnavailable)return null
         if(dock.path!=null && dock.pathRect==rect && dock.pathRadius==radius)return dock.path
-        return try {
-            val manager=XposedHelpers.findClass("com.android.launcher3.util.SmoothRoundedManager",view.context.classLoader)
-            if(weight.isNaN()){
-                val map=manager.declaredMethods.first {it.name=="mapWeight" && it.parameterCount in 1..2 &&
-                    it.parameterTypes.all {arg -> arg==Float::class.javaPrimitiveType}}
-                weight=((if(map.parameterCount==1)map.invoke(null,3f)else map.invoke(null,3f,1.1f)) as Number).toFloat()
-            }
-            val path=Path()
-            XposedHelpers.callStaticMethod(manager,"createSmoothPath",path,RectF(rect),radius,weight,Path.Direction.CW)
-            if(path.isEmpty)null else path.also {dock.path=it;dock.pathRect.set(rect);dock.pathRadius=radius}
-        }catch(t:Throwable){
-            smoothUnavailable=true
-            GlassLogger.e("Dock","Smooth corners unavailable; using rounded rectangle",t)
-            null
+        return com.cosmod.launcherglass.util.ContinuousCorners.path(Path(),RectF(rect),radius).also {
+            dock.path=it;dock.pathRect.set(rect);dock.pathRadius=radius
         }
     }
 

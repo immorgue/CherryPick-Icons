@@ -8,16 +8,7 @@ import com.cosmod.launcherglass.util.GlassLogger
 import java.util.WeakHashMap
 import kotlin.math.abs
 
-/**
- * Plate colour for surfaces without their own icon plate: folders and
- * multi-icon containers.
- *
- * With the system palette each icon keeps its own plate colour (for example
- * the grey of ColorOS themed icons), while surfaces used the palette's
- * hue/saturation/brightness tone, so they looked unrelated to the icons next
- * to them. When most visible icons share one plate colour, surfaces use it;
- * a custom palette always uses its own background.
- */
+/** Falls back to the common visible icon plate when there is no resolved palette. */
 internal object SurfaceTone {
     private const val CLUSTER=18
     private const val MIN_ICONS=3
@@ -32,7 +23,7 @@ internal object SurfaceTone {
 
     fun base():Int {
         val palette=PrefsHelper.iconPalette
-        return if(palette.custom)palette.background else typical ?: palette.background
+        return if(palette.usesThemeColors)palette.background else typical ?: palette.background
     }
 
     /** Remembers the plate of a regular icon (not a fallback or picture icon). */

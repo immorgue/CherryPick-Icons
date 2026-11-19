@@ -4,33 +4,16 @@ import android.app.Activity
 import android.app.Application
 import android.content.Context
 import com.cosmod.launcherglass.util.GlassLogger
-import de.robv.android.xposed.IXposedHookLoadPackage
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XC_MethodReplacement
-import de.robv.android.xposed.XposedHelpers
-import de.robv.android.xposed.callbacks.XC_LoadPackage.LoadPackageParam
+import com.cosmod.launcherglass.bridge.HookCallback
+import com.cosmod.launcherglass.bridge.HookReplacement
+import com.cosmod.launcherglass.bridge.HookReflection
 
-class HookEntry : IXposedHookLoadPackage {
+class HookEntry {
+    data class LoadPackageParam(val packageName:String,val classLoader:ClassLoader)
 
-    override fun handleLoadPackage(lpparam: LoadPackageParam) {
+    fun handleLoadPackage(lpparam: LoadPackageParam) {
         val packageName = lpparam.packageName
         GlassLogger.i("HookEntry", "handleLoadPackage called for: $packageName (PID=${android.os.Process.myPid()})")
-
-        // 1. Module Self-Activation check in MainActivity
-        if (packageName == "com.cosmod.launcherglass") {
-            try {
-                XposedHelpers.findAndHookMethod(
-                    "com.cosmod.launcherglass.ui.MainActivity",
-                    lpparam.classLoader,
-                    "isModuleActive",
-                    XC_MethodReplacement.returnConstant(true)
-                )
-                GlassLogger.i("HookEntry", "Self-activation check hooked in MainActivity -> ACTIVE")
-            } catch (t: Throwable) {
-                GlassLogger.e("HookEntry", "Failed to hook MainActivity self-activation", t)
-            }
-            return
-        }
 
         if(packageName=="com.android.systemui"){
             HomeGestureBar.installSystemUi(lpparam.classLoader)
@@ -49,6 +32,8 @@ class HookEntry : IXposedHookLoadPackage {
         )
 
         if (packageName in launcherPackages) {
+            try {LauncherAutoMenu.install(lpparam.classLoader)}
+            catch(t:Throwable){GlassLogger.e("AutoMenu","Cannot install edit toolbar entry",t)}
             GlassLogger.i("HookEntry", ">>> Hooking ColorOS Launcher: $packageName <<<")
             try {DesktopDesignerHook.install(lpparam.classLoader)}
             catch(t:Throwable){GlassLogger.e("DesktopDesigner","Cannot install desktop editor",t)}
@@ -72,6 +57,10 @@ class HookEntry : IXposedHookLoadPackage {
                 PrefsHelper.init(appCtx)
                 WallpaperProfileClient.sync(appCtx)
                 try {
+                    val wallpaperHandler = android.os.Handler(android.os.Looper.getMainLooper())
+                    val refreshWallpaper = Runnable {
+                        if (PrefsHelper.enabled) com.cosmod.launcherglass.util.WallpaperHelper.onSystemWallpaperChanged()
+                    }
                     val filter = android.content.IntentFilter(android.content.Intent.ACTION_WALLPAPER_CHANGED).apply {
                         addAction(android.content.Intent.ACTION_SCREEN_OFF)
                         addAction(android.content.Intent.ACTION_SCREEN_ON)
@@ -95,20 +84,16 @@ class HookEntry : IXposedHookLoadPackage {
                                 }
                             }
                             GlassLogger.i("HookEntry", "Wallpaper changed, invalidating blur cache")
+                            wallpaperHandler.removeCallbacks(refreshWallpaper)
                             com.cosmod.launcherglass.util.WallpaperHelper.onSystemWallpaperChanged()
                             com.cosmod.launcherglass.util.LiveBlurEngine.invalidate()
                         }
                     }, filter)
-                    val wallpaperHandler = android.os.Handler(android.os.Looper.getMainLooper())
-                    val refreshWallpaper = Runnable {
-                        if(!PrefsHelper.enabled)return@Runnable
-                        com.cosmod.launcherglass.util.WallpaperHelper.onSystemWallpaperChanged()
-                    }
                     val wallpaperObserver = object : android.database.ContentObserver(wallpaperHandler) {
                         override fun onChange(selfChange: Boolean) {
                             if(!PrefsHelper.enabled)return
                             wallpaperHandler.removeCallbacks(refreshWallpaper)
-                            wallpaperHandler.postDelayed(refreshWallpaper, 200L)
+                            wallpaperHandler.postDelayed(refreshWallpaper, 48L)
                         }
                     }
                     for (key in listOf("is_desktop_wallpaper_blur_enable",
@@ -124,12 +109,12 @@ class HookEntry : IXposedHookLoadPackage {
 
             // Hook 1: com.android.common.LauncherApplication (ColorOS Application class)
             try {
-                val launcherAppClass = XposedHelpers.findClassIfExists("com.android.common.LauncherApplication", lpparam.classLoader)
+                val launcherAppClass = HookReflection.findClassIfExists("com.android.common.LauncherApplication", lpparam.classLoader)
                 if (launcherAppClass != null) {
-                    XposedHelpers.findAndHookMethod(
+                    HookReflection.findAndHookMethod(
                         launcherAppClass,
                         "onCreate",
-                        object : XC_MethodHook() {
+                        object : HookCallback() {
                             override fun afterHookedMethod(param: MethodHookParam) {
                                 val app = param.thisObject as? Application ?: return
                                 GlassLogger.i("HookEntry", "LauncherApplication.onCreate() intercepted!")
@@ -145,13 +130,13 @@ class HookEntry : IXposedHookLoadPackage {
 
             // Hook 2: com.android.launcher.Launcher lifecycle & touch events
             try {
-                val launcherActivityClass = XposedHelpers.findClassIfExists("com.android.launcher.Launcher", lpparam.classLoader)
+                val launcherActivityClass = HookReflection.findClassIfExists("com.android.launcher.Launcher", lpparam.classLoader)
                 if (launcherActivityClass != null) {
-                    XposedHelpers.findAndHookMethod(
+                    HookReflection.findAndHookMethod(
                         launcherActivityClass,
                         "onCreate",
                         android.os.Bundle::class.java,
-                        object : XC_MethodHook() {
+                        object : HookCallback() {
                             override fun afterHookedMethod(param: MethodHookParam) {
                                 val act = param.thisObject as? Activity ?: return
                                 GlassLogger.i("HookEntry", "Launcher.onCreate() activity intercepted!")
@@ -163,13 +148,19 @@ class HookEntry : IXposedHookLoadPackage {
                     ModuleHooks.findAndHookMethod(
                         launcherActivityClass,
                         "onResume",
-                        object : XC_MethodHook() {
+                        object : HookCallback() {
                             override fun beforeHookedMethod(param: MethodHookParam) {
-                                (param.thisObject as? Activity)?.window?.decorView?.let {
+                                val launcher = param.thisObject as? Activity
+                                launcher?.window?.decorView?.let {
                                     com.cosmod.launcherglass.util.LauncherWallpaperCapture.setWindow(it)
                                 }
                                 com.cosmod.launcherglass.util.LiveBlurEngine.onActivityResumed()
                                 com.cosmod.launcherglass.util.WallpaperHelper.onLauncherWindowReady()
+                                if (launcher != null) {
+                                    val workspace = NativeIconAccess.call(launcher,"getWorkspace") as? android.view.ViewGroup
+                                        ?: (launcher.findViewById<android.view.View>(launcher.resources.getIdentifier("workspace","id",launcher.packageName)) as? android.view.ViewGroup)
+                                    if(workspace!=null)WorkspaceIconWarmup.observe(workspace)
+                                }
                             }
                         }
                     )
@@ -177,7 +168,7 @@ class HookEntry : IXposedHookLoadPackage {
                     ModuleHooks.findAndHookMethod(
                         launcherActivityClass,
                         "onPause",
-                        object : XC_MethodHook() {
+                        object : HookCallback() {
                             override fun afterHookedMethod(param: MethodHookParam) {
                                 com.cosmod.launcherglass.util.LiveBlurEngine.onActivityPaused()
                             }
@@ -188,7 +179,7 @@ class HookEntry : IXposedHookLoadPackage {
                         launcherActivityClass,
                         "dispatchTouchEvent",
                         android.view.MotionEvent::class.java,
-                        object : XC_MethodHook() {
+                        object : HookCallback() {
                             override fun beforeHookedMethod(param: MethodHookParam) {
                                 val event = param.args[0] as? android.view.MotionEvent ?: return
                                 com.cosmod.launcherglass.util.LiveBlurEngine.onTouch(event)
@@ -210,7 +201,7 @@ class HookEntry : IXposedHookLoadPackage {
             WorkspaceBlurScroll.install(lpparam.classLoader,pagedClasses)
             for (pagedName in pagedClasses) {
                 try {
-                    val pagedClass = XposedHelpers.findClassIfExists(pagedName, lpparam.classLoader) ?: continue
+                    val pagedClass = HookReflection.findClassIfExists(pagedName, lpparam.classLoader) ?: continue
                     ModuleHooks.findAndHookMethod(
                         pagedClass,
                         "onScrollChanged",
@@ -218,7 +209,7 @@ class HookEntry : IXposedHookLoadPackage {
                         Int::class.javaPrimitiveType,
                         Int::class.javaPrimitiveType,
                         Int::class.javaPrimitiveType,
-                        object : XC_MethodHook() {
+                        object : HookCallback() {
                             override fun afterHookedMethod(param: MethodHookParam) {
                                 val view = param.thisObject as? android.view.View ?: return
                                 val name = view.javaClass.name
@@ -236,10 +227,10 @@ class HookEntry : IXposedHookLoadPackage {
 
             // Hook 4: Fallback generic Application.onCreate
             try {
-                XposedHelpers.findAndHookMethod(
+                HookReflection.findAndHookMethod(
                     Application::class.java,
                     "onCreate",
-                    object : XC_MethodHook() {
+                    object : HookCallback() {
                         override fun afterHookedMethod(param: MethodHookParam) {
                             val app = param.thisObject as? Application ?: return
                             ensureInit(app, "Application.onCreate")
@@ -254,8 +245,8 @@ class HookEntry : IXposedHookLoadPackage {
                 "com.android.launcher3.views.AppLauncher"
             )) {
                 try {
-                    val cls = XposedHelpers.findClassIfExists(name, lpparam.classLoader) ?: continue
-                    ModuleHooks.hookAllMethods(cls, "startActivitySafely", object : XC_MethodHook() {
+                    val cls = HookReflection.findClassIfExists(name, lpparam.classLoader) ?: continue
+                    ModuleHooks.hookAllMethods(cls, "startActivitySafely", object : HookCallback() {
                         override fun beforeHookedMethod(param: MethodHookParam) {
                             com.cosmod.launcherglass.util.LiveBlurEngine.onAppLaunchStarted()
                         }
@@ -277,7 +268,7 @@ class HookEntry : IXposedHookLoadPackage {
                     lpparam.classLoader,
                     "notifyEditStateChanged",
                     Boolean::class.javaPrimitiveType,
-                    object : XC_MethodHook() {
+                    object : HookCallback() {
                         override fun beforeHookedMethod(param: MethodHookParam) {
                             if (param.args[0] == true) {
                                 com.cosmod.launcherglass.util.LiveBlurEngine.onEditModeChanged(true)
@@ -303,19 +294,19 @@ class HookEntry : IXposedHookLoadPackage {
                 "com.android.launcher3.allapps.OplusAllAppsTransitionController"
             )) {
                 try {
-                    val cls = XposedHelpers.findClassIfExists(name, lpparam.classLoader) ?: continue
-                    val stateClass = XposedHelpers.findClass("com.android.launcher3.LauncherState", lpparam.classLoader)
-                    val stateHook = object : XC_MethodHook() {
+                    val cls = HookReflection.findClassIfExists(name, lpparam.classLoader) ?: continue
+                    val stateClass = HookReflection.findClass("com.android.launcher3.LauncherState", lpparam.classLoader)
+                    val stateHook = object : HookCallback() {
                         override fun beforeHookedMethod(param: MethodHookParam) {
                             val state = param.args.firstOrNull() ?: return
                             if (!stateClass.isInstance(state)) return
-                            val allApps = XposedHelpers.getStaticObjectField(stateClass, "ALL_APPS")
+                            val allApps = HookReflection.getStaticObjectField(stateClass, "ALL_APPS")
                             com.cosmod.launcherglass.util.LiveBlurEngine.onDrawerTargetChanged(state === allApps)
                         }
                     }
                     ModuleHooks.hookAllMethods(cls, "setState", stateHook)
                     ModuleHooks.hookAllMethods(cls, "setStateWithAnimation", stateHook)
-                    ModuleHooks.hookAllMethods(cls, "setProgress", object : XC_MethodHook() {
+                    ModuleHooks.hookAllMethods(cls, "setProgress", object : HookCallback() {
                         override fun beforeHookedMethod(param: MethodHookParam) {
                             val progress = param.args.firstOrNull() as? Float ?: return
                             com.cosmod.launcherglass.util.LiveBlurEngine.onDrawerProgress(progress)
@@ -328,7 +319,7 @@ class HookEntry : IXposedHookLoadPackage {
             }
 
             try {
-                val wallpaperClass = XposedHelpers.findClassIfExists(
+                val wallpaperClass = HookReflection.findClassIfExists(
                     "com.android.launcher.wallpaper.LauncherWallpaperManager", lpparam.classLoader)
                 if(wallpaperClass==null)GlassLogger.i("Compat","Processed wallpaper delivery unavailable; native wallpaper capture fallback kept")
                 if (wallpaperClass != null) {
@@ -337,7 +328,7 @@ class HookEntry : IXposedHookLoadPackage {
                         method.parameterTypes.isNotEmpty() && method.parameterTypes[0] == android.graphics.Bitmap::class.java
                     }
                     if (deliveryMethod != null) {
-                        ModuleHooks.hookMethod(deliveryMethod, object : XC_MethodHook() {
+                        ModuleHooks.hookMethod(deliveryMethod, object : HookCallback() {
                             override fun beforeHookedMethod(param: MethodHookParam) {
                                 val bitmap = param.args.firstOrNull() as? android.graphics.Bitmap ?: return
                                 com.cosmod.launcherglass.util.WallpaperHelper.onLauncherWallpaper(bitmap)
@@ -347,7 +338,7 @@ class HookEntry : IXposedHookLoadPackage {
                     } else {
                         for (name in listOf("u", "s")) {
                             try {
-                                ModuleHooks.hookAllMethods(wallpaperClass, name, object : XC_MethodHook() {
+                                ModuleHooks.hookAllMethods(wallpaperClass, name, object : HookCallback() {
                                     override fun beforeHookedMethod(param: MethodHookParam) {
                                         val bitmap = param.args.firstOrNull() as? android.graphics.Bitmap ?: return
                                         com.cosmod.launcherglass.util.WallpaperHelper.onLauncherWallpaper(bitmap)
@@ -384,7 +375,7 @@ class HookEntry : IXposedHookLoadPackage {
                         }
                         com.cosmod.launcherglass.util.LiveBlurEngine.onPrefsChanged()
                     }
-                    val changed = object : XC_MethodHook() {
+                    val changed = object : HookCallback() {
                         override fun afterHookedMethod(param: MethodHookParam) {
                             val fingerprint = try {
                                 val instance = param.thisObject
@@ -400,7 +391,7 @@ class HookEntry : IXposedHookLoadPackage {
                                 val shapeValues=instance.javaClass.declaredFields
                                     .filter {!java.lang.reflect.Modifier.isStatic(it.modifiers) && (it.type.isPrimitive || it.type==String::class.java)}
                                     .sortedBy {it.name}.joinToString {field -> field.isAccessible=true;"${field.name}=${field.get(instance)}"}
-                                "${XposedHelpers.getObjectField(instance, if(NativeLauncherIcons.compact(config))"r" else "mIconPackName")}:$values:$shapeValues"
+                                "${HookReflection.getObjectField(instance, if(NativeLauncherIcons.compact(config))"r" else "mIconPackName")}:$values:$shapeValues"
                             } catch (_: Throwable) { return }
                             synchronized(handler) {
                                 if (lastConfig == fingerprint) return

@@ -8,7 +8,7 @@ import android.os.Looper
 import android.view.View
 import android.widget.ImageView
 import com.cosmod.launcherglass.util.GlassLogger
-import de.robv.android.xposed.*
+import com.cosmod.launcherglass.bridge.*
 import java.lang.ref.WeakReference
 import java.util.WeakHashMap
 import java.util.function.BiConsumer
@@ -37,7 +37,17 @@ internal object FolderMaterialHook {
     }
     @Volatile private var horizontal:LongContour?=null
     @Volatile private var vertical:LongContour?=null
-    fun invalidateGeometry(){geometryRevision++;horizontal=null;vertical=null}
+    private var stockPolicy=WeakReference<Drawable>(null)
+    private val policyContours=LinkedHashMap<List<Int>,LongContour>()
+    fun invalidateGeometry(){geometryRevision++;horizontal=null;vertical=null;stockPolicy.clear();policyContours.clear()}
+    fun policyContour(bounds:Rect,radius:Float):LongContour? {
+        val policy=stockPolicy.get() ?: return null
+        val key=listOf(bounds.left,bounds.top,bounds.right,bounds.bottom,java.lang.Float.floatToIntBits(radius))
+        policyContours[key]?.let {return it}
+        val path=NativeFolderPath.policyPath(policy,bounds,radius) ?: return null
+        if(policyContours.size>=12)policyContours.clear()
+        return LongContour(path,Rect(bounds),radius).also {policyContours[key]=it}
+    }
     fun longContour(sx:Int,sy:Int):LongContour? {
         if(sx==2 && sy==1)return horizontal
         if(sx==1 && sy==2)return vertical
@@ -54,7 +64,7 @@ internal object FolderMaterialHook {
     private fun enabled()=PrefsHelper.enabled && PrefsHelper.blurEnabled && PrefsHelper.folderBlurEnabled
     private fun shortcut(view:View?)=view?.javaClass?.name=="com.android.launcher3.viewcontainer.ShortcutContainer"
     private fun enabled(view:View?)=enabled()
-    private fun field(owner:Any,name:String):Any?=try {XposedHelpers.getObjectField(owner,name)}catch(_:Throwable){null}
+    private fun field(owner:Any,name:String):Any?=try {HookReflection.getObjectField(owner,name)}catch(_:Throwable){null}
     private class Material(val source:WeakReference<View>,val owner:WeakReference<Any>?,val fallback:Drawable?,val nativePolicy:Drawable?=null):Drawable(){
         private var opacity=255
         private var logged=false
@@ -89,12 +99,12 @@ internal object FolderMaterialHook {
             val old=fallback?.bounds?.let(::Rect)
             val outline=Outline()
             try {fallback?.bounds=bounds;fallback?.getOutline(outline)}finally{if(old!=null)fallback?.bounds=old}
-            val radius=try {native?.let {XposedHelpers.getFloatField(it,"mRadius")}}catch(_:Throwable){null}
+            val radius=try {native?.let {HookReflection.getFloatField(it,"mRadius")}}catch(_:Throwable){null}
                 ?: outline.radius.coerceAtLeast(0f)
             val span=if(native!=null)field(native,"mCreateSpanXY") as? IntArray else null
             val info=source.get()?.tag
-            val sx=(try {info?.let {XposedHelpers.callMethod(it,"getSpanX")} as? Int}catch(_:Throwable){null}) ?: span?.getOrNull(0) ?: 1
-            val sy=(try {info?.let {XposedHelpers.callMethod(it,"getSpanY")} as? Int}catch(_:Throwable){null}) ?: span?.getOrNull(1) ?: 1
+            val sx=(try {info?.let {HookReflection.callMethod(it,"getSpanX")} as? Int}catch(_:Throwable){null}) ?: span?.getOrNull(0) ?: 1
+            val sy=(try {info?.let {HookReflection.callMethod(it,"getSpanY")} as? Int}catch(_:Throwable){null}) ?: span?.getOrNull(1) ?: 1
             val path=cachedPath
             val long=if(shortcut(source.get()))MultiIconMaterialHook.sharedContour(bounds,radius,sx,sy)else null
             if(cachedBounds!=bounds || cachedRadius!=radius || cachedInfo!==info || cachedSpanX!=sx || cachedSpanY!=sy ||
@@ -102,8 +112,11 @@ internal object FolderMaterialHook {
             path.reset()
             (long?.sharedPath() ?: NativeFolderPath.policyPath(nativePolicy,bounds,radius))?.let {
                 path.set(it)
-                if(long==null && drawingHost===view && !localDraw && view is ImageView)
-                    rememberLongContour(source.get(),sx,sy,bounds,radius,it)
+                if(long==null && nativePolicy!=null && stockPolicy.get()==null){
+                    stockPolicy=WeakReference(nativePolicy)
+                    MultiIconMaterialHook.invalidateContours()
+                }
+                if(long==null)rememberLongContour(source.get(),sx,sy,bounds,radius,it)
             }
             cachedMask=if(path.isEmpty)NativeFolderPath.drawableMask(fallback,bounds)else null
             pathFingerprint=null
@@ -127,8 +140,12 @@ internal object FolderMaterialHook {
             if(!logged){logged=true;GlassLogger.i("FolderMaterial","Native shape: radius=$radius, path=${!path.isEmpty}, nativePolicy=${nativePolicy!=null}, alphaMask=${cachedMask!=null}, bounds=$bounds, callback=${callback?.javaClass?.simpleName}")}
             @Suppress("DEPRECATION")
             val local=if(localDraw && canvas.isHardwareAccelerated)RectF(bounds).also {canvas.matrix.mapRect(it)}else null
+            val previewSource = source.get()?.takeIf {
+                native != null && !localDraw && sx == sy &&
+                    (view === it || view.javaClass.name.endsWith(".FolderRoundImageView"))
+            }
             if(!SurfaceMaterial.draw(canvas,bounds,view,this,long?.materialRadius ?: radius,if(cachedMask==null)path.takeUnless {it.isEmpty}else null,alpha=opacity,style=FolderSettings.style(),nativeShape=if(path.isEmpty)fallback else null,nativeMask=cachedMask,pathFingerprint=pathFingerprint,
-                    local=local,fallback=fallback)){
+                    local=local,fallback=fallback,folderPreviewSource=previewSource,folderPreviewSpan=sx)){
                 val saved=canvas.save()
                 val previous=fallback?.bounds?.let(::Rect)
                 try {
@@ -157,11 +174,11 @@ internal object FolderMaterialHook {
                 .flatMap {it.declaredMethods.asSequence()}
                 .firstOrNull {it.name=="unRegisterBlurTransitionAnim" && it.parameterCount==0}
                 ?.apply {isAccessible=true}?.invoke(controller)
-            XposedHelpers.callMethod(controller,"recycle")
-            XposedHelpers.setObjectField(owner,"mBlurProp",null)
+            HookReflection.callMethod(controller,"recycle")
+            HookReflection.setObjectField(owner,"mBlurProp",null)
         }
-        val fallback=try {XposedHelpers.callMethod(owner,"getNormalDrawable",view.context) as? Drawable}catch(_:Throwable){null}
-        XposedHelpers.setObjectField(owner,"mBgDrawable",Material(WeakReference(view),WeakReference(owner),fallback,nativePolicy))
+        val fallback=try {HookReflection.callMethod(owner,"getNormalDrawable",view.context) as? Drawable}catch(_:Throwable){null}
+        HookReflection.setObjectField(owner,"mBgDrawable",Material(WeakReference(view),WeakReference(owner),fallback,nativePolicy))
         GlassLogger.i("FolderMaterial","Custom plate installed; native controller retired=${controller!=null}")
         return true
     }
@@ -179,7 +196,10 @@ internal object FolderMaterialHook {
     }
     fun onSettingsChanged(){
         if(Looper.myLooper()!=Looper.getMainLooper()){main.post {onSettingsChanged()};return}
-        invalidateGeometry()
+        // Color/material changes do not change the launcher's native contour.
+        // Dropping the long-folder templates here made shortcut clusters fall
+        // back to their more rounded grid radius until a long folder redrew.
+        geometryRevision++
         for((background,state) in backgrounds.strongSnapshot()){
             val view=state.view.get() ?: continue
             val custom=field(background,"mBgDrawable") is Material
@@ -187,7 +207,7 @@ internal object FolderMaterialHook {
             try {
                 val context=state.context.get() ?: continue
                 val activity=state.activity.get() ?: continue
-                XposedHelpers.callMethod(background,"initBgDrawable",context,view,activity)
+                HookReflection.callMethod(background,"initBgDrawable",context,view,activity)
                 view.invalidate()
                 GlassLogger.i("FolderMaterial",if(enabled())"Native folder blur disabled" else "Native folder blur restored")
             }catch(t:Throwable){GlassLogger.e("FolderMaterial","Folder producer switch failed",t)}
@@ -199,9 +219,9 @@ internal object FolderMaterialHook {
         }
     }
     fun install(loader:ClassLoader){
-        val type=XposedHelpers.findClassIfExists("com.android.launcher3.folder.OplusPreviewBackground",loader) ?: return
-        XposedHelpers.findClassIfExists("com.android.launcher3.folder.FolderRoundImageView",loader)?.let {image ->
-            ModuleHooks.hookAllMethods(image,"onDraw",object:XC_MethodHook(){
+        val type=HookReflection.findClassIfExists("com.android.launcher3.folder.OplusPreviewBackground",loader) ?: return
+        HookReflection.findClassIfExists("com.android.launcher3.folder.FolderRoundImageView",loader)?.let {image ->
+            ModuleHooks.hookAllMethods(image,"onDraw",object:HookCallback(){
                 override fun beforeHookedMethod(param:MethodHookParam){
                     val view=param.thisObject as? ImageView ?: return
                     val material=view.drawable as? Material ?: return
@@ -225,7 +245,7 @@ internal object FolderMaterialHook {
                 }
             })
         }
-        ModuleHooks.hookAllMethods(type,"drawBackground",object:XC_MethodHook(){
+        ModuleHooks.hookAllMethods(type,"drawBackground",object:HookCallback(){
             override fun beforeHookedMethod(param:MethodHookParam){
                 if(com.cosmod.launcherglass.util.LauncherMethodResolver.isViewBackground(param.method as java.lang.reflect.Method,View::class.java)){
                     // drawBackground(Canvas) also runs as a CellLayout delegated
@@ -254,17 +274,17 @@ internal object FolderMaterialHook {
                         converter.invoke(null,params,view) as? Rect ?: return
                     }else{
                         fun number(name:String)=(NativeIconAccess.call(params,name) as Number).toFloat()
-                        val folder=XposedHelpers.findClassIfExists("com.android.launcher3.folder.FolderIcon",loader)
+                        val folder=HookReflection.findClassIfExists("com.android.launcher3.folder.FolderIcon",loader)
                         val mirrored=folder?.isInstance(view)==true && field(view,"mIsResizeFrameShow")==true &&
-                            XposedHelpers.callStaticMethod(XposedHelpers.findClass("com.android.launcher3.Utilities",loader),"isRtl",view.resources)==true
+                            HookReflection.callStaticMethod(HookReflection.findClass("com.android.launcher3.Utilities",loader),"isRtl",view.resources)==true
                         val legacy=com.cosmod.launcherglass.util.LegacyFolderBounds.from(number("getX"),number("getY"),
                             number("getSizeX"),number("getSizeY"),view.width,mirrored)
                         Rect(legacy.left,legacy.top,legacy.right,legacy.bottom)
                     }
-                    val radius=(XposedHelpers.callMethod(params,"getRadius") as? Number)?.toFloat() ?: return
+                    val radius=(HookReflection.callMethod(params,"getRadius") as? Number)?.toFloat() ?: return
                     val info=param.args.getOrNull(2) ?: view.tag
-                    val sx=(info?.let {XposedHelpers.callMethod(it,"getSpanX")} as? Int) ?: 1
-                    val sy=(info?.let {XposedHelpers.callMethod(it,"getSpanY")} as? Int) ?: 1
+                    val sx=(info?.let {HookReflection.callMethod(it,"getSpanX")} as? Int) ?: 1
+                    val sy=(info?.let {HookReflection.callMethod(it,"getSpanY")} as? Int) ?: 1
                     val long=if(shortcut(material.source.get()))MultiIconMaterialHook.sharedContour(bounds,radius,sx,sy)else null
                     val path=long?.sharedPath() ?: NativeFolderPath.policyPath(material.nativePolicy,bounds,radius) ?: Path().also {
                         NativeFolderPath.create(view,it,RectF(bounds),radius,sx,sy)
@@ -288,7 +308,7 @@ internal object FolderMaterialHook {
                 material.drawingHost=null;material.localDraw=false
             }
         })
-        ModuleHooks.hookAllMethods(type,"initBgDrawable",object:XC_MethodHook(){
+        ModuleHooks.hookAllMethods(type,"initBgDrawable",object:HookCallback(){
             override fun beforeHookedMethod(param:MethodHookParam){
                 val context=param.args.getOrNull(0) as? Context ?: return
                 val view=param.args.getOrNull(1) as? View ?: return
@@ -302,12 +322,12 @@ internal object FolderMaterialHook {
                 try {
                     if(field(param.thisObject,"mBgDrawable") !is Material){
                         replace(param.thisObject,view)
-                        XposedHelpers.callMethod(param.thisObject,"setBackground",view)
+                        HookReflection.callMethod(param.thisObject,"setBackground",view)
                     }
                 }catch(t:Throwable){GlassLogger.e("FolderMaterial","Folder attachment failed",t)}
             }
         })
-        ModuleHooks.hookAllMethods(type,"initBlurDrawable",object:XC_MethodHook(){
+        ModuleHooks.hookAllMethods(type,"initBlurDrawable",object:HookCallback(){
             override fun afterHookedMethod(param:MethodHookParam){
                 if(param.hasThrowable())return
                 val view=param.args.getOrNull(1) as? View ?: return
@@ -316,8 +336,8 @@ internal object FolderMaterialHook {
                 catch(t:Throwable){GlassLogger.e("FolderMaterial","Native producer retirement failed",t)}
             }
         })
-        val folder=XposedHelpers.findClassIfExists("com.android.launcher3.folder.OplusFolder",loader)
-        if(folder!=null)ModuleHooks.hookAllMethods(folder,"onFinishInflate",object:XC_MethodHook(){
+        val folder=HookReflection.findClassIfExists("com.android.launcher3.folder.OplusFolder",loader)
+        if(folder!=null)ModuleHooks.hookAllMethods(folder,"onFinishInflate",object:HookCallback(){
             override fun afterHookedMethod(param:MethodHookParam){
                 for(name in listOf("mContentBackground","mContentAnimationBackground")){
                     val view=field(param.thisObject,name) as? ImageView ?: continue

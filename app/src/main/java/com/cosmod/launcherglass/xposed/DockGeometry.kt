@@ -3,6 +3,8 @@ package com.cosmod.launcherglass.xposed
 import kotlin.math.max
 
 internal object DockGeometry {
+    fun radius(iconSize:Float,width:Float,height:Float,percent:Int)=
+        (iconSize*percent.coerceIn(0,100)/100f).coerceIn(0f,minOf(width,height).coerceAtLeast(0f)/2f)
     /** Padding expands equally around the icons, never relative to the screen bottom. */
     fun vertical(top:Float,bottom:Float,padding:Float,heightPercent:Int=100):Pair<Int,Int> {
         val center=(top+bottom)*.5f

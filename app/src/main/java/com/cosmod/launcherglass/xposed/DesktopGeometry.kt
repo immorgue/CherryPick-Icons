@@ -7,9 +7,9 @@ import android.provider.Settings
 import com.cosmod.launcherglass.util.DesktopSizing
 import com.cosmod.launcherglass.util.GlassLogger
 import com.cosmod.launcherglass.util.WallpaperHelper
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
+import com.cosmod.launcherglass.bridge.HookCallback
+import com.cosmod.launcherglass.bridge.HookRuntime
+import com.cosmod.launcherglass.bridge.HookReflection
 
 /** Native dimensions are changed before layout; no view scaling or layout-database writes. */
 internal object DesktopGeometry {
@@ -25,7 +25,12 @@ internal object DesktopGeometry {
         "oplus_default_app_widget_padding_right","oplus_default_app_widget_padding_top","oplus_default_app_widget_padding_bottom")
     // Resource IDs belong to the installed launcher and cannot be linked into this module's R class.
     @android.annotation.SuppressLint("DiscouragedApi")
-    fun load(bundle:Bundle) {
+    fun load(input:Bundle) {
+        val bundle=Bundle(input)
+        if(!FeaturePolicy.layout){
+            com.cosmod.launcherglass.util.DesktopSizing.defaults.forEach {(key,value) -> bundle.putInt(key,value)}
+            bundle.putBoolean(com.cosmod.launcherglass.ui.SettingsProvider.KEY_ENABLED,false)
+        }
         DesktopOffsets.load(bundle)
         DesktopCells.load(bundle)
         values=DesktopSizing.defaults.mapValues {(key,fallback) -> bundle.getInt(key,fallback).coerceIn(DesktopSizing.ranges.getValue(key))}
@@ -38,8 +43,8 @@ internal object DesktopGeometry {
     fun install(loader:ClassLoader) {
         DesktopOffsets.install(loader)
         DesktopCells.install(loader)
-        val profile=XposedHelpers.findClass("com.android.launcher3.DeviceProfile",loader)
-        XposedBridge.hookAllConstructors(profile,object:XC_MethodHook(){
+        val profile=HookReflection.findClass("com.android.launcher3.DeviceProfile",loader)
+        HookRuntime.hookAllConstructors(profile,object:HookCallback(){
             override fun beforeHookedMethod(param:MethodHookParam) {
                 profileDepth.set((profileDepth.get() ?: 0)+1);profileOwner.set(param.thisObject)
             }
@@ -51,16 +56,16 @@ internal object DesktopGeometry {
                 catch(t:Throwable){GlassLogger.limited("DesktopGeometry","workspace",100){"Workspace alignment unavailable: ${t.message}"}}
             }
         })
-        XposedHelpers.findAndHookMethod(profile,"updateInsets",Rect::class.java,object:XC_MethodHook(){
+        HookReflection.findAndHookMethod(profile,"updateInsets",Rect::class.java,object:HookCallback(){
             override fun afterHookedMethod(param:MethodHookParam) {
                 if(param.args[0]==null || (profileDepth.get() ?: 0)>0 || !PrefsHelper.enabled || param.hasThrowable())return
                 try {lowerWorkspace(param.thisObject)}
                 catch(t:Throwable){GlassLogger.limited("DesktopGeometry","insets",100){"Workspace alignment unavailable: ${t.message}"}}
             }
         })
-        val icons=XposedHelpers.findClassIfExists("com.android.launcher.theme.LauncherIconConfig",loader)
-            ?: XposedHelpers.findClassIfExists("to5",loader)
-        val iconHook=object:XC_MethodHook(){
+        val icons=HookReflection.findClassIfExists("com.android.launcher.theme.LauncherIconConfig",loader)
+            ?: HookReflection.findClassIfExists("to5",loader)
+        val iconHook=object:HookCallback(){
             override fun beforeHookedMethod(param:MethodHookParam) {iconDepth.set((iconDepth.get() ?: 0)+1)}
             override fun afterHookedMethod(param:MethodHookParam) {
                 val depth=(iconDepth.get() ?: 1)-1
@@ -87,10 +92,10 @@ internal object DesktopGeometry {
                 ((method.name=="calculateIconSizeByUxDesign" && (method.parameterCount==0 || method.parameterTypes.contentEquals(arrayOf(IntArray::class.java)))) ||
                  (icons?.name=="to5" && method.name=="b" && method.parameterTypes.contentEquals(arrayOf(IntArray::class.java))))
         }
-        sizing.forEach {XposedBridge.hookMethod(it,iconHook)}
+        sizing.forEach {HookRuntime.hookMethod(it,iconHook)}
         if(sizing.isEmpty())GlassLogger.i("DesktopGeometry","Native icon size contract unavailable")
         for(method in listOf("getDimensionPixelSize","getDimensionPixelOffset"))
-            XposedHelpers.findAndHookMethod(Resources::class.java,method,Int::class.javaPrimitiveType,object:XC_MethodHook(){
+            HookReflection.findAndHookMethod(Resources::class.java,method,Int::class.javaPrimitiveType,object:HookCallback(){
                 override fun afterHookedMethod(param:MethodHookParam) {
                     if(!PrefsHelper.enabled || param.hasThrowable())return
                     val id=param.args[0] as Int
@@ -120,16 +125,16 @@ internal object DesktopGeometry {
         val barSize=number(hotseat,"hotseatBarSizePx","n")
         val indicatorSize=number(indicator,"workspacePageIndicatorHeight","d")
         val margin=when {
-            hotseat.javaClass.name=="xg4" -> XposedHelpers.callMethod(hotseat,"b",field(config,"isLandscape","b") as Boolean) as Int
-            hotseat.javaClass.declaredMethods.any {it.name=="getMarginBottom" && it.parameterCount==0} -> XposedHelpers.callMethod(hotseat,"getMarginBottom") as Int
-            else -> XposedHelpers.callMethod(hotseat,"i") as Int
+            hotseat.javaClass.name=="xg4" -> HookReflection.callMethod(hotseat,"b",field(config,"isLandscape","b") as Boolean) as Int
+            hotseat.javaClass.declaredMethods.any {it.name=="getMarginBottom" && it.parameterCount==0} -> HookReflection.callMethod(hotseat,"getMarginBottom") as Int
+            else -> HookReflection.callMethod(hotseat,"i") as Int
         }
         val total=number(config,"heightPx","t")-number(workspace,"mWorkspaceHeightPx","c")-barSize-indicatorSize-margin-insets.top
         val shift=DesktopSizing.downwardShift(padding.top-insets.top,total,bias)
             .coerceAtMost((padding.bottom-insets.bottom-barSize-indicatorSize).coerceAtLeast(0))
         padding.top+=shift;padding.bottom-=shift
-        val bottom=if(XposedHelpers.findFieldIfExists(workspace.javaClass,"mWorkspacePaddingBottomAdjustment")!=null)"mWorkspacePaddingBottomAdjustment" else "d"
-        XposedHelpers.setIntField(workspace,bottom,padding.bottom)
+        val bottom=if(HookReflection.findFieldIfExists(workspace.javaClass,"mWorkspacePaddingBottomAdjustment")!=null)"mWorkspacePaddingBottomAdjustment" else "d"
+        HookReflection.setIntField(workspace,bottom,padding.bottom)
         GlassLogger.limited("DesktopGeometry","alignment",100){"Workspace moved down $shift px; navigation/dock bounds retained"}
     }
 }

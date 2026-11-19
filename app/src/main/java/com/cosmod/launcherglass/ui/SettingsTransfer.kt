@@ -65,13 +65,17 @@ internal object SettingsTransfer {
     }
 
     private fun range(key: String): LongRange {
+        if (key in com.cosmod.launcherglass.util.AutoIconStyle.defaults) {
+            val range = com.cosmod.launcherglass.util.AutoIconStyle.range(key)
+            return range.first.toLong()..range.last.toLong()
+        }
         val base = ScopedSettingsKeys.baseOf(key) ?: key
         com.cosmod.launcherglass.util.DesktopSizing.ranges[base]?.let {return it.first.toLong()..it.last.toLong()}
         SettingsProvider.APP_ANIMATION_RANGES[base]?.let {return it.first.toLong()..it.last.toLong()}
         return when (base) {
+            SettingsProvider.KEY_ICON_COLOR_THEME -> 0L..2L
             SettingsProvider.KEY_DOCK_BLUR_HEIGHT -> 50L..200L
             SettingsProvider.KEY_DOCK_BLUR_Y -> -120L..120L
-            SettingsProvider.KEY_FLIGHT_ICON_REVEAL -> 100L..400L
             SettingsProvider.KEY_KYANT_WIDTH, SettingsProvider.KEY_KYANT_DISTORTION,
             SettingsProvider.KEY_KYANT_HIGHLIGHT, SettingsProvider.KEY_KYANT_DISPERSION -> 0L..300L
             SettingsProvider.KEY_KYANT_VIBRANCY -> 0L..400L
@@ -91,9 +95,10 @@ internal object SettingsTransfer {
 
     fun apply(prefs: SharedPreferences, values: Map<String, Any>) {
         val editor = prefs.edit()
+        val migrated = SettingsDefaults.migrateWidgetSwitches(values)
         // Complete replacement of portable settings; retain local state and migration markers.
         for ((key, default) in defaults) {
-            val value = values[key] ?: if (optionalScoped(key)) null else default
+            val value = migrated[key] ?: if (optionalScoped(key)) null else default
             when (value) {
                 is Boolean -> editor.putBoolean(key, value)
                 is Int -> editor.putInt(key, value)

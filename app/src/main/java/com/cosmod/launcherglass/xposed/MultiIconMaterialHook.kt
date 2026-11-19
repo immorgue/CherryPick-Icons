@@ -5,7 +5,7 @@ import android.graphics.drawable.Drawable
 import android.view.View
 import android.view.ViewGroup
 import com.cosmod.launcherglass.util.GlassLogger
-import de.robv.android.xposed.*
+import com.cosmod.launcherglass.bridge.*
 import java.util.WeakHashMap
 import java.lang.ref.WeakReference
 
@@ -20,7 +20,9 @@ internal object MultiIconMaterialHook {
     }
     internal fun sharedContour(bounds:Rect,radius:Float,sx:Int,sy:Int):Contour {
         val exact=FolderMaterialHook.longContour(sx,sy)
-        return Contour(Rect(bounds),radius,sx,sy,exact ?: FolderMaterialHook.longContour(sy,sx),exact==null)
+        val rotated=if(exact==null)FolderMaterialHook.longContour(sy,sx)else null
+        val policy=if(exact==null && rotated==null)FolderMaterialHook.policyContour(bounds,radius)else null
+        return Contour(Rect(bounds),radius,sx,sy,exact ?: rotated ?: policy,rotated!=null)
     }
     internal fun contour(view:View):Contour? {
         if(!view.javaClass.name.endsWith(".GridRecyclerView"))return null
@@ -85,7 +87,7 @@ internal object MultiIconMaterialHook {
         for(view in grids.keys.weakSnapshot())view.invalidate()
         if(!enabled()){
             for((view,plate) in grids.strongSnapshot()){
-                if(NativeIconAccess.field(view,"mBackDrawable")===plate)XposedHelpers.setObjectField(view,"mBackDrawable",plate.native)
+                if(NativeIconAccess.field(view,"mBackDrawable")===plate)HookReflection.setObjectField(view,"mBackDrawable",plate.native)
                 view.invalidate()
             }
             grids.clear()
@@ -110,9 +112,9 @@ internal object MultiIconMaterialHook {
         if(view is ViewGroup)for(i in 0 until view.childCount)bindItems(view.getChildAt(i),depth+1)
     }
     fun install(loader:ClassLoader){
-        val type=XposedHelpers.findClassIfExists("com.android.launcher3.viewcontainer.ShortcutContainer",loader) ?: return
-        val grid=XposedHelpers.findClassIfExists("com.android.launcher3.viewcontainer.GridRecyclerView",loader)
-        if(grid!=null)ModuleHooks.hookAllMethods(grid,"clipRoundBackground",object:XC_MethodHook(){
+        val type=HookReflection.findClassIfExists("com.android.launcher3.viewcontainer.ShortcutContainer",loader) ?: return
+        val grid=HookReflection.findClassIfExists("com.android.launcher3.viewcontainer.GridRecyclerView",loader)
+        if(grid!=null)ModuleHooks.hookAllMethods(grid,"clipRoundBackground",object:HookCallback(){
             override fun beforeHookedMethod(param:MethodHookParam){
                 if(!enabled() || param.args.singleOrNull() !is Canvas)return
                 val view=param.thisObject as? View ?: return
@@ -122,7 +124,7 @@ internal object MultiIconMaterialHook {
                 if(contour(view)?.template!=null)param.result=null
             }
         })
-        if(grid!=null)ModuleHooks.hookAllMethods(grid,"draw",object:XC_MethodHook(){
+        if(grid!=null)ModuleHooks.hookAllMethods(grid,"draw",object:HookCallback(){
             override fun beforeHookedMethod(param:MethodHookParam){
                 if(!enabled())return
                 val view=param.thisObject as? View ?: return
@@ -130,7 +132,7 @@ internal object MultiIconMaterialHook {
                 if(native !is GridPlate){
                     val plate=GridPlate(view,native).apply {bounds=Rect(native.bounds);callback=view}
                     grids[view]=plate
-                    XposedHelpers.setObjectField(view,"mBackDrawable",plate)
+                    HookReflection.setObjectField(view,"mBackDrawable",plate)
                     GlassLogger.i("MultiIcons","Normal shortcut background installed: ${native.javaClass.name}")
                 }
                 // App launch/return snapshot: the GPU image of this same view.
@@ -139,7 +141,7 @@ internal object MultiIconMaterialHook {
                 else TransitionCapture.onWorkspaceDraw(view)
             }
         })
-        for(method in listOf("onLayout","dispatchDraw"))ModuleHooks.hookAllMethods(type,method,object:XC_MethodHook(){
+        for(method in listOf("onLayout","dispatchDraw"))ModuleHooks.hookAllMethods(type,method,object:HookCallback(){
             private fun update(param:MethodHookParam){
                 if(!enabled())return
                 val view=param.thisObject as? View ?: return

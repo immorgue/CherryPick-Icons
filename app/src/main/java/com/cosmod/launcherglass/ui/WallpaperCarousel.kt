@@ -3,6 +3,13 @@ package com.cosmod.launcherglass.ui
 import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.Bitmap
+import android.graphics.BitmapShader
+import android.graphics.Canvas
+import android.graphics.Matrix
+import android.graphics.Paint
+import android.graphics.RectF
+import android.graphics.Shader
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.MotionEvent
@@ -33,6 +40,8 @@ internal class WallpaperCarousel(context:Context,private val copy:(ThemeCatalog.
     private val applyButton=MaterialButton(context).apply {
         text="✓";contentDescription=context.getString(R.string.ui_theme_apply);textSize=24f;cornerRadius=dp(28)
         insetTop=0;insetBottom=0;minWidth=0;minimumWidth=0;setPadding(0,0,0,0)
+        backgroundTintList=ColorStateList.valueOf(androidx.core.content.ContextCompat.getColor(context,R.color.ui_control_accent))
+        setTextColor(Color.WHITE)
         setOnClickListener {themes.getOrNull(selected)?.let {theme ->apply(theme,this)}}
     }
     private val snap:Runnable=Runnable {if(cardWidth>0){val index=kotlin.math.round(scroll.scrollX.toFloat()/(cardWidth+gap)).toInt().coerceIn(0,(themes.size-1).coerceAtLeast(0));scroll.smoothScrollTo(index*(cardWidth+gap),0)}}
@@ -130,4 +139,52 @@ internal class WallpaperCarousel(context:Context,private val copy:(ThemeCatalog.
         }
     }
     override fun onDetachedFromWindow(){generation++;worker.shutdown();removeCallbacks(snap);super.onDetachedFromWindow()}
+
+    companion object {
+        /** Miniature of the wallpaper menu using a fresh selection from its catalogue. */
+        fun tileBitmaps(context: Context, surface: Int): List<Bitmap> {
+            val themes = ThemeCatalog.load(context)
+            val images = themes.shuffled().asSequence()
+                .mapNotNull { theme -> runCatching { ThemeCatalog.thumbnail(context, theme) }.getOrNull() }
+                .take(3).toList()
+            return images.mapIndexed { index, image ->
+                val left = images[(index + images.size - 1) % images.size]
+                val right = images[(index + 1) % images.size]
+                drawTile(image, left, right, surface)
+            }.ifEmpty {
+                listOfNotNull(PreviewWallpaper.read(context)?.let { drawTile(it, null, null, surface) })
+            }
+        }
+
+        private fun drawTile(main: Bitmap, left: Bitmap?, right: Bitmap?, surface: Int): Bitmap {
+            val bitmap = Bitmap.createBitmap(360, 204, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bitmap)
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+            fun card(source: Bitmap, rect: RectF, alpha: Int) {
+                val image = if (source.config == Bitmap.Config.HARDWARE) source.copy(Bitmap.Config.ARGB_8888, false) ?: return else source
+                val scale = minOf(rect.width() / image.width, rect.height() / image.height)
+                val halfWidth=image.width*scale/2f
+                val halfHeight=image.height*scale/2f
+                val fitted=RectF(rect.centerX()-halfWidth,rect.centerY()-halfHeight,
+                    rect.centerX()+halfWidth,rect.centerY()+halfHeight)
+                paint.color = surface
+                paint.alpha=255
+                canvas.drawRoundRect(fitted,15f,15f,paint)
+                paint.shader = BitmapShader(image, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
+                    setLocalMatrix(Matrix().apply {
+                        setScale(scale, scale)
+                        postTranslate(rect.centerX() - image.width * scale / 2f, rect.centerY() - image.height * scale / 2f)
+                    })
+                }
+                paint.alpha = alpha
+                canvas.drawRoundRect(fitted,15f,15f,paint)
+                paint.shader = null
+                if (image !== source) image.recycle()
+            }
+            card(left ?: right ?: main, RectF(17f, 17f, 133f, 187f), 176)
+            card(right ?: left ?: main, RectF(227f, 17f, 343f, 187f), 176)
+            card(main, RectF(114f, 2f, 246f, 202f), 255)
+            return bitmap
+        }
+    }
 }

@@ -6,12 +6,21 @@ import android.graphics.PorterDuffColorFilter
 
 /** Immutable snapshot shared by all icon render paths. Constructed on preference changes only. */
 data class IconPalette(val custom: Boolean, val background: Int, val foreground: Int, val clear: Boolean = false,
-    val tintHue: Int = 0, val tintSaturation: Int = 0, val whiteGlyph: Boolean = false) {
+    val tintHue: Int = 0, val tintSaturation: Int = 0, val whiteGlyph: Boolean = false, val systemThemed: Boolean = false,
+    val autoLook: Int = -1, val autoDark: Boolean = false) {
+    val usesThemeColors get() = custom || systemThemed
     val filter = PorterDuffColorFilter(foreground, PorterDuff.Mode.SRC_IN)
     companion object {
         fun isSystemDark(context: android.content.Context): Boolean =
             context.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK ==
                 android.content.res.Configuration.UI_MODE_NIGHT_YES
+
+        fun resolve(context: android.content.Context, mode: Int, hue: Int, saturation: Int, brightness: Int,
+            dark: Boolean, clear: Boolean): IconPalette {
+            if (mode != 0) return from(mode, hue, saturation, brightness, dark, clear)
+            val tones = SystemIconColors.resolve(context, dark)
+            return IconPalette(false, tones.background, tones.foreground, systemThemed = true)
+        }
 
         fun from(mode: Int, hue: Int, saturation: Int, brightness: Int, dark: Boolean = true, clear: Boolean = false): IconPalette {
             val h = hue.coerceIn(0, 360).toFloat()

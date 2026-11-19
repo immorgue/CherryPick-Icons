@@ -9,9 +9,9 @@ import android.graphics.Point
 import android.graphics.drawable.Drawable
 import com.cosmod.launcherglass.util.DesktopSizing
 import com.cosmod.launcherglass.util.GlassLogger
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
+import com.cosmod.launcherglass.bridge.HookCallback
+import com.cosmod.launcherglass.bridge.HookRuntime
+import com.cosmod.launcherglass.bridge.HookReflection
 import java.util.WeakHashMap
 import kotlin.math.roundToInt
 
@@ -47,8 +47,8 @@ internal object DesktopCells {
         }
     }
     fun install(loader:ClassLoader) {
-        val layout=XposedHelpers.findClassIfExists("com.android.launcher3.CellLayout",loader) ?: return
-        ModuleHooks.hookAllMethods(layout,"onMeasure",object:XC_MethodHook(){
+        val layout=HookReflection.findClassIfExists("com.android.launcher3.CellLayout",loader) ?: return
+        ModuleHooks.hookAllMethods(layout,"onMeasure",object:HookCallback(){
             override fun beforeHookedMethod(param:MethodHookParam){
                 val view=param.thisObject as? View ?: return
                 param.setObjectExtra("cellMeasureBefore",measuring.get())
@@ -57,11 +57,11 @@ internal object DesktopCells {
                 val width=cellWidth(view,cell.width)
                 val height=cellHeight(view,cell.height)
                 if(active(view) && (width!=cell.actualWidth || height!=cell.actualHeight))
-                    XposedHelpers.callMethod(view,"setCellDimensionsInner",cell.width,cell.height)
+                    HookReflection.callMethod(view,"setCellDimensionsInner",cell.width,cell.height)
             }
             override fun afterHookedMethod(param:MethodHookParam){measuring.set(param.getObjectExtra("cellMeasureBefore") as? View)}
         })
-        ModuleHooks.hookAllMethods(layout,"setCellDimensionsInner",object:XC_MethodHook(){
+        ModuleHooks.hookAllMethods(layout,"setCellDimensionsInner",object:HookCallback(){
             override fun beforeHookedMethod(param:MethodHookParam){
                 val view=param.thisObject as? View ?: return
                 if(!active(view) || param.args.size!=2)return
@@ -81,7 +81,7 @@ internal object DesktopCells {
                 param.args[1]=actualHeight
             }
         })
-        ModuleHooks.hookAllMethods(layout,"getUnusedHorizontalSpace",object:XC_MethodHook(){
+        ModuleHooks.hookAllMethods(layout,"getUnusedHorizontalSpace",object:HookCallback(){
             override fun afterHookedMethod(param:MethodHookParam){
                 val view=param.thisObject as? View ?: return
                 val cell=cells[view] ?: return
@@ -91,7 +91,7 @@ internal object DesktopCells {
                 param.result=view.measuredWidth-view.paddingLeft-view.paddingRight-cell.actualWidth*count-gap*(count-1)
             }
         })
-        ModuleHooks.hookAllMethods(layout,"onLayout",object:XC_MethodHook(){
+        ModuleHooks.hookAllMethods(layout,"onLayout",object:HookCallback(){
             override fun beforeHookedMethod(param:MethodHookParam){
                 val view=param.thisObject as? View ?: return
                 val previous=verticalShifts.remove(view) ?: return
@@ -115,7 +115,7 @@ internal object DesktopCells {
             }
         })
         for((name,horizontalAxis) in listOf("getLayoutPaddingStart" to true,"getLayoutPaddingTop" to false)){
-            ModuleHooks.hookAllMethods(layout,name,object:XC_MethodHook(){
+            ModuleHooks.hookAllMethods(layout,name,object:HookCallback(){
                 override fun afterHookedMethod(param:MethodHookParam){
                     val view=param.thisObject as? View ?: return
                     val cell=cells[view] ?: return
@@ -129,17 +129,17 @@ internal object DesktopCells {
                 }
             })
         }
-        val bubble=XposedHelpers.findClassIfExists("com.android.launcher3.BubbleTextView",loader) ?: return
-        val row=XposedHelpers.findClassIfExists("com.android.launcher3.ShortcutAndWidgetContainer",loader) ?: return
+        val bubble=HookReflection.findClassIfExists("com.android.launcher3.BubbleTextView",loader) ?: return
+        val row=HookReflection.findClassIfExists("com.android.launcher3.ShortcutAndWidgetContainer",loader) ?: return
         installWidgetSizing(loader,row)
-        ModuleHooks.hookAllMethods(row,"measureChild",object:XC_MethodHook(){
+        ModuleHooks.hookAllMethods(row,"measureChild",object:HookCallback(){
             override fun beforeHookedMethod(param:MethodHookParam){
                 val child=param.args.firstOrNull() as? TextView ?: return
                 if(!bubble.isInstance(child))return
                 resizeDockIcon(child)
             }
         })
-        ModuleHooks.hookAllMethods(bubble,"applyCompoundDrawables",object:XC_MethodHook(){
+        ModuleHooks.hookAllMethods(bubble,"applyCompoundDrawables",object:HookCallback(){
             override fun beforeHookedMethod(param:MethodHookParam){
                 val child=param.thisObject as? TextView ?: return
                 resizeDockIcon(child,rebind=false)
@@ -185,13 +185,13 @@ internal object DesktopCells {
     }
 
     private fun installWidgetSizing(loader:ClassLoader,row:Class<*>) {
-        val params=XposedHelpers.findClassIfExists("com.android.launcher3.celllayout.CellLayoutLayoutParams",loader) ?: return
-        val areaWidget=XposedHelpers.findClassIfExists("com.android.launcher3.card.IAreaWidget",loader)
-        val launcherCard=XposedHelpers.findClassIfExists("com.android.launcher3.card.LauncherCardView",loader)
-        val folder=XposedHelpers.findClassIfExists("com.android.launcher3.folder.FolderIcon",loader)
+        val params=HookReflection.findClassIfExists("com.android.launcher3.celllayout.CellLayoutLayoutParams",loader) ?: return
+        val areaWidget=HookReflection.findClassIfExists("com.android.launcher3.card.IAreaWidget",loader)
+        val launcherCard=HookReflection.findClassIfExists("com.android.launcher3.card.LauncherCardView",loader)
+        val folder=HookReflection.findClassIfExists("com.android.launcher3.folder.FolderIcon",loader)
         val measuringWidget=ThreadLocal<View?>()
         val sizingWidget=ThreadLocal<Boolean>()
-        for(name in listOf("measureChild","setupLp"))ModuleHooks.hookAllMethods(row,name,object:XC_MethodHook(){
+        for(name in listOf("measureChild","setupLp"))ModuleHooks.hookAllMethods(row,name,object:HookCallback(){
             override fun beforeHookedMethod(param:MethodHookParam){
                 param.setObjectExtra("previousWidget",measuringWidget.get())
                 val child=param.args.firstOrNull() as? View
@@ -204,7 +204,7 @@ internal object DesktopCells {
                 measuringWidget.set(param.getObjectExtra("previousWidget") as? View)
             }
         })
-        ModuleHooks.hookAllMethods(params,"setup",object:XC_MethodHook(){
+        ModuleHooks.hookAllMethods(params,"setup",object:HookCallback(){
             override fun beforeHookedMethod(param:MethodHookParam){
                 if(sizingWidget.get()==true || measuringWidget.get()?.layoutParams!==param.thisObject)return
                 sizingWidget.set(true)
@@ -224,12 +224,12 @@ internal object DesktopCells {
                 if(param.args.getOrNull(0)!=size.actualWidth || param.args.getOrNull(1)!=size.actualHeight)return
                 val width=lp.width;val height=lp.height
                 if(width<=0 || height<=0 || NativeIconAccess.field(lp,"isLockedToGrid")==false)return
-                val left=XposedHelpers.getIntField(lp,"x")
-                val top=XposedHelpers.getIntField(lp,"y")
+                val left=HookReflection.getIntField(lp,"x")
+                val top=HookReflection.getIntField(lp,"y")
                 try {
                     val stockArgs=param.args.copyOf()
                     stockArgs[0]=size.width;stockArgs[1]=size.height
-                    XposedBridge.invokeOriginalMethod(param.method,lp,stockArgs)
+                    HookRuntime.invokeOriginalMethod(param.method,lp,stockArgs)
                     val stockWidth=lp.width.coerceAtLeast(1);val stockHeight=lp.height.coerceAtLeast(1)
                     val scale=minOf(1f,width.toFloat()/stockWidth,height.toFloat()/stockHeight)
                     lp.width=(stockWidth*scale).roundToInt().coerceAtLeast(1)
@@ -238,8 +238,8 @@ internal object DesktopCells {
                     lp.width=width;lp.height=height
                     GlassLogger.limited("DesktopGeometry","widget-size-failed",100){"Widget sizing unavailable: ${t.message}"}
                 }finally{
-                    XposedHelpers.setIntField(lp,"x",left+(width-lp.width)/2)
-                    XposedHelpers.setIntField(lp,"y",top+(height-lp.height)/2)
+                    HookReflection.setIntField(lp,"x",left+(width-lp.width)/2)
+                    HookReflection.setIntField(lp,"y",top+(height-lp.height)/2)
                 }
             }
         })
@@ -262,9 +262,9 @@ internal object DesktopCells {
             val target=DesktopSizing.iconPixels(base,percent,available,(8*view.resources.displayMetrics.density).toInt())
             if(isDock)icons[view]=Icon(base,target)else icons.remove(view)
             if(current==target)return
-            XposedHelpers.setIntField(view,"mIconSize",target)
+            HookReflection.setIntField(view,"mIconSize",target)
             if(rebind)(NativeIconAccess.field(view,"mIcon") as? Drawable)?.let {
-                XposedHelpers.callMethod(view,"applyCompoundDrawables",it)
+                HookReflection.callMethod(view,"applyCompoundDrawables",it)
             }
             GlassLogger.limited("DesktopGeometry","dock-size",100){"Dock icon size: $current -> $target px"}
         }catch(t:Throwable){

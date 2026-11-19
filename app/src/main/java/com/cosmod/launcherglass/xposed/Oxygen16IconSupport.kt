@@ -5,7 +5,7 @@ import android.graphics.*
 import android.graphics.drawable.Drawable
 import com.cosmod.launcherglass.util.GlassLogger
 import com.cosmod.launcherglass.util.GlyphShadowHelper
-import de.robv.android.xposed.*
+import com.cosmod.launcherglass.bridge.*
 import java.util.WeakHashMap
 import kotlin.math.abs
 
@@ -22,13 +22,13 @@ internal object Oxygen16IconSupport {
         if(configured)return
         configured=true
         val version=try {context.packageManager.getPackageInfo(context.packageName,0).versionName}catch(_:Throwable){null}
-        val native=XposedHelpers.findClassIfExists("com.android.launcher3.icons.FastBitmapDrawable",context.classLoader) ?: return
+        val native=HookReflection.findClassIfExists("com.android.launcher3.icons.FastBitmapDrawable",context.classLoader) ?: return
         val method=com.cosmod.launcherglass.util.LauncherMethodResolver.splitIconMethod(native,
             Bitmap::class.java,Paint::class.java,Canvas::class.java,Rect::class.java) ?: run {
             GlassLogger.i("Oxygen16","Split Flux API unavailable on launcher $version; generic icons kept")
             return
         }
-        ModuleHooks.hookMethod(method,object:XC_MethodHook(){
+        ModuleHooks.hookMethod(method,object:HookCallback(){
             override fun beforeHookedMethod(param:MethodHookParam){
                 if(!PrefsHelper.enabled || IconGlassHook.isRecordingNative())return
                 val drawable=param.thisObject as? Drawable ?: return
@@ -40,7 +40,7 @@ internal object Oxygen16IconSupport {
                     val glyph=software(source)
                     val paint=Paint(NativeIconAccess.field(drawable,"mPaintSubLayer") as? Paint ?: Paint(3))
                     val palette=PrefsHelper.iconPalette
-                    if(palette.custom || palette.whiteGlyph)paint.colorFilter=palette.filter
+                    if(palette.usesThemeColors || palette.whiteGlyph)paint.colorFilter=palette.filter
                     // Record the logo in its native sub-layer transform, separately
                     // from the plate. Native press/launch scale and alpha stay intact.
                     val capturedBounds=Rect(bounds)
@@ -100,7 +100,7 @@ internal object Oxygen16IconSupport {
         val glyph=Bitmap.createBitmap(plate.plateMaskBitmap.width,plate.plateMaskBitmap.height,Bitmap.Config.ARGB_8888)
         val paint=Paint(NativeIconAccess.field(drawable,"mPaintSubLayer") as? Paint ?: Paint(3)).apply {alpha=255}
         val palette=PrefsHelper.iconPalette
-        if(palette.custom || palette.whiteGlyph)paint.colorFilter=palette.filter
+        if(palette.usesThemeColors || palette.whiteGlyph)paint.colorFilter=palette.filter
         Canvas(glyph).drawBitmap(software(source),null,Rect(0,0,glyph.width,glyph.height),paint)
         return plate.copy(glyphBitmap=glyph)
     }

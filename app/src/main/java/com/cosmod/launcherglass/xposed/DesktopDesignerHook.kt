@@ -10,9 +10,9 @@ import com.cosmod.launcherglass.R
 import com.cosmod.launcherglass.ui.SettingsProvider
 import com.cosmod.launcherglass.util.DesktopGrid
 import com.cosmod.launcherglass.util.GlassLogger
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
+import com.cosmod.launcherglass.bridge.HookCallback
+import com.cosmod.launcherglass.bridge.HookRuntime
+import com.cosmod.launcherglass.bridge.HookReflection
 
 /** Native persistence and dragging, with a read-only layout preview before confirmation. */
 internal object DesktopDesignerHook {
@@ -20,9 +20,9 @@ internal object DesktopDesignerHook {
         Thread(task,"CherryPick-grid-preview").apply {isDaemon=true}
     }
     fun install(loader:ClassLoader) {
-        val launcher=XposedHelpers.findClassIfExists("com.android.launcher.Launcher",loader) ?: return
+        val launcher=HookReflection.findClassIfExists("com.android.launcher.Launcher",loader) ?: return
         DesktopMigration.install(loader)
-        XposedBridge.hookAllMethods(launcher,"onResume",object:XC_MethodHook(){
+        HookRuntime.hookAllMethods(launcher,"onResume",object:HookCallback(){
             override fun afterHookedMethod(param:MethodHookParam) {
                 val activity=param.thisObject as? Activity ?: return
                 try {

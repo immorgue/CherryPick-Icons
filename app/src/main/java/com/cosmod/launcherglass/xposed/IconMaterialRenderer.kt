@@ -8,15 +8,19 @@ import java.util.WeakHashMap
 import java.lang.ref.WeakReference
 import android.os.Handler
 import android.os.Looper
-import de.robv.android.xposed.XposedHelpers
+import com.cosmod.launcherglass.bridge.HookReflection
 import com.cosmod.launcherglass.util.GlassLogger
+import com.cosmod.launcherglass.util.GlassVolume
+import com.cosmod.launcherglass.util.GlyphShadowHelper
+import com.cosmod.launcherglass.util.WallpaperHelper
 
 /** UI-thread cache: moving wallpaper changes a shader matrix, not icon layers. */
 object IconMaterialRenderer {
     private data class Key(
         val mask: Bitmap, val contourMask:Bitmap, val glyph: Bitmap, val width: Int, val height: Int,
         val color: Int, val opacity: Int, val hideGlyph: Boolean, val blurred: Boolean,
-        val gradient: Int, val stroke: Int, val shadow: Int, val glyphStroke: Int, val glyphStrokeWidth: Int, val glyphStrokeBrightness: Int
+        val gradient: Int, val stroke: Int, val shadow: Int, val glyphShade: Int,
+        val glyphStroke: Int, val glyphStrokeWidth: Int, val glyphStrokeBrightness: Int
     )
 
     private class Material(val overlay: Bitmap, val mask: BitmapShader?,val rounding:Float,val maskImage:Bitmap) {
@@ -31,7 +35,10 @@ object IconMaterialRenderer {
         var appliedStyle:GlassStyle?=null
         var appliedHardware:Boolean?=null
         val clock=SampleFrameClock()
-        var parentRevision=-1L
+        var shaderSerial=0L
+        var backgroundSerial=-1L
+        var backgroundNode:RenderNode?=null
+        var backgroundFinish:GlassFinish?=null
     }
 
     // Eviction only drops Java references: recorded display lists can still own
@@ -400,7 +407,7 @@ object IconMaterialRenderer {
         if(sampler.returnPending && sampler.returnStartedNs==nowNs){
             val flight=sampler.returnBackdrop?.takeUnless {it.wallpaper.isRecycled}
             if(flight!=null){
-                sampler.returnEffect=if(flight.wallpaper===wallpaper && flight.source==source && flight.parentRevision==(parent?.revision ?: 0L))
+                sampler.returnEffect=if(flight.wallpaper===wallpaper && flight.source==source && parent==null)
                     null else backdropEffect(sampler,flight.wallpaper,flight.source,parent)
             }
             sampler.returnBackdrop=null
@@ -441,7 +448,7 @@ object IconMaterialRenderer {
             }
         var effect=RenderEffect.createShaderEffect(background)
         if(filter!=null && refracted==null)effect=RenderEffect.createColorFilterEffect(filter,effect)
-        return effect
+        return MaterialFinish.effect(effect,sampler.node.width,sampler.node.height,style.finish) ?: effect
     }
 
     private fun sampleFps(workspace:Boolean,mini:Boolean):Int {
@@ -471,8 +478,8 @@ object IconMaterialRenderer {
         val entries=samplers[view] ?: return false
         prune(entries)
         if(entries.isEmpty())return false
-        val world=transform ?: Matrix().also {
-            try {XposedHelpers.callMethod(view,"transformMatrixToGlobal",it)}catch(_:Throwable){return false}
+        val world=transform?.takeUnless {WallpaperSampleCoordinates.usesLayout(view)} ?: Matrix().also {
+            try {WallpaperSampleCoordinates.world(view,it)}catch(_:Throwable){return false}
         }
         var restored=false
         val scroll=com.cosmod.launcherglass.util.LiveBlurEngine.wallpaperScrollRatio
@@ -483,7 +490,7 @@ object IconMaterialRenderer {
             val scope=sampler.origin?.get() ?: view
             val image=if(sampler.style.folder){
                 folderImage ?: (com.cosmod.launcherglass.util.WallpaperHelper.getFolderWallpaper(view.context) ?: wallpaper).also {folderImage=it}
-            }else DockMaterial.iconWallpaper(scope,wallpaper)
+            }else wallpaper
             val parent=ParentBackdrop.resolve(scope,drawable,image,includeHidden=sampler.origin?.get()!=null)
             if(sampler.returnEffect==null && !sampler.staticHeld && sampler.staticReturn==NativeSurfaceLive.staticFlightReturn && !sampler.predictionApplied && sampler.worldValid && sampler.world==world && sampler.scroll==scroll && sampler.wallpaper===image && sampler.appliedStyle==sampler.style && sampler.backdropRevision==(parent?.revision ?: 0L)){
                 sampler.staticReturn=NativeSurfaceLive.staticFlightReturn
@@ -499,6 +506,42 @@ object IconMaterialRenderer {
         return !restored
     }
 
+    /** Shared icon material for launcher, snapshots and the settings preview. */
+    internal fun drawIcon(
+        canvas: Canvas, bounds: Rect, parts: ProcessedIcon, plateColor: Int, plateOpacity: Int,
+        wallpaper: Bitmap?, source: RectF?, binding: Binding? = null, style: GlassStyle
+    ) {
+        val plateMask = parts.plateMaskBitmap
+        draw(canvas,bounds,plateMask,parts.glyphBitmap,plateColor,
+            plateOpacity*255/100,false,wallpaper,source,binding,style=style){target,local,blurred ->
+            if(!blurred){
+                val save=target.saveLayer(RectF(local),null)
+                val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply {colorFilter=PorterDuffColorFilter((plateOpacity*255/100 shl 24) or (plateColor and 0xffffff),PorterDuff.Mode.SRC_IN)}
+                target.drawBitmap(WallpaperHelper.forCanvas(plateMask,target),null,local,paint)
+                if(PrefsHelper.gradientOpacity>0){
+                    paint.colorFilter=null;paint.isDither=true;paint.shader=GlassVolume.shader(local.height().toFloat(),PrefsHelper.gradientOpacity)
+                    paint.xfermode=PorterDuffXfermode(PorterDuff.Mode.SRC_ATOP)
+                    target.drawRect(local,paint)
+                }
+                target.restoreToCount(save)
+            }
+            if(PrefsHelper.iconStroke && PrefsHelper.strokeOpacity>0){
+                target.drawBitmap(GlassGeometry.rim(plateMask),null,local,Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
+            }
+            val flatPicture=parts.origin==IconOrigin.ARTWORK && PrefsHelper.iconPalette.autoLook>=0
+            if(!flatPicture && PrefsHelper.glyphShadow && PrefsHelper.shadowOpacity>0){
+                GlyphShadowHelper.getOrCreateShadow(parts.glyphBitmap)?.let {shadow ->
+                    val sx=local.width().toFloat()/parts.glyphBitmap.width;val sy=local.height().toFloat()/parts.glyphBitmap.height
+                    val x=shadow.offsetX*sx;val y=shadow.offsetY*sy+(local.height()*.016f).coerceAtLeast(2f)
+                    target.drawBitmap(shadow.bitmap,null,RectF(x,y,x+shadow.bitmap.width*sx,y+shadow.bitmap.height*sy),Paint(Paint.FILTER_BITMAP_FLAG).apply {alpha=175*PrefsHelper.shadowOpacity/100})
+                }
+            }
+            val glyphPaint=Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+            if(flatPicture)target.drawBitmap(parts.glyphBitmap,null,local,glyphPaint)
+            else GlyphMaterialRenderer.draw(target,local,parts.glyphBitmap,glyphPaint)
+        }
+    }
+
     fun draw(
         canvas: Canvas, bounds: Rect, mask: Bitmap, glyph: Bitmap,
         color: Int, tintAlpha: Int, hideGlyph: Boolean,
@@ -508,7 +551,14 @@ object IconMaterialRenderer {
             drawMaterial(canvas,bounds,mask,glyph,color,tintAlpha,hideGlyph,sampleWallpaper,sampleSource,binding,volume,style,contourMask,recordingCache(),buildOverlay)
         }else synchronized(this){
             android.os.Trace.beginSection("CherryPick.iconRecord")
-            try {drawMaterial(canvas,bounds,mask,glyph,color,tintAlpha,hideGlyph,sampleWallpaper,sampleSource,binding,volume,style,contourMask,cache,buildOverlay)}
+            try {
+                val transition = if (binding != null && Looper.myLooper() == Looper.getMainLooper()) AutoMenuBridge.transition else null
+                if (transition != null && binding != null) {
+                    transition.draw(canvas,bounds,binding) { target ->
+                        drawMaterial(target,bounds,mask,glyph,color,tintAlpha,hideGlyph,sampleWallpaper,sampleSource,binding,volume,style,contourMask,cache,buildOverlay)
+                    }
+                } else drawMaterial(canvas,bounds,mask,glyph,color,tintAlpha,hideGlyph,sampleWallpaper,sampleSource,binding,volume,style,contourMask,cache,buildOverlay)
+            }
             finally{android.os.Trace.endSection()}
         }
     }
@@ -534,6 +584,7 @@ object IconMaterialRenderer {
             if(volume)PrefsHelper.gradientOpacity else 0,
             if (!hideGlyph && PrefsHelper.iconStroke) PrefsHelper.strokeOpacity else 0,
             if (PrefsHelper.glyphShadow) PrefsHelper.shadowOpacity else 0,
+            PrefsHelper.glyphBottomShade,
             if (PrefsHelper.glyphStroke) PrefsHelper.glyphStrokeOpacity else 0,
             if (PrefsHelper.glyphStroke) PrefsHelper.glyphStrokeWidth else 0,
             if (PrefsHelper.glyphStroke) PrefsHelper.glyphStrokeBrightness else 0)
@@ -548,7 +599,7 @@ object IconMaterialRenderer {
             if(binding!=null && wallpaper!=null && !binding.foreign){
                 val world=Matrix()
                 try {
-                    XposedHelpers.callMethod(binding.view,"transformMatrixToGlobal",world)
+                    WallpaperSampleCoordinates.world(binding.view,world)
                     val rect=RectF(binding.local);world.mapRect(rect)
                     footprint=WallpaperFootprint.source(wallpaper,binding.screenW,binding.screenH,rect)
                 }catch(_:Throwable){}
@@ -644,7 +695,7 @@ object IconMaterialRenderer {
                     ensureContents(sampler)
                     val rect=RectF(binding.local)
                     val world=Matrix()
-                    try {XposedHelpers.callMethod(binding.view,"transformMatrixToGlobal",world);world.mapRect(rect)}catch(_:Throwable){rect.set(0f,0f,width.toFloat(),height.toFloat())}
+                    try {WallpaperSampleCoordinates.world(binding.view,world);world.mapRect(rect)}catch(_:Throwable){rect.set(0f,0f,width.toFloat(),height.toFloat())}
                     // Native overscroll can re-record the icon even when the
                     // live updater skips it. Retain its existing edge sample.
                     if(sampler.source==null || !freezeEdge(binding.view,world)) {
@@ -652,17 +703,15 @@ object IconMaterialRenderer {
                         // let the next pre-draw trust an older world stamp.
                         sampler.worldValid=false
                         val scope=binding.origin ?: binding.view
-                        val image=DockMaterial.iconWallpaper(scope,wallpaper)
-                        samplerEffect(sampler,image,WallpaperFootprint.source(image,binding.screenW,binding.screenH,rect),view=binding.view,
-                            parent=ParentBackdrop.resolve(scope,binding.drawable,image,includeHidden=binding.origin!=null))
+                        samplerEffect(sampler,wallpaper,WallpaperFootprint.source(wallpaper,binding.screenW,binding.screenH,rect),view=binding.view,
+                            parent=ParentBackdrop.resolve(scope,binding.drawable,wallpaper,includeHidden=binding.origin!=null))
                     }
                     plate.drawRenderNode(liftNode(sampler,binding) ?: sampler.node)
                 }else{
                     val nowNs=System.nanoTime()
                     val fps=sampleFps(binding)
                     val hardware=canvas.isHardwareAccelerated
-                    val parent=if(hardware)DockMaterial.nativeParentBackdrop(NativeSurfaceLive.materialSource)else null
-                    val changed=material.wallpaper!==wallpaper || material.source!=source || material.appliedStyle!=style || material.appliedHardware!=hardware || material.parentRevision!=(parent?.revision ?: 0L)
+                    val changed=material.wallpaper!==wallpaper || material.source!=source || material.appliedStyle!=style || material.appliedHardware!=hardware
                     // Software canvases are often one-shot launcher snapshots:
                     // there may be no later draw on which to repair a stale
                     // crop. Apply the current source immediately. This does
@@ -675,7 +724,7 @@ object IconMaterialRenderer {
                         CpuLiquidGlass.shader(wallpaper,mask,width,height,source,material.rounding,style)
                     }else if(android.os.Build.VERSION.SDK_INT>=33 && style.kyant!=null && canvas.isHardwareAccelerated){
                         val lens=material.liquid ?: LiquidGlassShader.create().also {material.liquid=it}
-                        lens?.update(wallpaper,material.mask!!,source,width,height,style.filter,material.rounding,style,parent?.shader)
+                        lens?.update(wallpaper,material.mask!!,source,width,height,style.filter,material.rounding,style)
                     }else null
                     if(refracted!=null){
                         material.paint.shader=refracted
@@ -686,19 +735,39 @@ object IconMaterialRenderer {
                             material.wallpaperShader = GlassGeometry.wallpaperShader(wallpaper)
                         }
                         material.matrix.setRectToRect(RectF(source), RectF(0f,0f,width.toFloat(),height.toFloat()), Matrix.ScaleToFit.FILL)
-                        val texture=parent?.shader?.let {
-                            ComposeShader(it,LinearGradient(0f,0f,1f,0f,Color.TRANSPARENT,Color.TRANSPARENT,Shader.TileMode.CLAMP),PorterDuff.Mode.SRC_OVER)
-                        } ?: material.wallpaperShader!!
-                        texture.setLocalMatrix(material.matrix)
-                        material.wallpaperComposite = ComposeShader(texture, material.mask!!, PorterDuff.Mode.DST_IN)
+                        material.wallpaperComposite = ComposeShader(material.wallpaperShader!!, material.mask!!, PorterDuff.Mode.DST_IN)
                     material.paint.shader=material.wallpaperComposite
                     material.paint.colorFilter = style.filter
                     }
                     material.wallpaper=wallpaper;material.source=RectF(source);material.appliedStyle=style
-                    material.appliedHardware=hardware;material.parentRevision=parent?.revision ?: 0L
+                    material.appliedHardware=hardware
                     material.clock.record(nowNs,fps)
+                    material.shaderSerial++
                     }
-                    plate.drawRect(0f,0f,width.toFloat(),height.toFloat(),material.paint)
+                    if(style.finish.active){
+                        if(canvas.isHardwareAccelerated){
+                            val node=material.backgroundNode ?: RenderNode("CherryPick.opticalFinish").apply {
+                                setPosition(0,0,width,height);material.backgroundNode=this
+                            }
+                            if(material.backgroundFinish!=style.finish){
+                                node.setRenderEffect(MaterialFinish.effect(null,width,height,style.finish))
+                                material.backgroundFinish=style.finish
+                            }
+                            if(!node.hasDisplayList() || material.backgroundSerial!=material.shaderSerial){
+                                val recording=node.beginRecording(width,height)
+                                try {recording.drawRect(0f,0f,width.toFloat(),height.toFloat(),material.paint)}finally{node.endRecording()}
+                                material.backgroundSerial=material.shaderSerial
+                            }
+                            plate.drawRenderNode(node)
+                        }else{
+                            val bitmap=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888)
+                            Canvas(bitmap).drawRect(0f,0f,width.toFloat(),height.toFloat(),material.paint)
+                            val finished=MaterialFinish.applyCpu(bitmap,style.finish)
+                            plate.drawBitmap(finished,0f,0f,outputPaint)
+                            if(finished!==bitmap)finished.recycle()
+                            bitmap.recycle()
+                        }
+                    }else plate.drawRect(0f,0f,width.toFloat(),height.toFloat(),material.paint)
                 }
             }
             plate.drawBitmap(material.overlay, 0f, 0f, outputPaint)
@@ -710,7 +779,7 @@ object IconMaterialRenderer {
     }
 
     /** Liquid always needs a backdrop for refraction, even with the blur switch off. */
-    fun clearGlass(style:GlassStyle)=style.colorOnly || (style.kyant?.needsBackdrop!=true && style.radius<=0)
+    fun clearGlass(style:GlassStyle)=!style.needsBackdrop
 
     /** The sampler an element's own draw bound for [material], preferring its latest. */
     private fun foreignSampler(binding:Binding,material:Material,width:Int,height:Int):Sampler? {
@@ -741,7 +810,7 @@ object IconMaterialRenderer {
             return null
         }
         if(sampler.backdropRevision!=0L || LiftedBackdrop.hasPopup(dragView)){
-            // Parent-backed material already includes the dock/folder. Capturing
+            // Parent-backed material already includes the folder. Capturing
             // that processed scene again changes its tone on selection.
             lift?.let {deactivate(it)}
             return null
@@ -844,7 +913,7 @@ object IconMaterialRenderer {
                 if(node.hasDisplayList())nodes.add(node)
             }
             val matrix=Matrix()
-            XposedHelpers.callMethod(layer,"transformMatrixToGlobal",matrix)
+            HookReflection.callMethod(layer,"transformMatrixToGlobal",matrix)
             levels.add(Level(layer,matrix,nodes))
             if(LiftedBackdrop.isDragLayer(layer))return levels
             child=layer
@@ -872,8 +941,8 @@ object IconMaterialRenderer {
         if(alpha>0f && current!==dragView)return false
         val world=Matrix()
         val dragWorld=Matrix()
-        XposedHelpers.callMethod(owner,"transformMatrixToGlobal",world)
-        XposedHelpers.callMethod(dragView,"transformMatrixToGlobal",dragWorld)
+        HookReflection.callMethod(owner,"transformMatrixToGlobal",world)
+        HookReflection.callMethod(dragView,"transformMatrixToGlobal",dragWorld)
         val toScreen=Matrix()
         toScreen.setRectToRect(RectF(0f,0f,w.toFloat(),h.toFloat()),sampler.local,Matrix.ScaleToFit.FILL)
         toScreen.postConcat(world)
@@ -908,14 +977,15 @@ object IconMaterialRenderer {
         val processing=if(style.folder && FolderSettings.own)FolderSettings.processing else null
         val vibrancy=processing?.vibrancy ?: PrefsHelper.blurVibrancy
         val lightening=processing?.lightening ?: PrefsHelper.blurLightening
-        val blurKey=listOf<Any?>(radius,vibrancy,lightening)
+        val blurKey=listOf<Any?>(radius,vibrancy,lightening,style.finish.transparency)
         if(lift.blurKey!=blurKey){
             val vivid=com.cosmod.launcherglass.util.BackdropVibrancy.effect(vibrancy)
             val blur=if(radius>0f){
                 if(vivid!=null)RenderEffect.createBlurEffect(radius,radius,vivid,Shader.TileMode.DECAL)
                 else RenderEffect.createBlurEffect(radius,radius,Shader.TileMode.DECAL)
             }else vivid
-            lift.scene.setRenderEffect(com.cosmod.launcherglass.util.ShadowTone.effect(blur,lightening))
+            lift.scene.setRenderEffect(com.cosmod.launcherglass.util.ShadowTone.effect(
+                com.cosmod.launcherglass.util.BlurOpacity.effect(blur,vivid,style.finish.transparency),lightening))
             lift.blurKey=blurKey
         }
         val sceneNumbers=ArrayList<Float>()
@@ -988,6 +1058,7 @@ object IconMaterialRenderer {
                 RenderEffect.createBlendModeEffect(content,RenderEffect.createShaderEffect(mask),BlendMode.DST_IN)
             }
             lift.wrapper.setRenderEffect(effect)
+            lift.top.setRenderEffect(MaterialFinish.effect(null,w,h,style.finish))
             lift.effectKey=effectKey
         }
 

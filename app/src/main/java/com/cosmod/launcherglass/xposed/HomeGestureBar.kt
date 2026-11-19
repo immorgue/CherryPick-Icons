@@ -5,8 +5,9 @@ import android.content.*
 import android.database.ContentObserver
 import android.os.*
 import android.view.View
+import androidx.core.content.ContextCompat
 import com.cosmod.launcherglass.ui.SettingsProvider
-import de.robv.android.xposed.*
+import com.cosmod.launcherglass.bridge.*
 import java.lang.ref.WeakReference
 import java.util.WeakHashMap
 import java.util.concurrent.Executors
@@ -34,8 +35,8 @@ internal object HomeGestureBar {
     private val homes=setOf("com.android.launcher","com.oppo.launcher","com.oplus.launcher","com.coloros.launcher","com.android.launcher3")
 
     fun installLauncher(loader:ClassLoader){
-        val type=XposedHelpers.findClassIfExists("com.android.launcher.Launcher",loader) ?: return
-        for(name in listOf("onResume","onPause","onWindowFocusChanged"))XposedBridge.hookAllMethods(type,name,object:XC_MethodHook(){
+        val type=HookReflection.findClassIfExists("com.android.launcher.Launcher",loader) ?: return
+        for(name in listOf("onResume","onPause","onWindowFocusChanged"))HookRuntime.hookAllMethods(type,name,object:HookCallback(){
             override fun afterHookedMethod(p:MethodHookParam){
                 val owner=p.thisObject as? Activity ?: return
                 activity=WeakReference(owner)
@@ -53,10 +54,10 @@ internal object HomeGestureBar {
             }
         })
         for(name in listOf("OplusLauncherAppTransitionHelper","OplusLauncherAppTransitionHelperV2")){
-            val helper=XposedHelpers.findClassIfExists("com.android.launcher3.anim.$name",loader) ?: continue
+            val helper=HookReflection.findClassIfExists("com.android.launcher3.anim.$name",loader) ?: continue
             for(method in helper.declaredMethods.filter {it.name in setOf("startAppLaunchWindowAnim","startAppCloseWindowAnim","startTaskViewLaunchWindowAnim")}){
                 val opening=method.name!="startAppCloseWindowAnim"
-                XposedBridge.hookMethod(method,object:XC_MethodHook(){
+                HookRuntime.hookMethod(method,object:HookCallback(){
                     override fun beforeHookedMethod(p:MethodHookParam){
                         transitionStarted()
                         p.setObjectExtra("handleTransitionId",transitionId)
@@ -64,7 +65,7 @@ internal object HomeGestureBar {
                     override fun afterHookedMethod(p:MethodHookParam){
                         val id=p.getObjectExtra("handleTransitionId") as? Int ?: return
                         if(p.hasThrowable()){transitionFinished(id,false);return}
-                        val callbackType=XposedHelpers.findClassIfExists("com.android.launcher3.anim.NullableAnimatorListener",loader)
+                        val callbackType=HookReflection.findClassIfExists("com.android.launcher3.anim.NullableAnimatorListener",loader)
                         if(callbackType?.isInterface==true){
                             val wrapper=p.args.firstOrNull {arg -> arg!=null && arg.javaClass.declaredMethods.any {
                                 it.parameterTypes.contentEquals(arrayOf(callbackType))
@@ -106,18 +107,18 @@ internal object HomeGestureBar {
         }
         // This event precedes launcher resume and the first home animation frame.
         for(name in listOf("com.android.quickstep.AbsSwipeUpHandler","com.android.quickstep.SwipeUpAnimationLogic")){
-            XposedHelpers.findClassIfExists(name,loader)?.let {type ->
-                XposedBridge.hookAllMethods(type,"onGestureStarted",object:XC_MethodHook(){
+            HookReflection.findClassIfExists(name,loader)?.let {type ->
+                HookRuntime.hookAllMethods(type,"onGestureStarted",object:HookCallback(){
                     override fun beforeHookedMethod(p:MethodHookParam){transitionStarted()}
                 })
             }
         }
-        XposedHelpers.findClassIfExists("com.android.launcher3.statemanager.StateManager",loader)?.let {state ->
-            XposedBridge.hookAllMethods(state,"goToState",object:XC_MethodHook(){
+        HookReflection.findClassIfExists("com.android.launcher3.statemanager.StateManager",loader)?.let {state ->
+            HookRuntime.hookAllMethods(state,"goToState",object:HookCallback(){
                 override fun beforeHookedMethod(p:MethodHookParam){
                     val owner=activity?.get() ?: return
-                    val normal=XposedHelpers.findClassIfExists("com.android.launcher3.LauncherState",loader)?.let {
-                        try {XposedHelpers.getStaticObjectField(it,"NORMAL")}catch(_:Throwable){null}
+                    val normal=HookReflection.findClassIfExists("com.android.launcher3.LauncherState",loader)?.let {
+                        try {HookReflection.getStaticObjectField(it,"NORMAL")}catch(_:Throwable){null}
                     }
                     publish(owner,normal!=null && p.args.firstOrNull()===normal && owner.hasWindowFocus())
                 }
@@ -127,9 +128,9 @@ internal object HomeGestureBar {
     fun refresh(){
         val owner=activity?.get() ?: return
         val normal=try {
-            val state=XposedHelpers.callMethod(XposedHelpers.callMethod(owner,"getStateManager"),"getState")
-            val type=XposedHelpers.findClass("com.android.launcher3.LauncherState",owner.classLoader)
-            state===XposedHelpers.getStaticObjectField(type,"NORMAL")
+            val state=HookReflection.callMethod(HookReflection.callMethod(owner,"getStateManager"),"getState")
+            val type=HookReflection.findClass("com.android.launcher3.LauncherState",owner.classLoader)
+            state===HookReflection.getStaticObjectField(type,"NORMAL")
         }catch(_:Throwable){false}
         publish(owner,normal && owner.hasWindowFocus())
     }
@@ -170,8 +171,8 @@ internal object HomeGestureBar {
             "com.android.systemui.navigationbar.gestural.QuickswitchOrientedNavHandle",
             "com.oplus.systemui.navigationbar.gesture.sidegesture.OplusNavigationHandle")
         for(name in names){
-            val type=XposedHelpers.findClassIfExists(name,loader) ?: continue
-            XposedBridge.hookAllConstructors(type,object:XC_MethodHook(){
+            val type=HookReflection.findClassIfExists(name,loader) ?: continue
+            HookRuntime.hookAllConstructors(type,object:HookCallback(){
                 override fun afterHookedMethod(p:MethodHookParam){
                     val view=p.thisObject as? View ?: return
                     handles[view]=true
@@ -179,11 +180,11 @@ internal object HomeGestureBar {
                     register(view.context.applicationContext)
                 }
             })
-            XposedBridge.hookAllMethods(type,"onDraw",object:XC_MethodHook(){
+            HookRuntime.hookAllMethods(type,"onDraw",object:HookCallback(){
                 override fun beforeHookedMethod(p:MethodHookParam){
                     if(!hidden)return
-                    val keyguard=try {XposedHelpers.getBooleanField(p.thisObject,"isKeyguardShowing")}catch(_:Throwable){false}
-                    val top=try {XposedHelpers.getObjectField(p.thisObject,"mLastAppPkgName") as? String}catch(_:Throwable){null}
+                    val keyguard=try {HookReflection.getBooleanField(p.thisObject,"isKeyguardShowing")}catch(_:Throwable){false}
+                    val top=try {HookReflection.getObjectField(p.thisObject,"mLastAppPkgName") as? String}catch(_:Throwable){null}
                     val suppress=keyguard || desktop || top in homes
                     animateOpacity(if(suppress)0f else 1f)
                     if(suppress && opacity<=.001f)p.result=null
@@ -236,8 +237,7 @@ internal object HomeGestureBar {
             }
         }
         val filter=IntentFilter(ACTION).apply {addAction(Intent.ACTION_SCREEN_OFF)}
-        if(Build.VERSION.SDK_INT>=33)context.registerReceiver(receiver,filter,Context.RECEIVER_EXPORTED)
-        else context.registerReceiver(receiver,filter)
+        ContextCompat.registerReceiver(context,receiver,filter,ContextCompat.RECEIVER_EXPORTED)
         load()
     }
 }

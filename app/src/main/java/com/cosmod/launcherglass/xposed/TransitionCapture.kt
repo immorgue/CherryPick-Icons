@@ -6,8 +6,8 @@ import android.graphics.drawable.Drawable
 import android.os.Looper
 import android.view.View
 import com.cosmod.launcherglass.util.GlassLogger
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedHelpers
+import com.cosmod.launcherglass.bridge.HookCallback
+import com.cosmod.launcherglass.bridge.HookReflection
 import java.util.Collections
 import java.util.WeakHashMap
 import java.util.concurrent.CompletableFuture
@@ -45,6 +45,7 @@ internal object TransitionCapture {
     private var logs=0
     private val failures=HashSet<String>()
     val renderingSnapshot:Boolean get()=recording.get()==true
+    internal fun isSnapshotTarget(view: View): Boolean = target.get() === view
     fun onSettingsChanged(){
         if(Looper.myLooper()!=Looper.getMainLooper()){
             android.os.Handler(Looper.getMainLooper()).post {onSettingsChanged()};return
@@ -90,9 +91,9 @@ internal object TransitionCapture {
         return true
     }
     fun install(loader:ClassLoader){
-        val utils=XposedHelpers.findClassIfExists("com.oplus.basecommon.util.BitmapUtils",loader) ?: return
-        val floating=XposedHelpers.findClassIfExists("com.android.launcher3.anim.floatingdrawable.IconDrawableView",loader)
-        if(floating!=null)ModuleHooks.hookAllMethods(floating,"onDraw",object:XC_MethodHook(){
+        val utils=HookReflection.findClassIfExists("com.oplus.basecommon.util.BitmapUtils",loader) ?: return
+        val floating=HookReflection.findClassIfExists("com.android.launcher3.anim.floatingdrawable.IconDrawableView",loader)
+        if(floating!=null)ModuleHooks.hookAllMethods(floating,"onDraw",object:HookCallback(){
             override fun beforeHookedMethod(param:MethodHookParam){
                 if(!PrefsHelper.enabled || !PrefsHelper.backdropEnabled)return
                 val original=NativeIconAccess.field(param.thisObject,"originalIconDrawable") as? BitmapDrawable ?: return
@@ -109,7 +110,7 @@ internal object TransitionCapture {
         // A large closed folder is also a composed snapshot, but is not a
         // ShortcutContainer/GridRecyclerView. Capture its page materials via
         // the inherited View.draw entry without changing its native corners.
-        ModuleHooks.findAndHookMethod(View::class.java,"draw",Canvas::class.java,object:XC_MethodHook(){
+        ModuleHooks.findAndHookMethod(View::class.java,"draw",Canvas::class.java,object:HookCallback(){
             override fun beforeHookedMethod(param:MethodHookParam){
                 val view=param.thisObject as? View ?: return
                 if(target.get()!==view || !view.javaClass.name.contains("FolderIcon"))return
@@ -117,7 +118,7 @@ internal object TransitionCapture {
                 if(drawHardware(view,canvas))param.result=null
             }
         })
-        ModuleHooks.hookAllMethods(BitmapDrawable::class.java,"draw",object:XC_MethodHook(){
+        ModuleHooks.hookAllMethods(BitmapDrawable::class.java,"draw",object:HookCallback(){
             override fun beforeHookedMethod(param:MethodHookParam){
                 val drawable=param.thisObject as? BitmapDrawable ?: return
                 val canvas=param.args.firstOrNull() as? Canvas ?: return
@@ -128,10 +129,10 @@ internal object TransitionCapture {
                 }
             }
         })
-        ModuleHooks.hookAllMethods(utils,"convertViewToBitmapInMainExecutor",object:XC_MethodHook(){
+        ModuleHooks.hookAllMethods(utils,"convertViewToBitmapInMainExecutor",object:HookCallback(){
             override fun afterHookedMethod(param:MethodHookParam){(param.result as? Bitmap)?.let {captures[it]=true}}
         })
-        ModuleHooks.hookAllMethods(utils,"convertBitmapToMutable",object:XC_MethodHook(){
+        ModuleHooks.hookAllMethods(utils,"convertBitmapToMutable",object:HookCallback(){
             override fun afterHookedMethod(param:MethodHookParam){
                 val source=param.args.firstOrNull() as? Bitmap ?: return
                 val result=param.result as? Bitmap ?: return
@@ -140,7 +141,7 @@ internal object TransitionCapture {
             }
         })
         val recorder=com.cosmod.launcherglass.util.LauncherMethodResolver.snapshotRecorder(utils,View::class.java) ?: return
-        ModuleHooks.hookMethod(recorder,object:XC_MethodHook(){
+        ModuleHooks.hookMethod(recorder,object:HookCallback(){
             @Suppress("UNCHECKED_CAST")
             override fun beforeHookedMethod(param:MethodHookParam){
                 val view=param.args.lastOrNull() as? View ?: return
@@ -288,8 +289,8 @@ internal object TransitionCapture {
         return try {hardware.copy(Bitmap.Config.ARGB_8888,true)}finally{hardware.recycle()}
     }
     private fun hardwareBitmap(node:RenderNode,width:Int,height:Int):Bitmap? =
-        try {XposedHelpers.callStaticMethod(HardwareRenderer::class.java,"createHardwareBitmap",node,width,height)}
-            catch(_:Throwable){XposedHelpers.callStaticMethod(Class.forName("android.view.ThreadedRenderer"),"createHardwareBitmap",node,width,height)} as? Bitmap
+        try {HookReflection.callStaticMethod(HardwareRenderer::class.java,"createHardwareBitmap",node,width,height)}
+            catch(_:Throwable){HookReflection.callStaticMethod(Class.forName("android.view.ThreadedRenderer"),"createHardwareBitmap",node,width,height)} as? Bitmap
 
     private fun flattenEdges(bitmap:Bitmap){
         val width=bitmap.width

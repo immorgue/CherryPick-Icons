@@ -54,6 +54,8 @@
     <string name="ui_logo_outline_brightness">Outline brightness</string>
     <string name="ui_logo_shadow">Logo shading</string>
     <string name="ui_logo_shadow_opacity">Logo shadow</string>
+    <string name="ui_logo_bottom_shade">Logo bottom shading</string>
+    <string name="ui_logo_bottom_shade_strength">Shading strength</string>
     <string name="ui_icon_depth">Icon depth</string>
     <string name="ui_depth_strength">Depth intensity</string>
     <string name="ui_coloring">Coloring</string>
@@ -125,7 +127,10 @@
     <string name="ui_dock_radius">Corner radius</string>
     <string name="ui_dock_radius_hint">Default — 52, icon rounding — 40.</string>
     <string name="ui_widgets">Widgets</string>
-    <string name="ui_photo_widget_blur">Photo widget blur</string>
+    <string name="ui_photo_widget_blur">Photo widgets</string>
+    <string name="ui_clock_widgets">Clock widgets</string>
+    <string name="ui_weather_widgets">Weather widgets</string>
+    <string name="ui_widget_background_opacity">Background opacity</string>
     <string name="ui_photo_widget_opacity">Photo opacity</string>
     <string name="ui_folders">Folders</string>
     <string name="ui_folder_own">Own settings</string>
@@ -140,8 +145,8 @@
     <string name="ui_artwork_transparency">Tint transparency</string>
     <string name="ui_artwork_icons_hint">For icons that are a full picture without a single-colour plate (games, photos, gradients): the picture is recoloured into the palette tones and the glass shows through it. Works in developer mode.</string>
 
-    <string name="ui_md3_interface">Material 3 interface (experimental)</string>
-    <string name="ui_md3_interface_hint">Standard Material 3 layout for this settings app: top app bar, list rows with switches and supporting text, reset with confirmation. Changes only this screen; the classic interface stays the default. Active while developer mode is on; if the app crashes with it, it switches itself off.</string>
+    <string name="ui_legacy_interface">Legacy interface</string>
+    <string name="ui_legacy_interface_hint">Use the deprecated CherryPick interface. Turn this off to return to COUI.</string>
     <string name="ui_reset_defaults">Reset to defaults</string>
     <string name="ui_reset_confirm">Settings of this group will return to their default values.</string>
     <string name="ui_reset">Reset</string>
@@ -188,7 +193,7 @@
     <string name="ui_nav_icons_hint">Contour, shadows and volume of icons.</string>
     <string name="ui_nav_folders_hint">Folder backgrounds and their own glass settings.</string>
     <string name="ui_nav_dock_hint">Dock shape, spacing and glass material.</string>
-    <string name="ui_nav_widgets_hint">Photo widget blur, tint and refraction.</string>
+    <string name="ui_nav_widgets_hint">Glass for photo, clock and weather widgets.</string>
     <string name="ui_nav_desktop_hint">Grid preview, icon size and spacing.</string>
     <string name="ui_nav_wallpapers_hint">Settings profiles for each wallpaper.</string>
     <string name="ui_nav_behavior_hint">Live or static blur and idle behaviour.</string>
@@ -217,11 +222,11 @@
     <string name="ui_theme_system_apply_hint">Browse your saved themes. The checkmark opens the selected theme in the system editor; its Apply button preserves the full system theme.</string>
     <string name="ui_theme_android_hint">Saved system themes are not exposed on this firmware. Showing the current wallpaper and installed live wallpaper services; their system preview handles application.</string>
     <string name="ui_static_animation_blur">Static blur during animations</string>
-    <string name="ui_flight_icon_reveal">Flying icon reveal size</string>
     <string name="ui_module_logging">Module logging</string>
     <string name="ui_module_logging_hint">Write CherryPick diagnostics from the launcher to logcat and LSPosed.</string>
     <string name="ui_app_animation_title">App animations</string>
     <string name="ui_app_animation_hint">iOS-style springs and window deformation when moving between an app and the home screen.</string>
+    <string name="ui_app_animation_coloros16_untested">App animations haven’t been tested on ColorOS 16 yet.</string>
     <string name="ui_app_window_tilt">iOS-style opening and closing</string>
     <string name="ui_app_genie">Genie effect</string>
     <string name="ui_app_genie_strength">Deformation strength</string>
@@ -256,6 +261,7 @@
     <string name="ui_refraction_settings">Refraction settings</string>
     <string name="ui_folder_appearance">Folders and multi-folders</string>
     <string name="ui_dock_appearance">Dock appearance</string>
+    <string name="ui_dock_auto_appearance_hint">Clear glass with no color overlay.</string>
     <string name="ui_style_inherit">Same as icons</string>
     <string name="ui_style_inherit_hint">Uses the appearance mode and colors selected for icons.</string>
     <string name="ui_style_separate">Customize separately</string>

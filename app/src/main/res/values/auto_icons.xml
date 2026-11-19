@@ -1,0 +1,27 @@
+<resources>
+    <string name="ui_auto_launcher_unavailable">CherryPick settings are unavailable. Open CherryPick, then try again.</string>
+    <string name="ui_auto_launcher_open_failed">Couldn’t open Customize. Try again.</string>
+    <string name="ui_auto_launcher_customize">Customize</string>
+    <string name="ui_auto_launcher_haze_on">Enable iOS haze</string>
+    <string name="ui_auto_launcher_haze_off">Disable iOS haze</string>
+    <string name="ui_auto_launcher_haze_unavailable">iOS haze requires Android 13 or newer</string>
+    <string name="ui_auto_launcher_frosted">Frosted</string>
+    <string name="ui_auto_launcher_liquid">Liquid</string>
+    <string name="ui_auto_launcher_switch_material">Switch launcher glass to %1$s</string>
+    <string name="ui_auto_launcher_custom_warning">Enable Auto in CherryPick to use these controls. Custom appearance is currently active.</string>
+    <string name="ui_auto_icons_auto">Auto</string>
+    <string name="ui_auto_icons_custom">Custom</string>
+    <string name="ui_auto_icons_default">Default</string>
+    <string name="ui_auto_icons_dark">Dark</string>
+    <string name="ui_auto_icons_clear">Clear</string>
+    <string name="ui_auto_icons_tinted">Tinted</string>
+    <string name="ui_auto_icons_wallpaper">Wallpaper</string>
+    <string name="ui_auto_icons_manual">Custom color</string>
+    <string name="ui_auto_icons_hue">Hue</string>
+    <string name="ui_auto_icons_saturation">Saturation</string>
+    <string name="ui_auto_icons_default_hint">The plate and symbol use your native Flux colors.</string>
+    <string name="ui_auto_icons_dark_hint">Deep dark glass with the Flux accent on the symbol.</string>
+    <string name="ui_auto_icons_clear_hint">Neutral translucent glass, balanced separately for light and dark.</string>
+    <string name="ui_auto_icons_tinted_hint">Light colors the plate. Dark colors the symbol over a dark plate.</string>
+    <string name="ui_auto_icons_theme_hint">Auto chooses light or dark from the wallpaper. Your custom settings stay saved separately.</string>
+</resources>

@@ -14,12 +14,11 @@ import android.view.SurfaceControl
 import android.view.View
 import com.cosmod.launcherglass.ui.SettingsProvider
 import com.cosmod.launcherglass.util.*
-import de.robv.android.xposed.*
+import com.cosmod.launcherglass.bridge.*
 import java.util.WeakHashMap
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
-import kotlin.math.sqrt
 
 /** Own only material buffers. Never retain/replay mutable native shadow builders. */
 object NativeSurfaceLive {
@@ -33,11 +32,7 @@ object NativeSurfaceLive {
     private data class Pose(val xx:Float=1f,val xy:Float=0f,val yx:Float=0f,val yy:Float=1f,
         val x:Float=0f,val y:Float=0f,val positioned:Boolean=false,val transformed:Boolean=false,val version:Long=0L)
     private data class Lease(val provider: Any, val control: SurfaceControl,
-        val pose:AtomicReference<Pose> = AtomicReference(Pose())) {
-        @Volatile var restScale=Float.POSITIVE_INFINITY
-        @Volatile var flightAlpha=1f
-        @Volatile var nativeAlpha=1f
-    }
+        val pose:AtomicReference<Pose> = AtomicReference(Pose()))
     private val controls=ConcurrentHashMap<SurfaceControl,Lease>()
     private data class Sample(val capture:Capture,val draw:Draw,val pose:Pose?,var backdrop:StaticBackdrop?=null)
     private val sampling=ThreadLocal<Sample?>()
@@ -56,7 +51,7 @@ object NativeSurfaceLive {
         val id=(NativeIconAccess.field(info,"id") as? Number)?.toLong()?.takeIf {it>=0} ?: return null
         return FlightSourceIdentity(id,NativeIconAccess.field(info,"user"))
     }
-    internal data class StaticBackdrop(val wallpaper:Bitmap,val source:RectF,val mask:Bitmap,val style:GlassStyle,val parentRevision:Long=0L)
+    internal data class StaticBackdrop(val wallpaper:Bitmap,val source:RectF,val mask:Bitmap,val style:GlassStyle)
     private data class Capture(val surface: Surface, val source: View?, val identity:FlightSourceIdentity?,
         val lease: Lease?, val recordId: Int?, val token: Any, val draws: MutableList<Draw> = ArrayList(),
         var canvasWidth:Int=1,var canvasHeight:Int=1,var materialWidth:Int=210,var materialHeight:Int=210,var backdrop:StaticBackdrop?=null)
@@ -121,7 +116,7 @@ object NativeSurfaceLive {
     private fun frame(capture:Capture)=Frame(capture,SystemClock.uptimeMillis(),null,
         FlightBlurPolicy.live(returning,LiveBlurEngine.activePointerCount>0))
     private val record = ThreadLocal<Int?>()
-    private val legacyTransfer = ThreadLocal<XC_MethodHook.MethodHookParam?>()
+    private val legacyTransfer = ThreadLocal<HookCallback.MethodHookParam?>()
     var usesLegacyRenderer = false
         private set
     @Volatile var active = false
@@ -147,14 +142,13 @@ object NativeSurfaceLive {
     }
 
     fun rememberFlightBackdrop(wallpaper:Bitmap,source:RectF,mask:Bitmap,style:GlassStyle){
-        val parentRevision=DockMaterial.nativeParentBackdrop(materialSource)?.revision ?: 0L
         val sample=sampling.get()
         if(sample!=null){
             if(PrefsHelper.appWindowTilt && PrefsHelper.appGenie && PrefsHelper.appGenieStrength>0 && sample.backdrop==null)
-                sample.backdrop=StaticBackdrop(wallpaper,RectF(source),mask,style,parentRevision)
+                sample.backdrop=StaticBackdrop(wallpaper,RectF(source),mask,style)
         }else if(PrefsHelper.staticAnimationBlur){
             val capture=recording.get() ?: return
-            capture.backdrop=StaticBackdrop(wallpaper,RectF(source),mask,style,parentRevision)
+            capture.backdrop=StaticBackdrop(wallpaper,RectF(source),mask,style)
         }
     }
 
@@ -189,8 +183,7 @@ object NativeSurfaceLive {
     }
     private data class StagedTransform(val lease:Lease,val update:SurfaceTransformUpdate)
     private val stagedPoses=WeakHashMap<Any,MutableMap<SurfaceControl,StagedTransform>>()
-    private val writingFlightAlpha=ThreadLocal<Boolean>()
-    private fun observeTransform(param:XC_MethodHook.MethodHookParam,position:Boolean){
+    private fun observeTransform(param:HookCallback.MethodHookParam,position:Boolean){
         val control=param.args.firstOrNull() as? SurfaceControl ?: return
         val lease=controls[control] ?: return
         val update=if(position){
@@ -207,7 +200,6 @@ object NativeSurfaceLive {
                 values[3]=(param.args[3] as? Number)?.toFloat() ?: return
                 values[4]=(param.args[4] as? Number)?.toFloat() ?: return
             }
-            updateFlightIconAlpha(param.thisObject as SurfaceControl.Transaction,lease,values)
             SurfaceTransformUpdate(matrix=listOf(values[0],values[1],values[3],values[4]))
         }
         synchronized(lock){
@@ -216,29 +208,6 @@ object NativeSurfaceLive {
             updates[control]=StagedTransform(lease,prior.then(update))
         }
     }
-    private fun limitFlightIcon()=PrefsHelper.enabled && PrefsHelper.appWindowTilt && PrefsHelper.appGenie &&
-        PrefsHelper.appGenieStrength>0 && !LiveBlurEngine.isEditing && !LiveBlurEngine.isWorkspaceScrolling
-
-    private fun updateFlightIconAlpha(transaction:SurfaceControl.Transaction,lease:Lease,values:FloatArray) {
-        val limit=limitFlightIcon()
-        if(!limit && lease.flightAlpha==1f)return
-        val scale=sqrt(abs(values[0]*values[4]-values[1]*values[3]))
-        if(!scale.isFinite() || scale<=.001f)return
-        val rest=minOf(lease.restScale,scale)
-        lease.restScale=rest
-        // The same surface can reverse without returning to the desktop.
-        // Its resting size is independent of the direction of the gesture.
-        val progress=((scale/rest-PrefsHelper.flightIconReveal*.01f)/.40f).coerceIn(0f,1f)
-        val alpha=if(limit)1f-progress*progress*(3f-2f*progress) else 1f
-        if(lease.flightAlpha==alpha)return
-        lease.flightAlpha=alpha
-        if(lease.control.isValid){
-            writingFlightAlpha.set(true)
-            try {transaction.setAlpha(lease.control,minOf(alpha,lease.nativeAlpha))}
-            finally {writingFlightAlpha.remove()}
-        }
-    }
-
     /** Publish matrix + translation together, only after the OEM transaction has applied. */
     private fun publishTransforms(transaction:Any) {
         synchronized(lock){
@@ -343,7 +312,7 @@ object NativeSurfaceLive {
     }
     private fun resume(record:Any){
         if(!PrefsHelper.enabled || !PrefsHelper.backdropEnabled || PrefsHelper.blurMode!=SettingsProvider.BLUR_MODE_LIVE)return
-        val id=try {XposedHelpers.callMethod(record,"getRecordId") as? Int}catch(_:Throwable){null} ?: return
+        val id=try {HookReflection.callMethod(record,"getRecordId") as? Int}catch(_:Throwable){null} ?: return
         synchronized(lock){
             val old=templates[id] ?: return
             if(old.lease?.control?.isValid!=true || old.identity?.replacedBy(sourceIdentity(old.source))==true)return
@@ -376,7 +345,7 @@ object NativeSurfaceLive {
         refreshActive()
     }
     private val commitPhase by lazy {
-        try {XposedHelpers.getStaticIntField(Choreographer::class.java,"CALLBACK_COMMIT")}catch(_:Throwable){null}
+        try {HookReflection.getStaticIntField(Choreographer::class.java,"CALLBACK_COMMIT")}catch(_:Throwable){null}
     }
     private fun schedule(delayMs:Long=0L) {
         if(!hasLiveFlight || !pending.compareAndSet(false,true))return
@@ -407,7 +376,7 @@ object NativeSurfaceLive {
             val choreographer=Choreographer.getInstance()
             val phase=commitPhase
             if(phase!=null)try {
-                XposedHelpers.callMethod(choreographer,"postCallback",phase,dispatch,null)
+                HookReflection.callMethod(choreographer,"postCallback",phase,dispatch,null)
             }catch(_:Throwable){choreographer.postFrameCallback {dispatch.run()}}
             else choreographer.postFrameCallback {dispatch.run()}
         },delayMs)
@@ -497,7 +466,7 @@ object NativeSurfaceLive {
         return backdrop
     }
 
-    private fun beginCapture(param:XC_MethodHook.MethodHookParam,surface:Surface,sourceView:View?) {
+    private fun beginCapture(param:HookCallback.MethodHookParam,surface:Surface,sourceView:View?) {
         // Retire synchronously, before the OEM can submit a new buffer.
         synchronized(lock) {
             frames.remove(surface); captures.remove(surface)
@@ -512,12 +481,9 @@ object NativeSurfaceLive {
             param.setObjectExtra("priorCapture", recording.get()); recording.set(capture)
         }
     }
-    private fun endCapture(param:XC_MethodHook.MethodHookParam) {
+    private fun endCapture(param:HookCallback.MethodHookParam) {
         val capture = param.getObjectExtra("capture") as? Capture ?: return
         recording.set(param.getObjectExtra("priorCapture") as? Capture)
-        val restingWidth=capture.source?.let {IconGlassHook.displayedIconBounds(it)?.width()}
-        if(restingWidth!=null && restingWidth>0 && capture.canvasWidth>=restingWidth)
-            capture.lease?.let {it.restScale=minOf(it.restScale,restingWidth.toFloat()/capture.canvasWidth)}
         if (param.hasThrowable() || capture.draws.isEmpty() || capture.lease == null) {
             synchronized(lock) {
                 if (captures[capture.surface] === capture) {
@@ -538,33 +504,21 @@ object NativeSurfaceLive {
     }
 
     fun install(loader: ClassLoader) {
-        val renderer = XposedHelpers.findClassIfExists("com.android.launcher3.anim.iconsurfacemanager.surface.IconSurfaceRenderer", loader)
+        val renderer = HookReflection.findClassIfExists("com.android.launcher3.anim.iconsurfacemanager.surface.IconSurfaceRenderer", loader)
         usesLegacyRenderer=renderer==null
         val namespace=if(renderer!=null)"com.android.launcher3.anim.iconsurfacemanager.surface" else "com.android.launcher3.anim.iconsurfacemanager"
-        val type=XposedHelpers.findClassIfExists("$namespace.IconSurfaceRecord",loader) ?: return
+        val type=HookReflection.findClassIfExists("$namespace.IconSurfaceRecord",loader) ?: return
         GlassLogger.animation("LiveSurface","Native surface integration: $namespace")
-        for(method in listOf("setPosition","setMatrix"))ModuleHooks.hookAllMethods(SurfaceControl.Transaction::class.java,method,object:XC_MethodHook(){
+        for(method in listOf("setPosition","setMatrix"))ModuleHooks.hookAllMethods(SurfaceControl.Transaction::class.java,method,object:HookCallback(){
             override fun afterHookedMethod(param:MethodHookParam){if(!param.hasThrowable())observeTransform(param,method=="setPosition")}
         })
-        ModuleHooks.findAndHookMethod(SurfaceControl.Transaction::class.java,"setAlpha",
-            SurfaceControl::class.java,Float::class.javaPrimitiveType!!,object:XC_MethodHook(){
-                override fun beforeHookedMethod(param:MethodHookParam){
-                    val control=param.args[0] as? SurfaceControl ?: return
-                    val lease=controls[control] ?: return
-                    if(writingFlightAlpha.get()==true)return
-                    val alpha=param.args[1] as Float
-                    lease.nativeAlpha=alpha
-                    val limit=lease.flightAlpha
-                    if(limit<1f && limitFlightIcon())param.args[1]=minOf(alpha,limit)
-                }
-            })
-        ModuleHooks.hookAllMethods(SurfaceControl.Transaction::class.java,"apply",object:XC_MethodHook(){
+        ModuleHooks.hookAllMethods(SurfaceControl.Transaction::class.java,"apply",object:HookCallback(){
             override fun afterHookedMethod(param:MethodHookParam){
                 if(!param.hasThrowable())publishTransforms(param.thisObject)
                 else synchronized(lock){stagedPoses.remove(param.thisObject)}
             }
         })
-        ModuleHooks.hookAllMethods(SurfaceControl.Transaction::class.java,"merge",object:XC_MethodHook(){
+        ModuleHooks.hookAllMethods(SurfaceControl.Transaction::class.java,"merge",object:HookCallback(){
             override fun afterHookedMethod(param:MethodHookParam){
                 if(param.hasThrowable())return
                 val other=param.args.firstOrNull() ?: return
@@ -583,7 +537,7 @@ object NativeSurfaceLive {
         // Native record IDs distinguish a late completion callback from a new
         // animation using the same SurfaceControl or clicked View.
         if(renderer!=null)for (method in listOf("transferViewToSurface", "redrawViewToSurface")) {
-            ModuleHooks.hookAllMethods(renderer, method, object : XC_MethodHook() {
+            ModuleHooks.hookAllMethods(renderer, method, object : HookCallback() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     param.setObjectExtra("priorRecord", record.get()); record.set(param.args.firstOrNull() as? Int)
                 }
@@ -593,11 +547,11 @@ object NativeSurfaceLive {
         // 16.6.13 performs the draw inside IconSurfaceRecord. Its provider
         // returns the exact buffer before lockHardwareCanvas/onDrawShadow.
         // Scope capture to that transfer; never replay the OEM shadow builder.
-        if(renderer==null)ModuleHooks.hookAllMethods(type,"transferViewToSurface",object:XC_MethodHook(){
+        if(renderer==null)ModuleHooks.hookAllMethods(type,"transferViewToSurface",object:HookCallback(){
             override fun beforeHookedMethod(param:MethodHookParam){
                 param.setObjectExtra("priorTransfer",legacyTransfer.get());legacyTransfer.set(param)
                 param.setObjectExtra("priorRecord",record.get())
-                record.set(XposedHelpers.callMethod(param.thisObject,"getRecordId") as? Int)
+                record.set(HookReflection.callMethod(param.thisObject,"getRecordId") as? Int)
             }
             override fun afterHookedMethod(param:MethodHookParam){
                 try {endCapture(param)}finally{
@@ -606,26 +560,25 @@ object NativeSurfaceLive {
                 }
             }
         })
-        if(renderer!=null)ModuleHooks.hookAllMethods(renderer, "drawViewToSurface", object : XC_MethodHook() {
+        if(renderer!=null)ModuleHooks.hookAllMethods(renderer, "drawViewToSurface", object : HookCallback() {
             override fun beforeHookedMethod(param: MethodHookParam) {
                 val surface=param.args.filterIsInstance<Surface>().firstOrNull() ?: return
                 beginCapture(param,surface,param.args.filterIsInstance<View>().lastOrNull())
             }
             override fun afterHookedMethod(param: MethodHookParam) {endCapture(param)}
         })
-        val provider = XposedHelpers.findClassIfExists("$namespace.IconSurfaceProvider", loader)
+        val provider = HookReflection.findClassIfExists("$namespace.IconSurfaceProvider", loader)
         if (provider != null) {
-            ModuleHooks.hookAllMethods(provider, "getSurfaceControl", object : XC_MethodHook() {
+            ModuleHooks.hookAllMethods(provider, "getSurfaceControl", object : HookCallback() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     val holder = param.result ?: return
                     try {
-                        val surface = XposedHelpers.callMethod(holder, "getSurface") as? Surface ?: return
-                        val control = XposedHelpers.callMethod(holder, "getSc") as? SurfaceControl ?: return
+                        val surface = HookReflection.callMethod(holder, "getSurface") as? Surface ?: return
+                        val control = HookReflection.callMethod(holder, "getSc") as? SurfaceControl ?: return
                         synchronized(lock) {
-                            val restScale=controls[control]?.restScale ?: Float.POSITIVE_INFINITY
                             retire("new buffer") {it.lease?.control===control}
                             releaseChild(control)
-                            val lease=Lease(param.thisObject, control).apply {this.restScale=restScale}
+                            val lease=Lease(param.thisObject, control)
                             leases[surface]=lease;controls[control]=lease
                         }
                         legacyTransfer.get()?.let {transfer ->
@@ -635,7 +588,7 @@ object NativeSurfaceLive {
                 }
             })
             for (method in listOf("hideSurfaceControl", "resetSurfaceControl", "releaseSurfaceControl")) {
-                ModuleHooks.hookAllMethods(provider, method, object : XC_MethodHook() {
+                ModuleHooks.hookAllMethods(provider, method, object : HookCallback() {
                     override fun beforeHookedMethod(param: MethodHookParam) {
                         val control = param.args.filterIsInstance<SurfaceControl>().firstOrNull() ?: return
                         retire(method) { it.lease?.control === control }
@@ -647,12 +600,12 @@ object NativeSurfaceLive {
                 })
             }
         }
-        ModuleHooks.hookAllMethods(type,"reuseIconSurface",object:XC_MethodHook(){
+        ModuleHooks.hookAllMethods(type,"reuseIconSurface",object:HookCallback(){
             override fun afterHookedMethod(param:MethodHookParam){resume(param.thisObject)}
         })
-        ModuleHooks.hookAllMethods(type, "showOriginalIcon", object : XC_MethodHook() {
+        ModuleHooks.hookAllMethods(type, "showOriginalIcon", object : HookCallback() {
             override fun beforeHookedMethod(param: MethodHookParam) {
-                val id = try { XposedHelpers.callMethod(param.thisObject, "getRecordId") as? Int } catch (_: Throwable) { null } ?: return
+                val id = try { HookReflection.callMethod(param.thisObject, "getRecordId") as? Int } catch (_: Throwable) { null } ?: return
                 synchronized(lock) {
                     val capture=captures.values.firstOrNull {it.recordId==id}
                     param.setObjectExtra("returnedCapture",capture)

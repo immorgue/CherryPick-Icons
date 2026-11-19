@@ -2,22 +2,38 @@ package com.cosmod.launcherglass.xposed
 
 import android.os.Looper
 import android.view.View
+import android.view.ViewGroup
 import com.cosmod.launcherglass.util.GlassLogger
 import com.cosmod.launcherglass.util.LiveBlurEngine
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedHelpers
+import com.cosmod.launcherglass.bridge.HookCallback
+import com.cosmod.launcherglass.bridge.HookReflection
 
 internal object WorkspaceBlurScroll {
     fun install(loader:ClassLoader,workspaceNames:List<String>){
-        val workspaces=workspaceNames.mapNotNull { XposedHelpers.findClassIfExists(it,loader) }
-        val oplus=XposedHelpers.findClassIfExists("com.android.launcher3.OplusWorkspace",loader)
+        val workspaces=workspaceNames.mapNotNull { HookReflection.findClassIfExists(it,loader) }
+        val oplus=HookReflection.findClassIfExists("com.android.launcher3.OplusWorkspace",loader)
+        val preloadFlag=oplus?.let {HookReflection.findFieldIfExists(it,"mDrawAllChild")}
+        if(oplus!=null && preloadFlag!=null && preloadFlag.type==Boolean::class.javaPrimitiveType) {
+            ModuleHooks.hookAllMethods(oplus,"drawChild",object:HookCallback(){
+                override fun beforeHookedMethod(param:MethodHookParam){
+                    if(!PrefsHelper.enabled || !PrefsHelper.backdropEnabled || LiveBlurEngine.isEditing ||
+                        LiveBlurEngine.isWorkspaceScrolling || !preloadFlag.getBoolean(param.thisObject))return
+                    val pager=param.thisObject as? ViewGroup ?: return
+                    val page=param.args.getOrNull(1) as? ViewGroup ?: return
+                    if(!page.javaClass.simpleName.endsWith("CellLayout") || page.parent!==pager || pager.width<=0 ||
+                        (page.right>pager.scrollX && page.left<pager.scrollX+pager.width))return
+                    WorkspaceIconWarmup.deferPage(pager,page)
+                    param.result=false
+                }
+            })
+        }
         val lifecycle=(workspaces+listOfNotNull(oplus)).flatMap { type ->
             generateSequence(type as Class<*>?) { it.superclass }.takeWhile { it!=View::class.java }.toList()
         }.distinct()
         for(type in lifecycle)for(method in type.declaredMethods){
             if(method.parameterCount!=0 || method.name !in listOf("onPageBeginTransition","onPageEndTransition"))continue
             val begin=method.name=="onPageBeginTransition"
-            ModuleHooks.hookMethod(method,object:XC_MethodHook(){
+            ModuleHooks.hookMethod(method,object:HookCallback(){
                 override fun beforeHookedMethod(param:MethodHookParam){
                     val view=param.thisObject as? View ?: return
                     if(workspaces.none { it.isInstance(view) })return
@@ -26,7 +42,7 @@ internal object WorkspaceBlurScroll {
             })
         }
 
-        for(type in workspaces)ModuleHooks.hookAllMethods(type,"computeScroll",object:XC_MethodHook(){
+        for(type in workspaces)ModuleHooks.hookAllMethods(type,"computeScroll",object:HookCallback(){
             override fun beforeHookedMethod(param:MethodHookParam){
                 val view=param.thisObject as View
                 if(LiveBlurEngine.settlingWorkspace(view))param.setObjectExtra("workspaceScrollX",view.scrollX)
@@ -48,11 +64,11 @@ internal object WorkspaceBlurScroll {
             }
         })
 
-        val rtScroller=XposedHelpers.findClassIfExists("com.android.launcher3.util.RtLauncherOverScroller",loader) ?: return
-        val rtEnabled=XposedHelpers.findFieldIfExists(rtScroller,"mRtScrollOptimizationEnabled") ?: return
+        val rtScroller=HookReflection.findClassIfExists("com.android.launcher3.util.RtLauncherOverScroller",loader) ?: return
+        val rtEnabled=HookReflection.findFieldIfExists(rtScroller,"mRtScrollOptimizationEnabled") ?: return
         if(rtEnabled.type!=Boolean::class.javaPrimitiveType)return
         val startMethods=setOf("startScroll","startScrollSpring","fling","flingSpring","startBackSpring")
-        val hook=object:XC_MethodHook(){
+        val hook=object:HookCallback(){
             override fun beforeHookedMethod(param:MethodHookParam){
                 val scroller=param.thisObject
                 if(Looper.myLooper()!=Looper.getMainLooper() || !rtEnabled.getBoolean(scroller) ||

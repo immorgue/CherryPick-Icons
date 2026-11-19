@@ -5,7 +5,7 @@ import android.graphics.*
 import android.graphics.drawable.*
 import android.view.View
 import com.cosmod.launcherglass.util.GlassLogger
-import de.robv.android.xposed.*
+import com.cosmod.launcherglass.bridge.*
 import java.lang.reflect.Method
 import java.util.WeakHashMap
 
@@ -15,6 +15,7 @@ internal object SpecialIconSupport {
     private val calendars=setOf("com.coloros.calendar","com.oplus.calendar","com.android.calendar","com.google.android.calendar")
     private val packages=WeakHashMap<Drawable,String>()
     private val contextual=WeakHashMap<Drawable,Boolean>()
+    private val contextualRender=WeakHashMap<Drawable,(Drawable,Canvas)->Boolean>()
     private val methods=HashSet<Method>()
     private val failures=HashSet<String>()
     private val components=WeakHashMap<Any,String>()
@@ -22,7 +23,9 @@ internal object SpecialIconSupport {
     private var plate:Bitmap?=null
     fun packageOf(drawable:Drawable)=packages[drawable]
     fun bindContext(drawable:Drawable,isRecording:()->Boolean,render:(Drawable,Canvas)->Boolean){
-        if(isContainer(drawable) || contextual.put(drawable,true)==true)return
+        if(isContainer(drawable))return
+        contextualRender[drawable]=render
+        if(contextual.put(drawable,true)==true)return
         hookDraw(drawable,isRecording,render)
     }
     fun dynamic(drawable:Drawable)=packages[drawable] in clocks || packages[drawable] in calendars
@@ -75,13 +78,13 @@ internal object SpecialIconSupport {
         val method=drawable.javaClass.getMethod("draw",Canvas::class.java)
         if(!methods.add(method))return
         GlassLogger.i("SpecialIcons","Native override: ${packages[drawable] ?: "contextual"} -> ${drawable.javaClass.name}, draw=${method.declaringClass.name}")
-        ModuleHooks.hookMethod(method,object:XC_MethodHook(PRIORITY_HIGHEST){
+        ModuleHooks.hookMethod(method,object:HookCallback(PRIORITY_HIGHEST){
             override fun beforeHookedMethod(param:MethodHookParam){
                 if(!PrefsHelper.enabled || isRecording())return
                 val icon=param.thisObject as? Drawable ?: return
                 if(!packages.containsKey(icon) && !contextual.containsKey(icon))return
                 val canvas=param.args.firstOrNull() as? Canvas ?: return
-                try {if(render(icon,canvas))param.result=null}
+                try {if((contextualRender[icon] ?: render)(icon,canvas))param.result=null}
                 catch(t:Throwable){if(failures.add(icon.javaClass.name+":"+t.message))GlassLogger.e("SpecialIcons","Native material failed",t)}
             }
         })

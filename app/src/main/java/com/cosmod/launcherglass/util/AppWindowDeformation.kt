@@ -106,6 +106,8 @@ internal class AppGenieMotion {
     private var lastMeasured = Double.NaN
     private var directionAnchor = Double.NaN
     private var nominalOpening = false
+    var openingMix = 0f
+        private set
 
     @Synchronized
     fun update(
@@ -123,6 +125,9 @@ internal class AppGenieMotion {
             rows.forEach { it.reset(start) }
         }
         if (!duplicate) {
+            val intendedMix = if (target == 0.0) 1f else 0f
+            val step = (dt / .055).toFloat()
+            openingMix = if (fresh) intendedMix else openingMix + (intendedMix - openingMix).coerceIn(-step, step)
             lastFrame = frameTime
             lastTarget = target
             lastMeasured = minimized

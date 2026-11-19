@@ -12,7 +12,7 @@ import kotlin.math.roundToInt
 /** Bake logo details once; floating surfaces and permanent icons share the same material. */
 object GlyphMaterialRenderer {
     private data class Key(val bitmap: Bitmap, val generation: Int, val tint: ColorFilter?,
-        val color: Int, val volume: Int, val outline: Int, val width: Int, val brightness: Int)
+        val color: Int, val volume: Int, val shade: Int, val outline: Int, val width: Int, val brightness: Int)
     private val cache = object : LruCache<Key, Bitmap>(16 * 1024 * 1024) {
         override fun sizeOf(key: Key, value: Bitmap) = value.allocationByteCount
     }
@@ -21,31 +21,38 @@ object GlyphMaterialRenderer {
 
     fun draw(canvas: Canvas, bounds: Rect, glyph: Bitmap, original: Paint) {
         val volume = PrefsHelper.gradientOpacity
+        val shade = PrefsHelper.glyphBottomShade
         val outline = if (PrefsHelper.glyphStroke) PrefsHelper.glyphStrokeOpacity else 0
-        if (volume == 0 && outline == 0) {
+        if (volume == 0 && shade == 0 && outline == 0) {
             canvas.drawBitmap(glyph, null, bounds, original)
             return
         }
-        val key = Key(glyph, glyph.generationId, original.colorFilter, original.color or Color.BLACK, volume, outline,
+        val key = Key(glyph, glyph.generationId, original.colorFilter, original.color or Color.BLACK, volume, shade, outline,
             PrefsHelper.glyphStrokeWidth,PrefsHelper.glyphStrokeBrightness)
-        val material = cache.get(key) ?: bake(glyph, original, volume, outline).also { cache.put(key, it) }
+        val material = cache.get(key) ?: bake(glyph, original, volume, shade, outline).also { cache.put(key, it) }
         // Tint is already baked. Only the live animation alpha belongs to the output paint.
         outputPaint.alpha = original.alpha
         canvas.drawBitmap(material, null, bounds, outputPaint)
     }
 
-    private fun bake(glyph: Bitmap, original: Paint, volume: Int, outline: Int): Bitmap {
+    private fun bake(glyph: Bitmap, original: Paint, volume: Int, shade: Int, outline: Int): Bitmap {
         val width = glyph.width
         val height = glyph.height
         val output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).apply { density = Bitmap.DENSITY_NONE }
         val target = Canvas(output)
         target.drawBitmap(glyph, 0f, 0f, Paint(original).apply { alpha = 255; xfermode = null })
-        if (volume > 0) {
+        if (volume > 0 || shade > 0) {
             val paint = GlassVolume.paint().apply {
-                shader = GlassVolume.shader(height.toFloat(), volume)
                 xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_ATOP)
             }
-            target.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
+            if (volume > 0) {
+                paint.shader = GlassVolume.shader(height.toFloat(), volume)
+                target.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
+            }
+            if (shade > 0) {
+                paint.shader = GlassVolume.glyphShade(height.toFloat(), shade)
+                target.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
+            }
         }
         if (outline > 0) drawOutline(target, output, outline)
         return output
@@ -85,17 +92,22 @@ object GlyphMaterialRenderer {
             if(edgeAlpha==0)continue
             val length=sqrt(nx*nx+ny*ny)
             val light=if(length>.001f)((-nx-ny)/(1.41421356f*length)).coerceIn(-1f,1f) else 0f
-            val highlight=(.025f+.85f*light.coerceAtLeast(0f)*light.coerceAtLeast(0f))*brightness
+            val color=pixels[index]
+            val luminance=(.2126f*Color.red(color)+.7152f*Color.green(color)+.0722f*Color.blue(color))/255f
+            val reflectance=GlassVolume.RIM_MIN_REFLECTANCE+(1f-GlassVolume.RIM_MIN_REFLECTANCE)*sqrt(luminance)
+            val highlight=(.025f+.85f*light.coerceAtLeast(0f)*light.coerceAtLeast(0f))*brightness*reflectance
             val shadow=.04f+.18f*light.coerceAtMost(0f)*light.coerceAtMost(0f)
             fun shade(channel: Int): Int = (if(light>=0f)channel+(255-channel)*highlight else channel*(1f-shadow)).roundToInt().coerceIn(0,255)
-            val color=pixels[index]
             edge[index]=Color.argb(edgeAlpha,shade(Color.red(color)),shade(Color.green(color)),shade(Color.blue(color)))
         }
         val ring = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).apply {
             setPixels(edge,0,width,0,0,width,height)
         }
         try {
-            target.drawBitmap(ring, 0f, 0f, Paint(Paint.ANTI_ALIAS_FLAG).apply { alpha = opacity.coerceIn(0,100) * 255 / 100 })
+            target.drawBitmap(ring, 0f, 0f, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                alpha = opacity.coerceIn(0,100) * 255 / 100
+                xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_ATOP)
+            })
         } finally { ring.recycle() }
     }
 }

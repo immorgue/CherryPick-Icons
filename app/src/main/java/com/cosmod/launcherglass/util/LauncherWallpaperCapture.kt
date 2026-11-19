@@ -5,7 +5,7 @@ import android.graphics.Bitmap
 import android.os.Handler
 import android.os.Looper
 import android.view.View
-import de.robv.android.xposed.XposedHelpers
+import com.cosmod.launcherglass.bridge.HookReflection
 import java.lang.ref.WeakReference
 import java.lang.reflect.Proxy
 import java.util.concurrent.CountDownLatch
@@ -42,7 +42,7 @@ object LauncherWallpaperCapture {
 
         // 1. Resolve from MaterialBlurAnimHelper factory field
         try {
-            val helperClass = XposedHelpers.findClassIfExists(
+            val helperClass = HookReflection.findClassIfExists(
                 "com.android.launcher3.uioverrides.states.blurdrawable.MaterialBlurAnimHelper", loader
             )
             if (helperClass != null) {
@@ -57,7 +57,7 @@ object LauncherWallpaperCapture {
 
         // 2. Resolve from ClockWallpaperObserver factory field
         try {
-            val clockClass = XposedHelpers.findClassIfExists(
+            val clockClass = HookReflection.findClassIfExists(
                 "com.android.launcher3.inspirationclock.ClockWallpaperObserver", loader
             )
             if (clockClass != null) {
@@ -73,7 +73,7 @@ object LauncherWallpaperCapture {
         // 3. Known obfuscated candidates across ColorOS launcher builds (e.g. un.c on 17.3.12, tn.c on 17.3.9)
         for (name in listOf("un.c", "tn.c", "vn.c", "wn.c", "sn.c", "rn.c")) {
             try {
-                val cls = XposedHelpers.findClassIfExists(name, loader) ?: continue
+                val cls = HookReflection.findClassIfExists(name, loader) ?: continue
                 if (isValidCaptureClass(cls)) return cls
             } catch (_: Throwable) {}
         }
@@ -111,37 +111,88 @@ object LauncherWallpaperCapture {
     @Volatile private var lastFrameMs = 0L
     private var watchStartedMs = 0L
     private var surfaceRetries = 0
-    private var awaitingUnlock=false
-    private var staticMotionUntilMs=0L
-    private var staticWallpaper=false
+    private val captureGate = WallpaperCaptureGate()
+    @Volatile private var gateInitialized = false
+    internal val captureEpoch get() = captureGate.epoch
+    internal val canCapture: Boolean get() {
+        // A launcher process can start while the phone is already locked,
+        // without ever receiving SCREEN_OFF itself.
+        if (!gateInitialized && WallpaperHelper.appContext != null) synchronized(captureGate) {
+            if (!gateInitialized) {
+                if (keyguardLocked()) {
+                    captureGate.screenOff()
+                    captureGate.screenOn(locked = true)
+                }
+                gateInitialized = true
+            }
+        }
+        return captureGate.ready()
+    }
+    private fun keyguardLocked() = try {
+        (WallpaperHelper.appContext?.getSystemService(Context.KEYGUARD_SERVICE) as? android.app.KeyguardManager)
+            ?.isKeyguardLocked ?: true
+    } catch (_: Throwable) { true }
+    internal fun acceptsCapture(epoch: Long) = captureGate.accepts(epoch)
 
     fun onScreenOff() {
+        gateInitialized = true
+        captureGate.screenOff()
         GlassLogger.i("WallpaperCapture","Screen off -> pause capture")
-        awaitingUnlock=true
-        staticMotionUntilMs=0L
         stopMotionWatch()
     }
     fun prepareUnlock() {
-        GlassLogger.i("WallpaperCapture","Wake/unlock -> prepare live wallpaper sampling")
-        staticMotionUntilMs=SystemClock.uptimeMillis()+1800L
+        gateInitialized = true
+        captureGate.screenOn(keyguardLocked())
         surfaceRetries=0
-        startMotionWatch()
+        resumeOnHomeFrame()
     }
     fun onUserPresent() {
-        GlassLogger.i("WallpaperCapture","User present -> resume live wallpaper sampling")
-        awaitingUnlock=false
-        prepareUnlock()
-        val root=window?.get()
-        if(root?.hasWindowFocus()==true || LiveBlurEngine.isResumed) {
-            LiveBlurEngine.onHomeReturnStarted()
+        gateInitialized = true
+        captureGate.userPresent()
+        resumeOnHomeFrame()
+    }
+
+    private fun resumeOnHomeFrame() {
+        val root = window?.get() ?: return
+        fun homeVisible(): Boolean = window?.get() === root && root.isAttachedToWindow &&
+            root.isShown && root.hasWindowFocus() && !keyguardLocked() &&
+            ((root.context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager)?.isInteractive == true)
+        if (!PrefsHelper.enabled || canCapture || !homeVisible()) return
+        val ticket = captureGate.homeVisible() ?: return
+        fun complete() {
+            if (!captureGate.homeFrameSubmitted(ticket, homeVisible())) return
+            GlassLogger.i("WallpaperCapture", "Unlocked launcher frame ready")
+            if (!LiveBlurEngine.isResumed) LiveBlurEngine.onActivityResumed()
             startMotionWatch()
+            WallpaperHelper.onHomeWallpaperVisible(motionFactory != null)
+        }
+        // Focus can be delivered while the fingerprint transition is still
+        // presenting its last lock-screen buffer. Wait for fresh home draws.
+        val observer = root.viewTreeObserver
+        if (root.isHardwareAccelerated && observer.isAlive) {
+            observer.registerFrameCommitCallback {
+                root.postOnAnimation {
+                    val currentObserver = root.viewTreeObserver
+                    if (captureEpoch != ticket || !homeVisible() || !currentObserver.isAlive) complete()
+                    else {
+                        currentObserver.registerFrameCommitCallback { main.post { complete() } }
+                        root.invalidate()
+                    }
+                }
+            }
+            root.invalidate()
+            // Some OEM builds omit the commit callback when the window did
+            // not get a new surface buffer. Only the same visible home can finish.
+            main.postDelayed({ complete() }, 120L)
+        } else {
+            root.postOnAnimation { complete() }
         }
     }
     private val settleCheck = object : Runnable {
         override fun run() {
             if (motionFactory == null) return
             val now = SystemClock.uptimeMillis()
-            if (motionState.shouldStop(now,PrefsHelper.idlePause,staticWallpaper,staticMotionUntilMs) ||
+            if ((PrefsHelper.idlePause && motionState.isSettled(now)) ||
                 (now - watchStartedMs > 2500L && lastFrameMs < watchStartedMs)) {
                 stopMotionWatch()
             } else main.postDelayed(this, 100L)
@@ -150,15 +201,21 @@ object LauncherWallpaperCapture {
 
     fun setWindow(view: View) {
         if(window?.get()!==view || focusListener==null) {
+            if (window?.get() !== view) captureGate.homeHidden()
             window?.get()?.viewTreeObserver?.takeIf {it.isAlive}?.let {old -> focusListener?.let {old.removeOnWindowFocusChangeListener(it)} }
             val weak=WeakReference(view)
             focusListener=android.view.ViewTreeObserver.OnWindowFocusChangeListener { focused ->
-                if(focused && weak.get()!=null)LiveBlurEngine.onActivityResumed()
+                if (focused && weak.get() != null) {
+                    LiveBlurEngine.onActivityResumed()
+                    resumeOnHomeFrame()
+                    com.cosmod.launcherglass.xposed.AutoMenuBridge.reconnect()
+                    com.cosmod.launcherglass.xposed.WidgetFlight.onLauncherFocused()
+                } else if (!focused) captureGate.homeHidden()
             }.also {view.viewTreeObserver.addOnWindowFocusChangeListener(it)}
         }
         window = WeakReference(view)
         surfaceRetries = 0
-        if(awaitingUnlock)staticMotionUntilMs=SystemClock.uptimeMillis()+1800L
+        resumeOnHomeFrame()
         startMotionWatch()
     }
     fun onModuleDisabled(){
@@ -169,12 +226,12 @@ object LauncherWallpaperCapture {
     fun onModuleEnabled(){if(focusListener==null)window?.get()?.let {setWindow(it)}}
 
     private fun isReadySurface(surface: Any, context: Context): Boolean {
-        if (XposedHelpers.callMethod(surface, "isValid") != true) return false
+        if (HookReflection.callMethod(surface, "isValid") != true) return false
         // The OEM factory parses this name without checking substring bounds.
         // A transition can expose a valid placeholder surface with no delimiter.
         val delimiter = try {
-            val manager = XposedHelpers.findClass("com.oplus.posteffect.manager.BlurDrawableManager", context.classLoader)
-            if (XposedHelpers.getStaticIntField(manager, "o") >= 40) '#' else ')'
+            val manager = HookReflection.findClass("com.oplus.posteffect.manager.BlurDrawableManager", context.classLoader)
+            if (HookReflection.getStaticIntField(manager, "o") >= 40) '#' else ')'
         } catch (_:Throwable) { null }
         val name=surface.toString()
         return if(delimiter!=null) name.indexOf(delimiter)>=13 else
@@ -186,7 +243,6 @@ object LauncherWallpaperCapture {
             main.post { stopMotionWatch() }
             return
         }
-        val settleStatic = motionFactory != null && staticWallpaper
         motionEpoch++
         main.removeCallbacks(settleCheck)
         motionFactory?.let {
@@ -195,7 +251,6 @@ object LauncherWallpaperCapture {
         }
         motionFactory = null
         LiveBlurEngine.onWallpaperMotion(false)
-        if(settleStatic)WallpaperHelper.onStaticCaptureSettled()
     }
 
     fun startMotionWatch() {
@@ -204,16 +259,17 @@ object LauncherWallpaperCapture {
             return
         }
         val context = WallpaperHelper.appContext ?: return
+        if (!canCapture) return
         if (!PrefsHelper.enabled || !PrefsHelper.backdropEnabled ||
             (!LiveBlurEngine.isResumed && !com.cosmod.launcherglass.xposed.NativeSurfaceLive.active) ||
             (LiveBlurEngine.isAppLaunchInProgress && !com.cosmod.launcherglass.xposed.NativeSurfaceLive.active) ||
             (LiveBlurEngine.isWorkspaceBlurSuspended && !PrefsHelper.drawerBlurEnabled) ||
             PrefsHelper.blurMode != SettingsProvider.BLUR_MODE_LIVE) return
         val now = SystemClock.uptimeMillis()
-        // Static ImageWallpaper also moves during ColorOS unlock. Capture that
-        // short transition, without running a permanent static-wallpaper watch.
-        staticWallpaper=!WallpaperHelper.isLiveWallpaper(context)
-        if(now>=staticMotionUntilMs && staticWallpaper)return
+        // A static wallpaper needs no frame subscription. During fingerprint
+        // unlock the native capture includes lock-screen dimming and zoom.
+        // Keep the last clean texture; reload changed content after settling.
+        if(!WallpaperHelper.isLiveWallpaper(context))return
         val api=api(context) ?: return
         if (motionFactory != null) {
             motionState.wake(now)
@@ -222,8 +278,8 @@ object LauncherWallpaperCapture {
         val root = window?.get() ?: return
         if (!root.isAttachedToWindow) return
         try {
-            val impl = XposedHelpers.callMethod(root, "getViewRootImpl") ?: return
-            val surface = XposedHelpers.callMethod(impl, "getSurfaceControl") ?: return
+            val impl = HookReflection.callMethod(root, "getViewRootImpl") ?: return
+            val surface = HookReflection.callMethod(impl, "getSurfaceControl") ?: return
             if (!isReadySurface(surface, context)) {
                 if (surfaceRetries++ < 5) main.postDelayed({ startMotionWatch() }, 100L)
                 return
@@ -244,7 +300,7 @@ object LauncherWallpaperCapture {
                         val frame = args?.firstOrNull { it is Bitmap } as? Bitmap
                         val time = SystemClock.uptimeMillis()
                         val interval = 1000L / PrefsHelper.liveFps.coerceIn(1, 30)
-                        if (!LiveBlurEngine.freezeAnimationWallpaper && epoch == motionEpoch && frame != null && !frame.isRecycled &&
+                        if (canCapture && !LiveBlurEngine.freezeAnimationWallpaper && epoch == motionEpoch && frame != null && !frame.isRecycled &&
                             time - lastFrameMs >= interval && frameBusy.compareAndSet(false, true)) {
                             if(lastFrameMs==0L)GlassLogger.i("WallpaperCapture","First motion frame received in ${time-watchStartedMs}ms")
                             lastFrameMs = time
@@ -252,7 +308,7 @@ object LauncherWallpaperCapture {
                                 android.os.Trace.beginSection("CherryPick.retainWallpaperFrame")
                                 val copy = try {HardwareBitmapLease.retain(frame)}finally{android.os.Trace.endSection()}
                                 if (copy == null) frameBusy.set(false)
-                                else WallpaperHelper.processLiveFrame(copy,{epoch==motionEpoch}) { signature ->
+                                else WallpaperHelper.processLiveFrame(copy,{canCapture && epoch==motionEpoch}) { signature ->
                                     main.post {
                                         frameBusy.set(false)
                                         if (epoch == motionEpoch && motionFactory != null) {
@@ -270,7 +326,7 @@ object LauncherWallpaperCapture {
                     else -> null
                 }
             }
-            val instance = XposedHelpers.newInstance(type, context, surface)
+            val instance = HookReflection.newInstance(type, context, surface)
             motionFactory = instance
             api.start.invoke(instance,listener)
             LiveBlurEngine.onWallpaperMotion(true)
@@ -283,7 +339,8 @@ object LauncherWallpaperCapture {
     }
 
     fun capture(context: Context): Bitmap? {
-        if(!PrefsHelper.backdropEnabled)return null
+        if(!PrefsHelper.backdropEnabled || !canCapture)return null
+        val captureTicket = captureEpoch
         if (Looper.myLooper() == Looper.getMainLooper() || !LiveBlurEngine.isResumed ||
             LiveBlurEngine.isAppLaunchInProgress) return null
         val root = window?.get() ?: return null
@@ -293,13 +350,13 @@ object LauncherWallpaperCapture {
         val factory = AtomicReference<Any?>()
         val ready = CountDownLatch(1)
         main.post {
-            if (finished.get() || !root.isAttachedToWindow) {
+            if (finished.get() || !acceptsCapture(captureTicket) || !root.isAttachedToWindow) {
                 ready.countDown()
                 return@post
             }
             try {
-                val impl = XposedHelpers.callMethod(root, "getViewRootImpl") ?: error("No launcher root")
-                val surface = XposedHelpers.callMethod(impl, "getSurfaceControl") ?: error("No launcher surface")
+                val impl = HookReflection.callMethod(root, "getViewRootImpl") ?: error("No launcher root")
+                val surface = HookReflection.callMethod(impl, "getSurfaceControl") ?: error("No launcher surface")
                 if (!isReadySurface(surface, context)) {
                     ready.countDown()
                     return@post
@@ -312,7 +369,7 @@ object LauncherWallpaperCapture {
                         "equals" -> proxy === args?.firstOrNull()
                         "toString" -> "CosmodWallpaperCapture"
                         api.frameMethod -> {
-                            if (!finished.get() && bitmap.get() == null) {
+                            if (!finished.get() && acceptsCapture(captureTicket) && bitmap.get() == null) {
                                 val source = args?.firstOrNull { it is Bitmap } as? Bitmap
                                 if (source != null && !source.isRecycled) {
                                     val copy = HardwareBitmapLease.retain(source)
@@ -325,7 +382,7 @@ object LauncherWallpaperCapture {
                         else -> null
                     }
                 }
-                val instance = XposedHelpers.newInstance(type, context, surface)
+                val instance = HookReflection.newInstance(type, context, surface)
                 factory.set(instance)
                 api.start.invoke(instance,listener)
             } catch (t: Throwable) {
@@ -343,6 +400,6 @@ object LauncherWallpaperCapture {
                 }
             }
         }
-        return bitmap.get()
+        return bitmap.get()?.let { if (acceptsCapture(captureTicket)) it else { it.recycle(); null } }
     }
 }

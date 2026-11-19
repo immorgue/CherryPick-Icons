@@ -9,8 +9,8 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
 import com.cosmod.launcherglass.util.GlassLogger
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedHelpers
+import com.cosmod.launcherglass.bridge.HookCallback
+import com.cosmod.launcherglass.bridge.HookReflection
 import java.lang.ref.WeakReference
 import java.util.WeakHashMap
 
@@ -49,7 +49,7 @@ internal class DockLayer private constructor(owner:ViewGroup,root:ViewGroup,
         visibility=if(active && (owner.isShown || retainWhenHidden))VISIBLE else INVISIBLE
         if(visibility!=VISIBLE)return
         world.reset()
-        XposedHelpers.callMethod(owner,"transformMatrixToGlobal",world)
+        HookReflection.callMethod(owner,"transformMatrixToGlobal",world)
         // RenderEffect uses the View's buffer bounds, even if only a small
         // dock is painted in it. Keep horizontal room for expanded docks,
         // but do not allocate/filter a screen-high transparent input.
@@ -64,7 +64,7 @@ internal class DockLayer private constructor(owner:ViewGroup,root:ViewGroup,
             }
             val margin=maxOf(256,(128f*resources.displayMetrics.density).toInt(),bounds.height()/2)
             parentWorld.reset();inverse.reset()
-            XposedHelpers.callMethod(root,"transformMatrixToGlobal",parentWorld)
+            HookReflection.callMethod(root,"transformMatrixToGlobal",parentWorld)
             posedBounds.set(bounds)
             world.mapRect(posedBounds)
             if(parentWorld.invert(inverse))inverse.mapRect(posedBounds)
@@ -84,7 +84,7 @@ internal class DockLayer private constructor(owner:ViewGroup,root:ViewGroup,
         // This view can be inset by DragLayer padding. Its Canvas is local
         // to the actual layer, not to its parent; otherwise padding was added
         // twice and the plate appeared below the icon centres.
-        XposedHelpers.callMethod(this,"transformMatrixToGlobal",parentWorld)
+        HookReflection.callMethod(this,"transformMatrixToGlobal",parentWorld)
         if(!parentWorld.invert(inverse))return
         next.setConcat(inverse,world)
         if(!retainWhenHidden && next!=pose){pose.set(next);invalidate()}
@@ -132,7 +132,7 @@ internal class DockLayer private constructor(owner:ViewGroup,root:ViewGroup,
             installed=true
             // Preserve OEM unlock/drawer effects on the larger canvas. The
             // effect still runs, but its input is no longer the small hotseat.
-            ModuleHooks.hookAllMethods(View::class.java,"setRenderEffect",object:XC_MethodHook(){
+            ModuleHooks.hookAllMethods(View::class.java,"setRenderEffect",object:HookCallback(){
                 override fun afterHookedMethod(param:MethodHookParam){
                     val view=param.thisObject as? View ?: return
                     if(view is DockLayer)return
@@ -145,7 +145,7 @@ internal class DockLayer private constructor(owner:ViewGroup,root:ViewGroup,
             val root=generateSequence(owner.parent as? ViewGroup){it.parent as? ViewGroup}
                 .firstOrNull {it.javaClass.name.contains("DragLayer")} ?: return null
             val layer=DockLayer(owner,root,bounds,paint)
-            val params=(XposedHelpers.callMethod(root,"generateDefaultLayoutParams") as? ViewGroup.LayoutParams) ?: return null
+            val params=(HookReflection.callMethod(root,"generateDefaultLayoutParams") as? ViewGroup.LayoutParams) ?: return null
             params.width=ViewGroup.LayoutParams.MATCH_PARENT;params.height=ViewGroup.LayoutParams.MATCH_PARENT
             root.addView(layer,0,params)
             GlassLogger.i("Dock","Expanded dock layer attached to ${root.javaClass.simpleName}: ${root.width}x${root.height}")

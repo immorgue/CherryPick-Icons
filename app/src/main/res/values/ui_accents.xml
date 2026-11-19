@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App-owned accents: never derived from wallpaper or system theme colors. -->
+    <color name="ui_control_accent">#007AFF</color>
+    <color name="ui_telegram">#007DBB</color>
+</resources>

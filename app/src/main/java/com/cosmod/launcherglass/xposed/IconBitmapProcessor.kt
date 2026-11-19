@@ -1,6 +1,8 @@
 package com.cosmod.launcherglass.xposed
 
 import android.graphics.Bitmap
+import com.cosmod.launcherglass.util.AutoGlyphTone
+import com.cosmod.launcherglass.util.AutoIconStyle
 import com.cosmod.launcherglass.util.GlassLogger
 import java.util.WeakHashMap
 import kotlin.math.max
@@ -16,39 +18,56 @@ data class ProcessedIcon(
 
 object IconBitmapProcessor {
 
-    private data class CachedIcon(val generation: Int, val icon: ProcessedIcon?,
+    private data class Source(val generation: Int, val layered: Boolean, val automatic: Boolean, val detectArtwork: Boolean)
+    private data class CachedIcon(val source: Source, val icon: ProcessedIcon?,
         var palette: com.cosmod.launcherglass.util.IconPalette? = null, var colored: ProcessedIcon? = null, var artworkTransparency: Int = -1)
     private val cache = WeakHashMap<Bitmap, CachedIcon>()
     private val layeredSources=WeakHashMap<Bitmap,Boolean>()
     @Synchronized fun markLayeredSource(bitmap:Bitmap){
         if(layeredSources.put(bitmap,true)!=true)cache.remove(bitmap)
     }
-    @Synchronized fun clearTintCache() { cache.values.forEach { it.palette = null; it.colored = null; it.artworkTransparency = -1 } }
     private fun applyPalette(cached: CachedIcon): ProcessedIcon? {
         val icon = cached.icon ?: return null
         val palette = PrefsHelper.iconPalette
         if (icon.origin == IconOrigin.ARTWORK) return artwork(cached, icon, palette)
-        if (!palette.custom && !palette.whiteGlyph) return icon
+        if (!palette.usesThemeColors && !palette.whiteGlyph) return icon
         if (cached.palette == palette) return cached.colored
         val glyph = Bitmap.createBitmap(icon.glyphBitmap.width, icon.glyphBitmap.height, Bitmap.Config.ARGB_8888)
-        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { colorFilter = palette.filter }
-        android.graphics.Canvas(glyph).drawBitmap(icon.glyphBitmap, 0f, 0f, paint)
-        return ProcessedIcon(glyph, icon.plateMaskBitmap, if(palette.custom)palette.background else icon.bgColor, icon.origin).also {
+        if (palette.autoLook > AutoIconStyle.DEFAULT) {
+            val pixels=IntArray(glyph.width*glyph.height)
+            icon.glyphBitmap.getPixels(pixels,0,glyph.width,0,0,glyph.width,glyph.height)
+            val toned=AutoGlyphTone.apply(pixels,glyph.width,glyph.height,palette.foreground,palette.autoDark)
+            glyph.setPixels(toned,0,glyph.width,0,0,glyph.width,glyph.height)
+        } else {
+            val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { colorFilter = palette.filter }
+            android.graphics.Canvas(glyph).drawBitmap(icon.glyphBitmap, 0f, 0f, paint)
+        }
+        return ProcessedIcon(glyph, icon.plateMaskBitmap, if(palette.usesThemeColors)palette.background else icon.bgColor, icon.origin).also {
             cached.palette = palette; cached.colored = it
         }
     }
     /** Pictures without a plate colour: a translucent copy of the picture over the glass plate. */
     private fun artwork(cached: CachedIcon, icon: ProcessedIcon, palette: com.cosmod.launcherglass.util.IconPalette): ProcessedIcon? {
-        val transparency = PrefsHelper.artworkTransparency
+        val transparency = if(palette.autoLook>=0)0 else PrefsHelper.artworkTransparency
         if (cached.palette == palette && cached.artworkTransparency == transparency) return cached.colored
-        val plate = if (palette.custom) palette.background else icon.bgColor
+        val plate = if (palette.usesThemeColors) palette.background else icon.bgColor
         val source = icon.artwork
         val result = if (source == null || source.picture.isRecycled) null else {
             val glyph = Bitmap.createBitmap(source.picture.width, source.picture.height, Bitmap.Config.ARGB_8888)
-            val paint = android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG).apply {
-                colorFilter = android.graphics.ColorMatrixColorFilter(tint(palette, source, 1f - transparency / 100f))
+            if(palette.autoLook>AutoIconStyle.DEFAULT){
+                val pixels=IntArray(glyph.width*glyph.height)
+                source.picture.getPixels(pixels,0,glyph.width,0,0,glyph.width,glyph.height)
+                val toned=AutoGlyphTone.apply(pixels,glyph.width,glyph.height,
+                    palette.foreground,palette.autoDark,palette.background,translucent=true)
+                glyph.setPixels(toned,0,glyph.width,0,0,glyph.width,glyph.height)
+            }else {
+                val paint = android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG).apply {
+                    if(palette.autoLook==AutoIconStyle.DEFAULT)alpha=160
+                    else
+                        colorFilter = android.graphics.ColorMatrixColorFilter(tint(palette, source, 1f - transparency / 100f))
+                }
+                android.graphics.Canvas(glyph).drawBitmap(source.picture, 0f, 0f, paint)
             }
-            android.graphics.Canvas(glyph).drawBitmap(source.picture, 0f, 0f, paint)
             ProcessedIcon(glyph, icon.plateMaskBitmap, plate, icon.origin, source)
         }
         cached.palette = palette; cached.artworkTransparency = transparency; cached.colored = result
@@ -78,47 +97,59 @@ object IconBitmapProcessor {
         return android.graphics.ColorMatrix(values)
     }
 
-    private var cachedOpacity: Int = -1
     private var processLogCount = 0
 
     @Synchronized
     fun clearCache() {
         cache.clear()
-        clearTintCache()
         com.cosmod.launcherglass.util.GlyphShadowHelper.clearCache()
-        cachedOpacity = -1
     }
 
     @Synchronized
-    fun nativeLayers(src: Bitmap, bgOpacity: Int): ProcessedIcon? {
-        getOrProcess(src, bgOpacity)
-        return cache[src]?.icon
-    }
+    fun nativeLayers(src: Bitmap): ProcessedIcon? = layers(src)?.icon
 
     @Synchronized
-    fun getOrProcess(src: Bitmap, bgOpacity: Int): ProcessedIcon? {
+    fun getOrProcess(src: Bitmap): ProcessedIcon? = layers(src)?.let(::applyPalette)
+
+    @Synchronized
+    internal fun isPrepared(src: Bitmap): Boolean = !src.isRecycled && cache[src]?.source == source(src)
+
+    // The workspace worker may read a hardware texture. Never hold the draw
+    // cache's monitor during that readback or while extracting its layers.
+    internal fun prepare(src: Bitmap) {
+        val request = synchronized(this) {
+            if (src.isRecycled || isPrepared(src)) return
+            source(src)
+        }
+        val entry = CachedIcon(request, processIcon(src, request))
+        applyPalette(entry)
+        synchronized(this) {
+            if (!src.isRecycled && source(src) == request && cache[src]?.source != request) cache[src] = entry
+        }
+    }
+
+    private fun source(src: Bitmap): Source {
+        val layered = layeredSources[src] == true
+        return Source(src.generationId, layered, !layered && PrefsHelper.iconPalette.autoLook >= AutoIconStyle.DEFAULT,
+            PrefsHelper.artworkDetection)
+    }
+
+    private fun layers(src: Bitmap): CachedIcon? {
         if (src.isRecycled) return null
-        if (cachedOpacity != bgOpacity) {
-            cache.clear()
-            cachedOpacity = bgOpacity
-        }
-
-        val cached = cache[src]
-        if (cached != null && cached.generation == src.generationId) {
-            return applyPalette(cached)
-        }
-
-        val processed = processIcon(src, bgOpacity)
-        val entry = CachedIcon(src.generationId, processed)
-        cache[src] = entry
-        return applyPalette(entry)
+        val request = source(src)
+        return cache[src]?.takeIf { it.source == request }
+            ?: CachedIcon(request, processIcon(src, request)).also { cache[src] = it }
     }
 
     private var fallbackLogCount = 0
-    private fun fallback(pixels: IntArray, width: Int, height: Int, origin: IconOrigin): ProcessedIcon? {
+    private fun fallback(pixels: IntArray, width: Int, height: Int, origin: IconOrigin, automatic: Boolean): ProcessedIcon? {
         val result = try {
-            if (origin == IconOrigin.ARTWORK) IconFallbackLayers.artwork(pixels, width, height)
-            else IconFallbackLayers.alphaGlyph(pixels, width, height)
+            val primary=if (origin == IconOrigin.ARTWORK) IconFallbackLayers.artwork(pixels, width, height, automatic)
+                else IconFallbackLayers.alphaGlyph(pixels, width, height)
+            primary ?: if(automatic){
+                (if(origin==IconOrigin.ARTWORK)null else IconFallbackLayers.artwork(pixels,width,height,automatic=true))
+                    ?: IconFallbackLayers.standaloneGlyph(pixels,width,height)
+            }else null
         } catch (t: Throwable) {
             GlassLogger.e("IconProcessor", "Fallback layers failed", t); null
         }
@@ -129,8 +160,10 @@ object IconBitmapProcessor {
         return result
     }
 
-    private fun processIcon(src: Bitmap, bgOpacity: Int): ProcessedIcon? {
+    private fun processIcon(src: Bitmap, request: Source): ProcessedIcon? {
         if (src.isRecycled) return null
+        val automatic = request.automatic
+        val layered = request.layered
         val width = src.width
         val height = src.height
         if (width <= 0 || height <= 0) return null
@@ -179,7 +212,7 @@ object IconBitmapProcessor {
         }
         // Only the three native layered-icon exceptions use a rim-derived
         // plate. Ordinary Flux processing remains the 0.1.64 algorithm.
-        if(layeredSources[src]==true) {
+        if(layered) {
             buckets.fill(0);opaqueCount=0
             for(y in height/4 until height*3/4) {
                 val left=(0 until width).firstOrNull {pixels[y*width+it] ushr 24>=240} ?: continue
@@ -191,8 +224,8 @@ object IconBitmapProcessor {
                 }
             }
         }
-        if (opaqueCount < if(layeredSources[src]==true)8 else 50)
-            return if(layeredSources[src]==true) null else fallback(pixels,width,height,IconOrigin.ALPHA_GLYPH)
+        if (opaqueCount < if(layered)8 else 50)
+            return if(layered) null else fallback(pixels,width,height,IconOrigin.ALPHA_GLYPH,automatic)
         var maxBucketCount = 0
         var topKey = -1
         for (i in buckets.indices) {
@@ -202,14 +235,14 @@ object IconBitmapProcessor {
             }
         }
         val topRatio = maxBucketCount.toFloat() / opaqueCount
-        if (topRatio < 0.10f || topKey < 0) return if (layeredSources[src] == true) null else fallback(pixels, width, height, IconOrigin.ARTWORK)
+        if (topRatio < 0.10f || topKey < 0) return if (layered) null else fallback(pixels, width, height, IconOrigin.ARTWORK,automatic)
         // A photo/illustration can have one relatively common colour (sky,
         // hair, etc.) without having a flat plate. Require both a weak dominant
         // bucket and many populated colours, leaving clean glyph icons alone.
-        if(PrefsHelper.artworkDetection && layeredSources[src]!=true && topRatio<0.24f) {
+        if(request.detectArtwork && !layered && topRatio<0.24f) {
             val minimum=(opaqueCount/12000).coerceAtLeast(2)
             val populated=buckets.count {it>=minimum}
-            if(populated>=160)return fallback(pixels,width,height,IconOrigin.ARTWORK)
+            if(populated>=160)return fallback(pixels,width,height,IconOrigin.ARTWORK,automatic)
         }
         var sumR = 0L
         var sumG = 0L
@@ -259,7 +292,7 @@ object IconBitmapProcessor {
             }
         }
 
-        if (maxDist < 25.0) return if (layeredSources[src] == true) null else fallback(pixels, width, height, IconOrigin.ALPHA_GLYPH)
+        if (maxDist < 25.0) return if (layered) null else fallback(pixels, width, height, IconOrigin.ALPHA_GLYPH,automatic)
 
         val bgThreshold = max(16.0, maxDist * 0.08)
         val glyphPixels = IntArray(pixels.size)
@@ -312,7 +345,7 @@ object IconBitmapProcessor {
             if (processLogCount < 10) {
                 GlassLogger.i(
                     "IconProcessor",
-                    "Processed frosted icon ${width}x$height: BG=($bgR,$bgG,$bgB) ratio=${String.format(java.util.Locale.ROOT, "%.2f", topRatio)}, opacity=$bgOpacity%"
+                    "Processed frosted icon ${width}x$height: BG=($bgR,$bgG,$bgB) ratio=${String.format(java.util.Locale.ROOT, "%.2f", topRatio)}"
                 )
                 processLogCount++
             }

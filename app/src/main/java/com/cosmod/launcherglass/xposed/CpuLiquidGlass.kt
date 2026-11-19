@@ -7,7 +7,7 @@ import kotlin.math.*
 
 /** Software counterpart of LiquidGlassShader: the same lens, native mask and linear sampling. */
 internal object CpuLiquidGlass {
-    private data class Key(val width:Int,val height:Int,val rounding:Float,val kyant:KyantOptics?)
+    private data class Key(val width:Int,val height:Int,val rounding:Float,val kyant:KyantOptics?,val field:Bitmap?)
     private data class Coordinates(val x:FloatArray,val y:FloatArray,val light:FloatArray?,
         val dispersionX:FloatArray?,val dispersionY:FloatArray?)
     private data class Pixels(val generation:Int,val pixels:IntArray)
@@ -19,10 +19,18 @@ internal object CpuLiquidGlass {
     private fun smooth(a:Float,b:Float,value:Float):Float {
         val t=((value-a)/(b-a)).coerceIn(0f,1f);return t*t*(3f-2f*t)
     }
+    // RGBA_F16 stores raw FP16 bits in a ShortBuffer.
+    @android.annotation.SuppressLint("HalfFloat")
     private fun coordinates(key:Key):Coordinates {
         coordinates.get(key)?.let {return it}
         val w=key.width;val h=key.height;val edge=min(w,h).toFloat()
         val kyant=key.kyant
+        val field=key.field
+        val fieldPixels=field?.let {
+            java.nio.ByteBuffer.allocateDirect(it.width*it.height*8).order(java.nio.ByteOrder.nativeOrder()).apply {
+                it.copyPixelsToBuffer(this);rewind()
+            }.asShortBuffer()
+        }
         val result=Coordinates(FloatArray(w*h),FloatArray(w*h),if(kyant!=null)FloatArray(w*h)else null,
             if(kyant!=null)FloatArray(w*h)else null,if(kyant!=null)FloatArray(w*h)else null)
         for(y in 0 until h)for(x in 0 until w){
@@ -33,11 +41,25 @@ internal object CpuLiquidGlass {
                 val qx=abs(centerX)-w*.5f+r;val qy=abs(centerY)-h*.5f+r
                 val xOutside=max(qx,0f);val yOutside=max(qy,0f)
                 val distanceLength=sqrt(xOutside*xOutside+yOutside*yOutside)
-                val distance=distanceLength+min(max(qx,qy),0f)-r
+                var distance=distanceLength+min(max(qx,qy),0f)-r
                 val ox=xOutside;val oy=yOutside
                 val len=distanceLength
-                val nx=sign(centerX)*(if(len>.0001f)ox/len else if(qx>qy)1f else 0f)
-                val ny=sign(centerY)*(if(len>.0001f)oy/len else if(qx>qy)0f else 1f)
+                var nx=sign(centerX)*(if(len>.0001f)ox/len else if(qx>qy)1f else 0f)
+                var ny=sign(centerY)*(if(len>.0001f)oy/len else if(qx>qy)0f else 1f)
+                if(field!=null && fieldPixels!=null){
+                    val fx=(px*field.width/w-.5f).coerceIn(0f,(field.width-1).toFloat())
+                    val fy=(py*field.height/h-.5f).coerceIn(0f,(field.height-1).toFloat())
+                    val xx=fx.toInt();val yy=fy.toInt();val dx=fx-xx;val dy=fy-yy
+                    fun component(c:Int):Float {
+                        fun at(x:Int,y:Int)=android.util.Half.toFloat(fieldPixels[(y*field.width+x)*4+c])
+                        val x1=min(xx+1,field.width-1);val y1=min(yy+1,field.height-1)
+                        return (at(xx,yy)*(1-dx)+at(x1,yy)*dx)*(1-dy)+(at(xx,y1)*(1-dx)+at(x1,y1)*dx)*dy
+                    }
+                    nx=component(0)*2-1;ny=component(1)*2-1
+                    val normalLength=sqrt(nx*nx+ny*ny).coerceAtLeast(.0001f)
+                    nx/=normalLength;ny/=normalLength
+                    distance=-component(2)*max(field.width,field.height)*max(w.toFloat()/field.width,h.toFloat()/field.height)
+                }
                 val t=(1f+distance/max(kyant.band(edge),.5f)).coerceIn(0f,1f)
                 val shift=(1f-sqrt(max(0f,1f-t*t)))*kyant.amount(edge)
                 val i=y*w+x
@@ -78,7 +100,7 @@ internal object CpuLiquidGlass {
             if(readable!==wallpaper)readable.recycle()
             images[wallpaper]=Pixels(wallpaper.generationId,data);data
         }
-        val map=coordinates(Key(width,height,rounding,style.kyant))
+        val map=coordinates(Key(width,height,rounding,style.kyant,style.cornerField))
         val alpha=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888)
         Canvas(alpha).drawBitmap(mask,null,Rect(0,0,width,height),Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
         val output=IntArray(width*height);alpha.getPixels(output,0,width,0,0,width,height)

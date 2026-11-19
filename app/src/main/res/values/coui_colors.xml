@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- COUI light color scheme, composited over its settings surface. -->
+    <color name="coui_primary">#242424</color>
+    <color name="coui_on_accent">#FFFFFF</color>
+    <color name="coui_accent_surface">#DEDEDE</color>
+    <color name="coui_surface">#F1F1F1</color>
+    <color name="coui_card">#FFFFFF</color>
+    <color name="coui_raised">#E6E6E6</color>
+    <color name="coui_on_surface">#191919</color>
+    <color name="coui_secondary_text">#6B6B6B</color>
+    <color name="coui_divider">#1F000000</color>
+    <color name="coui_navigation">#F0F0F0</color>
+</resources>

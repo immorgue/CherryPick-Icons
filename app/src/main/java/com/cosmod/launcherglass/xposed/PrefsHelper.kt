@@ -6,26 +6,30 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import com.cosmod.launcherglass.ui.SettingsDefaults
+import com.cosmod.launcherglass.util.AutoIconStyle
 import com.cosmod.launcherglass.ui.SettingsProvider
 import com.cosmod.launcherglass.util.GlassLogger
 import com.cosmod.launcherglass.util.LiveBlurEngine
 import com.cosmod.launcherglass.util.WallpaperHelper
 
 object PrefsHelper {
+    @Volatile private var settingsSnapshot:android.os.Bundle?=null
+    internal fun settingsSnapshot()=settingsSnapshot?.let {android.os.Bundle(it)}
     @Volatile var limitClosingBlur=true
         private set
 
     @Volatile var enabled: Boolean = SettingsDefaults.boolean(SettingsProvider.KEY_ENABLED)
     @Volatile var gpuEffects: Boolean = true
-        private set
+        internal set
+    @Volatile var glassFinish = GlassFinish()
+        internal set
     @Volatile var bgOpacity: Int = SettingsDefaults.integer(SettingsProvider.KEY_BG_OPACITY)
     @Volatile var blurEnabled: Boolean = SettingsDefaults.boolean(SettingsProvider.KEY_BLUR_ENABLED)
     @Volatile var smoothSwipeLead=false
-    @Volatile var flightIconReveal=155
     @Volatile var appWindowTilt=false
     @Volatile var appGenie=true
     @Volatile var appDroplet=true
-    @Volatile var appGestureBounce=true
+    @Volatile var appGestureBounce=false
     @Volatile var appOpenResponse=240
     @Volatile var appCloseSpeed=100
     @Volatile var appGenieStrength=100
@@ -55,6 +59,9 @@ object PrefsHelper {
     @Volatile var folderBlurEnabled: Boolean = SettingsDefaults.boolean(SettingsProvider.KEY_FOLDER_BLUR_ENABLED)
     @Volatile var folderIconsBlurEnabled=true
     @Volatile var photoWidgetBlur=false
+    @Volatile internal var clockWidget = WidgetGlassOptions(false, SettingsDefaults.integer(SettingsProvider.KEY_CLOCK_WIDGET_OPACITY))
+    @Volatile internal var weatherWidget = WidgetGlassOptions(false, SettingsDefaults.integer(SettingsProvider.KEY_WEATHER_WIDGET_OPACITY))
+    internal val widgetGlassEnabled get() = photoWidgetBlur || clockWidget.enabled || weatherWidget.enabled
     @Volatile var photoWidgetTint=false
     @Volatile var photoWidgetLiquidWidth=40
     @Volatile var photoWidgetLiquidDistortion=50
@@ -69,8 +76,9 @@ object PrefsHelper {
     @Volatile var liquidDistortion=SettingsDefaults.integer(SettingsProvider.KEY_LIQUID_DISTORTION)
     val colorOnly:Boolean get()=blurStyle==SettingsProvider.BLUR_STYLE_COLOR
     val iconBackdropEnabled:Boolean get()=com.cosmod.launcherglass.util.MaterialMode.needsBackdrop(blurStyle,blurEnabled)
-    val backdropEnabled:Boolean get()=com.cosmod.launcherglass.util.MaterialMode.needsBackdrop(blurStyle,blurEnabled,
-        FolderSettings.own && folderBlurEnabled,DockSettings.own && dockEnabled)
+    val backdropEnabled:Boolean get()=(dockEnabled && DockSettings.needsOwnBackdrop) ||
+        com.cosmod.launcherglass.util.MaterialMode.needsBackdrop(blurStyle,blurEnabled && (FeaturePolicy.icons || folderBlurEnabled || dockEnabled || widgetGlassEnabled),
+            iconPalette.autoLook<0 && FolderSettings.own && folderBlurEnabled)
     val kyantGlass:Boolean get()=blurStyle!=SettingsProvider.BLUR_STYLE_COLOR && android.os.Build.VERSION.SDK_INT>=33
     val liquidGlass:Boolean get()=blurStyle!=SettingsProvider.BLUR_STYLE_FROSTED && kyantGlass
     @Volatile var kyant=KyantOptics.read()
@@ -86,6 +94,7 @@ object PrefsHelper {
     @Volatile var glyphStrokeOpacity = 40
     @Volatile var glyphStrokeWidth = 35
     @Volatile var glyphStrokeBrightness = 45
+    @Volatile var glyphBottomShade = SettingsDefaults.integer(SettingsProvider.KEY_GLYPH_BOTTOM_SHADE)
     @Volatile var glyphShadow: Boolean = SettingsDefaults.boolean(SettingsProvider.KEY_GLYPH_SHADOW)
     @Volatile var shadowOpacity: Int = SettingsDefaults.integer(SettingsProvider.KEY_SHADOW_OPACITY)
     @Volatile var gradientOpacity: Int = SettingsDefaults.integer(SettingsProvider.KEY_GRADIENT_OPACITY)
@@ -100,9 +109,21 @@ object PrefsHelper {
         private set
     @Volatile var blurColorFilter: android.graphics.ColorMatrixColorFilter? = null
     private var initialized = false
+    private var nativeDarkIcons = false
     @Volatile private var loaded=false
 
-    internal fun backdropFilter(vibrancy:Int,palette:com.cosmod.launcherglass.util.IconPalette):android.graphics.ColorMatrixColorFilter? {
+    private val clearDarkBackdrop by lazy {
+        android.graphics.ColorMatrixColorFilter(android.graphics.ColorMatrix().apply {
+            setSaturation(.5f)
+            postConcat(android.graphics.ColorMatrix().apply {setScale(.58f,.58f,.58f,1f)})
+        })
+    }
+
+    internal fun backdropFilter(vibrancy:Int,palette:com.cosmod.launcherglass.util.IconPalette,useAutoPreset:Boolean=true):android.graphics.ColorMatrixColorFilter? {
+        if(useAutoPreset && palette.autoDark)when(palette.autoLook){
+            com.cosmod.launcherglass.util.AutoIconStyle.CLEAR -> return clearDarkBackdrop
+            com.cosmod.launcherglass.util.AutoIconStyle.TINTED -> return null
+        }
         val colorize=palette.custom && !palette.clear
         return if (!colorize || vibrancy>=100) null else {
                     val matrix = android.graphics.ColorMatrix()
@@ -136,7 +157,14 @@ object PrefsHelper {
         if (initialized) return
         initialized = true
 
+        AutoMenuBridge.initialize(context)
         loadPrefs(context)
+        android.app.WallpaperManager.getInstance(context).addOnColorsChangedListener({ _, which ->
+            if (which and android.app.WallpaperManager.FLAG_SYSTEM != 0) {
+                com.cosmod.launcherglass.util.AutoIconPalette.invalidateWallpaper()
+                loadPrefs(context)
+            }
+        }, Handler(Looper.getMainLooper()))
         for(delay in listOf(250L,750L,1500L,3000L))Handler(Looper.getMainLooper()).postDelayed({if(!loaded)loadPrefs(context)},delay)
         context.registerComponentCallbacks(object : android.content.ComponentCallbacks {
             override fun onConfigurationChanged(configuration: android.content.res.Configuration) {
@@ -150,10 +178,15 @@ object PrefsHelper {
         try {
             val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
                 override fun onChange(selfChange: Boolean, uri: Uri?) {
+                    // The menu's worker already reads the persisted snapshot after its write.
+                    if (uri == SettingsProvider.CONTENT_URI && AutoMenuBridge.deferProviderNotification()) return
                     loadPrefs(context)
                 }
             }
             context.contentResolver.registerContentObserver(SettingsProvider.CONTENT_URI, true, observer)
+            com.cosmod.launcherglass.util.SystemIconColors.changedUris().forEach { uri ->
+                runCatching { context.contentResolver.registerContentObserver(uri, false, observer) }
+            }
             GlassLogger.i(
                 "PrefsHelper",
                 "Initialized & ContentObserver registered: bgOpacity=$bgOpacity%, blur=$blurEnabled(mode=$blurMode, fps=$liveFps, idlePause=$idlePause, r=$blurRadius)"
@@ -164,33 +197,65 @@ object PrefsHelper {
     }
 
     fun loadPrefs(context: Context, systemDark: Boolean? = null) {
-        try {
-            val bundle = context.contentResolver.call(
-                SettingsProvider.CONTENT_URI,
-                SettingsProvider.METHOD_GET_ALL,
-                null,
-                null
-            ) ?: return
+        val remote = runCatching {
+            context.contentResolver.call(SettingsProvider.CONTENT_URI, SettingsProvider.METHOD_GET_ALL, null, null)
+        }.getOrNull()
+        if (remote != null) AutoMenuBridge.remember(context, remote)
+        val base = remote ?: settingsSnapshot ?: AutoMenuBridge.cachedSettings(context) ?: return
+        applyPrefs(context, systemDark, AutoMenuBridge.effective(base), reportNativeAppearance = remote != null)
+        if (remote != null) AutoMenuBridge.reconnect()
+    }
 
+    internal fun applyAutoMenuSettings(context: Context, bundle: android.os.Bundle) {
+        val current = settingsSnapshot
+        val changed = current?.takeIf { it.keySet() == bundle.keySet() }?.let { previous ->
+            bundle.keySet().filter { previous.get(it) != bundle.get(it) }
+        }
+        if (changed?.isEmpty() == true) return
+        val appearanceOnly = bundle.getInt(com.cosmod.launcherglass.util.AutoIconStyle.ENGINE)==1 &&
+            changed?.all(AutoMenuBridge::isEditableSetting)==true
+        applyPrefs(context, null, bundle, reportNativeAppearance = false, appearanceOnly = appearanceOnly)
+    }
+
+    private fun applyPrefs(context: Context, systemDark: Boolean?, bundle: android.os.Bundle, reportNativeAppearance: Boolean,
+        appearanceOnly: Boolean = false) {
+        try {
+            settingsSnapshot=android.os.Bundle(bundle)
+
+            val featureChanged=FeaturePolicy.load(bundle)
             DesktopGeometry.load(bundle)
 
             val newEnabled = bundle.getBoolean(SettingsProvider.KEY_ENABLED, SettingsDefaults.boolean(SettingsProvider.KEY_ENABLED))
-            val toneEnabled=bundle.getBoolean(SettingsProvider.KEY_BLUR_TONE_ENABLED,true)
-            val newBgOpacity = if (toneEnabled)
+            val autoAppearance=bundle.getInt(AutoIconStyle.ENGINE,AutoIconStyle.DEFAULT_ENGINE)==1
+            val toneEnabled=autoAppearance || bundle.getBoolean(SettingsProvider.KEY_BLUR_TONE_ENABLED,true)
+            var newBgOpacity = if (toneEnabled)
                 bundle.getInt(SettingsProvider.KEY_BG_OPACITY, SettingsDefaults.integer(SettingsProvider.KEY_BG_OPACITY)).coerceIn(0,100) else 0
-            val newBlurEnabled = bundle.getInt(SettingsProvider.KEY_BLUR_STYLE,0)==SettingsProvider.BLUR_STYLE_COLOR || bundle.getBoolean(SettingsProvider.KEY_BLUR_ENABLED, SettingsDefaults.boolean(SettingsProvider.KEY_BLUR_ENABLED))
+            val newBlurEnabled = autoAppearance || bundle.getInt(SettingsProvider.KEY_BLUR_STYLE,0)==SettingsProvider.BLUR_STYLE_COLOR || bundle.getBoolean(SettingsProvider.KEY_BLUR_ENABLED, SettingsDefaults.boolean(SettingsProvider.KEY_BLUR_ENABLED))
             val locationBlurEnabled = bundle.getBoolean(SettingsProvider.KEY_BLUR_LOCATIONS_ENABLED,true)
-            val newFolderBlurEnabled = bundle.getBoolean(SettingsProvider.KEY_FOLDER_BLUR_ENABLED, SettingsDefaults.boolean(SettingsProvider.KEY_FOLDER_BLUR_ENABLED))
+            val newFolderBlurEnabled = FeaturePolicy.desktop && bundle.getBoolean(SettingsProvider.KEY_FOLDER_BLUR_ENABLED, SettingsDefaults.boolean(SettingsProvider.KEY_FOLDER_BLUR_ENABLED))
             val newFolderIconsBlurEnabled=locationBlurEnabled && bundle.getBoolean(SettingsProvider.KEY_FOLDER_ICONS_BLUR_ENABLED,true)
             val newDrawerBlurEnabled = locationBlurEnabled && bundle.getBoolean(SettingsProvider.KEY_DRAWER_BLUR_ENABLED, SettingsDefaults.boolean(SettingsProvider.KEY_DRAWER_BLUR_ENABLED))
-            val newPhotoWidgetBlur=bundle.getBoolean(SettingsProvider.KEY_PHOTO_WIDGET_BLUR,false)
+            val newPhotoWidgetBlur=FeaturePolicy.desktop && bundle.getBoolean(SettingsProvider.KEY_PHOTO_WIDGET_BLUR,false)
+            val newClockWidget = WidgetGlassOptions.read(WidgetKind.CLOCK, bundle, FeaturePolicy.desktop)
+            val newWeatherWidget = WidgetGlassOptions.read(WidgetKind.WEATHER, bundle, FeaturePolicy.desktop)
             val newPhotoWidgetOpacity=bundle.getInt(SettingsProvider.KEY_PHOTO_WIDGET_OPACITY,55).coerceIn(0,100)
             val newPhotoWidgetTint=bundle.getBoolean(SettingsProvider.KEY_PHOTO_WIDGET_TINT,false)
             val developer=bundle.getBoolean(SettingsProvider.KEY_DEVELOPER_MODE,false)
+            val newBlurStyle = if(autoAppearance) {
+                val key=com.cosmod.launcherglass.util.AutoIconStyle.MATERIAL
+                com.cosmod.launcherglass.util.AutoIconStyle.materialMode(bundle.getInt(key,1),android.os.Build.VERSION.SDK_INT>=33)
+            }else com.cosmod.launcherglass.util.MaterialMode.normalize(bundle.getInt(SettingsProvider.KEY_BLUR_STYLE, SettingsDefaults.integer(SettingsProvider.KEY_BLUR_STYLE)))
+            fun transparency(mode:Int)=com.cosmod.launcherglass.util.MaterialMode.blurTransparency(mode,autoAppearance,developer,
+                bundle.getInt(SettingsProvider.KEY_BLUR_TRANSPARENCY,SettingsDefaults.integer(SettingsProvider.KEY_BLUR_TRANSPARENCY)))
             val newGpuEffects=!developer || bundle.getBoolean(SettingsProvider.KEY_GPU_EFFECTS,true)
             val newLimitClosingBlur=!developer || bundle.getBoolean(SettingsProvider.KEY_LIMIT_CLOSING_BLUR,true)
             val backendChanged=newGpuEffects!=gpuEffects
             val newSmoothSwipeLead=developer && bundle.getBoolean(SettingsProvider.KEY_SMOOTH_SWIPE_LEAD,false)
+            val newGlassFinish = GlassFinish(
+                transparency(newBlurStyle),
+                (autoAppearance || developer) && android.os.Build.VERSION.SDK_INT >= 33 && bundle.getBoolean(SettingsProvider.KEY_HAZE_ENABLED, false))
+            val oldBlurTransparency=glassFinish.transparency
+            val finishChanged = newGlassFinish != glassFinish
             val newSwipeLead=bundle.getBoolean(SettingsProvider.KEY_SWIPE_LEAD,SettingsDefaults.boolean(SettingsProvider.KEY_SWIPE_LEAD))
             val newDisableEdgeOptimization=bundle.getBoolean(SettingsProvider.KEY_DISABLE_EDGE_OPTIMIZATION,SettingsDefaults.boolean(SettingsProvider.KEY_DISABLE_EDGE_OPTIMIZATION))
             val newOptimizeMiniIcons=bundle.getBoolean(SettingsProvider.KEY_OPTIMIZE_MINI_ICONS,SettingsDefaults.boolean(SettingsProvider.KEY_OPTIMIZE_MINI_ICONS))
@@ -198,7 +263,7 @@ object PrefsHelper {
             val newArtworkTransparency=if(developer)bundle.getInt(SettingsProvider.KEY_ARTWORK_TRANSPARENCY,defaultArtwork).coerceIn(0,100) else defaultArtwork
             val artworkChanged=newArtworkTransparency!=artworkTransparency || developer!=artworkDetection
             if(developer!=artworkDetection)IconBitmapProcessor.clearCache()
-            val newDockEnabled=bundle.getBoolean(SettingsProvider.KEY_DOCK_ENABLED,false)
+            val newDockEnabled=FeaturePolicy.desktop && bundle.getBoolean(SettingsProvider.KEY_DOCK_ENABLED,false)
             val wasDockEnabled=dockEnabled
             fun dockValue(key:String,max:Int)=bundle.getInt(key,SettingsDefaults.integer(key)).coerceIn(0,max)
             val newDockSide=dockValue(SettingsProvider.KEY_DOCK_SIDE_PADDING,SettingsProvider.DOCK_PADDING_MAX)
@@ -212,16 +277,17 @@ object PrefsHelper {
             val newPhotoWidgetWidth=bundle.getInt(SettingsProvider.KEY_PHOTO_WIDGET_LIQUID_WIDTH,SettingsDefaults.integer(SettingsProvider.KEY_PHOTO_WIDGET_LIQUID_WIDTH)).coerceIn(0,100)
             val newPhotoWidgetDistortion=bundle.getInt(SettingsProvider.KEY_PHOTO_WIDGET_LIQUID_DISTORTION,50).coerceIn(0,300)
             val widgetChanged=newPhotoWidgetBlur!=photoWidgetBlur || newPhotoWidgetOpacity!=photoWidgetOpacity || newPhotoWidgetTint!=photoWidgetTint ||
-                newPhotoWidgetWidth!=photoWidgetLiquidWidth || newPhotoWidgetDistortion!=photoWidgetLiquidDistortion
-            val newBlurRadius = if (bundle.getBoolean(SettingsProvider.KEY_BLUR_RADIUS_ENABLED,true))
+                newPhotoWidgetWidth!=photoWidgetLiquidWidth || newPhotoWidgetDistortion!=photoWidgetLiquidDistortion ||
+                newClockWidget != clockWidget || newWeatherWidget != weatherWidget
+            val newBlurRadius = if(autoAppearance)10 else if (bundle.getBoolean(SettingsProvider.KEY_BLUR_RADIUS_ENABLED,true))
                 bundle.getInt(SettingsProvider.KEY_BLUR_RADIUS, SettingsDefaults.integer(SettingsProvider.KEY_BLUR_RADIUS)).coerceIn(0,50) else 0
             val newBlurMode = bundle.getInt(SettingsProvider.KEY_BLUR_MODE, SettingsDefaults.integer(SettingsProvider.KEY_BLUR_MODE))
-            val newBlurStyle = com.cosmod.launcherglass.util.MaterialMode.normalize(bundle.getInt(SettingsProvider.KEY_BLUR_STYLE, SettingsDefaults.integer(SettingsProvider.KEY_BLUR_STYLE)))
             val blurStyleChanged=newBlurStyle!=blurStyle
+            val colorOnlyChanged=(newBlurStyle==SettingsProvider.BLUR_STYLE_COLOR)!=colorOnly
             val newBlurQuality=if(developer)bundle.getInt(SettingsProvider.KEY_BLUR_QUALITY,SettingsDefaults.integer(SettingsProvider.KEY_BLUR_QUALITY)).coerceIn(0,100)else 0
             val newLiquidWidth=bundle.getInt(SettingsProvider.KEY_LIQUID_WIDTH,SettingsDefaults.integer(SettingsProvider.KEY_LIQUID_WIDTH)).coerceIn(0,100)
             val newLiquidDistortion=bundle.getInt(SettingsProvider.KEY_LIQUID_DISTORTION,SettingsDefaults.integer(SettingsProvider.KEY_LIQUID_DISTORTION)).coerceIn(0,300)
-            val newKyant=KyantOptics.read(bundle)
+            val newKyant=if(autoAppearance)KyantOptics.automatic else KyantOptics.read(bundle)
             val geometryChanged=newLiquidWidth!=liquidWidth || newLiquidDistortion!=liquidDistortion || newKyant!=kyant
             val qualityChanged=newBlurQuality!=blurQuality
             val newLiveFps = bundle.getInt(SettingsProvider.KEY_LIVE_FPS, SettingsDefaults.integer(SettingsProvider.KEY_LIVE_FPS))
@@ -229,10 +295,16 @@ object PrefsHelper {
             val designEnabled = bundle.getBoolean(SettingsProvider.KEY_DESIGN_ENABLED, SettingsDefaults.boolean(SettingsProvider.KEY_DESIGN_ENABLED))
             val newIconStroke = designEnabled && bundle.getBoolean(SettingsProvider.KEY_ICON_STROKE, SettingsDefaults.boolean(SettingsProvider.KEY_ICON_STROKE))
             val newStrokeOpacity = bundle.getInt(SettingsProvider.KEY_STROKE_OPACITY, SettingsDefaults.integer(SettingsProvider.KEY_STROKE_OPACITY))
-            val newGlyphStroke = designEnabled && bundle.getBoolean(SettingsProvider.KEY_GLYPH_STROKE, false)
-            val newGlyphStrokeOpacity = bundle.getInt(SettingsProvider.KEY_GLYPH_STROKE_OPACITY, 40).coerceIn(0,100)
-            val newGlyphStrokeWidth = bundle.getInt(SettingsProvider.KEY_GLYPH_STROKE_WIDTH,35).coerceIn(0,100)
-            val newGlyphStrokeBrightness = bundle.getInt(SettingsProvider.KEY_GLYPH_STROKE_BRIGHTNESS,45).coerceIn(0,100)
+            val newGlyphStroke = designEnabled && bundle.getBoolean(SettingsProvider.KEY_GLYPH_STROKE,
+                SettingsDefaults.boolean(SettingsProvider.KEY_GLYPH_STROKE))
+            fun outlineValue(key:String)=bundle.getInt(key,SettingsDefaults.integer(key)).coerceIn(0,100)
+            val newGlyphStrokeOpacity = outlineValue(SettingsProvider.KEY_GLYPH_STROKE_OPACITY)
+            val newGlyphStrokeWidth = outlineValue(SettingsProvider.KEY_GLYPH_STROKE_WIDTH)
+            val newGlyphStrokeBrightness = outlineValue(SettingsProvider.KEY_GLYPH_STROKE_BRIGHTNESS)
+            val shadeKey=SettingsProvider.KEY_GLYPH_BOTTOM_SHADE
+            val shadeSwitch=SettingsProvider.KEY_GLYPH_BOTTOM_SHADE_ENABLED
+            val newGlyphBottomShade=if(designEnabled && bundle.getBoolean(shadeSwitch,SettingsDefaults.boolean(shadeSwitch)))
+                bundle.getInt(shadeKey,SettingsDefaults.integer(shadeKey)).coerceIn(0,100)else 0
             val glyphOutlineChanged = newGlyphStroke != glyphStroke || newGlyphStrokeOpacity != glyphStrokeOpacity ||
                 newGlyphStrokeWidth != glyphStrokeWidth || newGlyphStrokeBrightness != glyphStrokeBrightness
             val newGlyphShadow = designEnabled && bundle.getBoolean(SettingsProvider.KEY_GLYPH_SHADOW, SettingsDefaults.boolean(SettingsProvider.KEY_GLYPH_SHADOW))
@@ -244,54 +316,54 @@ object PrefsHelper {
                 configuration.uiMode = (configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK.inv()) or
                     (if (systemDark) android.content.res.Configuration.UI_MODE_NIGHT_YES else android.content.res.Configuration.UI_MODE_NIGHT_NO)
             }
-            val darkIcons = NativeIconAppearance.read(context, configuration)
+            if (!appearanceOnly) nativeDarkIcons = NativeIconAppearance.read(context, configuration)
                 ?: (systemDark ?: com.cosmod.launcherglass.util.IconPalette.isSystemDark(context))
-            val fluxSupport=FluxIconSupport.read(context)
-            if(fluxSupport!=FluxIconSupport.UNKNOWN && bundle.getInt(SettingsProvider.KEY_NATIVE_FLUX_SUPPORT,0)!=fluxSupport) {
+            val fluxSupport=if(reportNativeAppearance)FluxIconSupport.read(context)else FluxIconSupport.UNKNOWN
+            if(reportNativeAppearance && fluxSupport!=FluxIconSupport.UNKNOWN && bundle.getInt(SettingsProvider.KEY_NATIVE_FLUX_SUPPORT,0)!=fluxSupport) {
                 context.contentResolver.call(SettingsProvider.CONTENT_URI,SettingsProvider.METHOD_REPORT_ICON_APPEARANCE,
                     null,android.os.Bundle().apply {putInt(SettingsProvider.KEY_NATIVE_FLUX_SUPPORT,fluxSupport)})
             }
-            if (!bundle.containsKey(SettingsProvider.KEY_NATIVE_ICON_DARK) ||
-                bundle.getBoolean(SettingsProvider.KEY_NATIVE_ICON_DARK) != darkIcons) {
+            if (reportNativeAppearance && (!bundle.containsKey(SettingsProvider.KEY_NATIVE_ICON_DARK) ||
+                bundle.getBoolean(SettingsProvider.KEY_NATIVE_ICON_DARK) != nativeDarkIcons)) {
                 context.contentResolver.call(SettingsProvider.CONTENT_URI, SettingsProvider.METHOD_REPORT_ICON_APPEARANCE,
-                    null, android.os.Bundle().apply { putBoolean(SettingsProvider.KEY_NATIVE_ICON_DARK, darkIcons) })
+                    null, android.os.Bundle().apply { putBoolean(SettingsProvider.KEY_NATIVE_ICON_DARK, nativeDarkIcons) })
             }
+            val darkIcons=com.cosmod.launcherglass.util.IconColorTheme.isDark(
+                bundle.getInt(SettingsProvider.KEY_ICON_COLOR_THEME,0),nativeDarkIcons)
             val clearIcons = bundle.getInt(SettingsProvider.KEY_ICON_APPEARANCE, 1) == 0
             val colorKeys = SettingsProvider.colorKeys(darkIcons)
-            val newPalette = com.cosmod.launcherglass.util.IconPalette.from(
-                bundle.getInt(SettingsProvider.KEY_COLOR_MODE, 0),
+            val newPalette = com.cosmod.launcherglass.util.AutoIconPalette.resolve(context, bundle, nativeDarkIcons)
+                ?: com.cosmod.launcherglass.util.IconPalette.resolve(
+                context, bundle.getInt(SettingsProvider.KEY_COLOR_MODE, 0),
                 bundle.getInt(colorKeys[0], SettingsDefaults.integer(colorKeys[0])),
                 bundle.getInt(colorKeys[1], SettingsDefaults.integer(colorKeys[1])),
                 if (clearIcons) bundle.getInt(SettingsProvider.KEY_CLEAR_BRIGHTNESS, SettingsDefaults.integer(SettingsProvider.KEY_CLEAR_BRIGHTNESS))
                 else bundle.getInt(colorKeys[2], SettingsDefaults.integer(colorKeys[2])), darkIcons, clearIcons)
-            val newBlurVibrancy=if(toneEnabled)bundle.getInt(SettingsProvider.KEY_BLUR_VIBRANCY,0).coerceIn(0,200)else 0
+            if (newPalette.autoLook >= 0) newBgOpacity = com.cosmod.launcherglass.util.AutoIconStyle.opacity(newPalette.autoLook, newPalette.autoDark)
+            val newBlurVibrancy=if(autoAppearance)100 else if(toneEnabled)bundle.getInt(SettingsProvider.KEY_BLUR_VIBRANCY,0).coerceIn(0,200)else 0
             val vibrancyChanged=newBlurVibrancy!=blurVibrancy
-            val newBlurSaturation = if (toneEnabled)
+            val newBlurSaturation = if(autoAppearance)100 else if (toneEnabled)
                 bundle.getInt(SettingsProvider.KEY_BLUR_SATURATION,100).coerceIn(0,200) else 100
-            val newBlurLightening = if (toneEnabled)
+            val newBlurLightening = if(autoAppearance)50 else if (toneEnabled)
                 bundle.getInt(SettingsProvider.KEY_BLUR_LIGHTENING,50).coerceIn(0,100) else 50
             val shadowToneChanged = newBlurLightening != blurLightening
             val blurColorsChanged = newBlurSaturation != blurSaturation || newBlurLightening != blurLightening
             val paletteChanged = newPalette != iconPalette
             val masterChanged = newEnabled != enabled
 
-            if (newBgOpacity != bgOpacity || newEnabled != enabled) {
+            if (masterChanged) {
                 IconBitmapProcessor.clearCache()
-                com.cosmod.launcherglass.util.GlyphShadowHelper.clearCache()
             }
-            if (newBlurRadius != blurRadius) {
-                WallpaperHelper.invalidate()
-                LiveBlurEngine.invalidate()
-            }
+            val radiusChanged = newBlurRadius != blurRadius
             if (newBlurMode != blurMode) {
                 LiveBlurEngine.invalidate()
             }
             val folderEnabledChanged=newFolderBlurEnabled!=folderBlurEnabled
-            val materialChanged=backendChanged || newBgOpacity!=bgOpacity || newBlurEnabled!=blurEnabled || newBlurRadius!=blurRadius ||
+            val materialChanged=finishChanged || backendChanged || newBgOpacity!=bgOpacity || newBlurEnabled!=blurEnabled || newBlurRadius!=blurRadius ||
                 newFolderBlurEnabled!=folderBlurEnabled || newFolderIconsBlurEnabled!=folderIconsBlurEnabled || newDrawerBlurEnabled!=drawerBlurEnabled ||
                 newIconStroke != iconStroke || newStrokeOpacity != strokeOpacity ||
                 newGlyphShadow != glyphShadow || newShadowOpacity != shadowOpacity ||
-                newGradientOpacity != gradientOpacity || glyphOutlineChanged || paletteChanged ||
+                newGradientOpacity != gradientOpacity || newGlyphBottomShade != glyphBottomShade || glyphOutlineChanged || paletteChanged ||
                 blurColorsChanged || blurStyleChanged || geometryChanged || vibrancyChanged || widgetChanged ||
                 newSwipeLead!=swipeLead || newSmoothSwipeLead!=smoothSwipeLead || newDisableEdgeOptimization!=disableEdgeOptimization ||
                 newOptimizeMiniIcons!=optimizeMiniIcons || artworkChanged
@@ -304,15 +376,15 @@ object PrefsHelper {
             iconPalette = newPalette
             enabled = newEnabled
             gpuEffects=newGpuEffects
+            glassFinish=newGlassFinish
             limitClosingBlur=newLimitClosingBlur
             sceneDragBackdrop=developer && bundle.getBoolean(SettingsProvider.KEY_SCENE_DRAG_BACKDROP,false)
             staticAnimationBlur=bundle.getBoolean(SettingsProvider.KEY_STATIC_ANIMATION_BLUR,false)
             GlassLogger.enabled=bundle.getBoolean(SettingsProvider.KEY_MODULE_LOGGING,SettingsDefaults.boolean(SettingsProvider.KEY_MODULE_LOGGING))
-            flightIconReveal=bundle.getInt(SettingsProvider.KEY_FLIGHT_ICON_REVEAL,155).coerceIn(100,400)
-            appWindowTilt=bundle.getBoolean(SettingsProvider.KEY_APP_WINDOW_TILT,false)
+            appWindowTilt=FeaturePolicy.desktop && bundle.getBoolean(SettingsProvider.KEY_APP_WINDOW_TILT,false)
             appGenie=bundle.getBoolean(SettingsProvider.KEY_APP_GENIE,true)
             appDroplet=bundle.getBoolean(SettingsProvider.KEY_APP_DROPLET,true)
-            appGestureBounce=bundle.getBoolean(SettingsProvider.KEY_APP_GESTURE_BOUNCE,true)
+            appGestureBounce=bundle.getBoolean(SettingsProvider.KEY_APP_GESTURE_BOUNCE,false)
             fun animationValue(key:String)=bundle.getInt(key,SettingsDefaults.integer(key))
                 .coerceIn(SettingsProvider.APP_ANIMATION_RANGES.getValue(key))
             appOpenResponse=animationValue(SettingsProvider.KEY_APP_OPEN_RESPONSE)
@@ -332,13 +404,15 @@ object PrefsHelper {
             folderIconsBlurEnabled=newFolderIconsBlurEnabled
             drawerBlurEnabled = newDrawerBlurEnabled
             photoWidgetBlur=newPhotoWidgetBlur;photoWidgetOpacity=newPhotoWidgetOpacity;photoWidgetTint=newPhotoWidgetTint
+            clockWidget = newClockWidget; weatherWidget = newWeatherWidget
             photoWidgetLiquidWidth=newPhotoWidgetWidth;photoWidgetLiquidDistortion=newPhotoWidgetDistortion
             blurRadius = newBlurRadius
             blurMode = newBlurMode
             blurStyle = newBlurStyle
             blurVibrancy=newBlurVibrancy
             blurQuality=newBlurQuality;liquidWidth=newLiquidWidth;liquidDistortion=newLiquidDistortion
-            if(blurStyleChanged || qualityChanged || vibrancyChanged || backendChanged)WallpaperHelper.invalidate()
+            if(radiusChanged || blurStyleChanged || qualityChanged || vibrancyChanged || backendChanged ||
+                newGlassFinish.transparency!=oldBlurTransparency)WallpaperHelper.invalidate()
             liveFps = newLiveFps.coerceIn(1,60)
             swipeFps=bundle.getInt(SettingsProvider.KEY_SWIPE_FPS,SettingsDefaults.integer(SettingsProvider.KEY_SWIPE_FPS)).coerceIn(1,120)
             kyant=newKyant
@@ -349,32 +423,30 @@ object PrefsHelper {
             glyphStrokeOpacity = newGlyphStrokeOpacity
             glyphStrokeWidth = newGlyphStrokeWidth
             glyphStrokeBrightness = newGlyphStrokeBrightness
+            glyphBottomShade = newGlyphBottomShade
             glyphShadow = newGlyphShadow
             shadowOpacity = newShadowOpacity
             gradientOpacity = newGradientOpacity
             val folderChanged=FolderSettings.update(bundle)
             if(folderChanged || (FolderSettings.own && folderEnabledChanged))WallpaperHelper.invalidate()
             val dockSettingsChanged=DockSettings.update(bundle)
-            if(dockSettingsChanged || (DockSettings.own && newDockEnabled!=wasDockEnabled))WallpaperHelper.invalidate()
+            if(dockSettingsChanged || (DockSettings.hasOwnAppearance && newDockEnabled!=wasDockEnabled))WallpaperHelper.invalidate()
             WallpaperHelper.onProcessingSettingsChanged()
             if(shadowToneChanged) WallpaperHelper.invalidate()
 
             // Publish all new values before invalidating recorded materials.
             // In particular, a contour toggle must rebuild the overlay itself,
             // not only update the wallpaper sampling RenderNode.
-            if (materialChanged || folderChanged) {
-                IconGlassHook.invalidateShaders()
-                IconGlassHook.invalidateFolderPreviews()
-                IconGlassHook.invalidateActiveIcons()
-            }
             if (paletteChanged || artworkChanged) {
                 DynamicIconForeground.clear()
-                IconBitmapProcessor.clearTintCache()
-                IconMaterialRenderer.clear()
-                IconGlassHook.invalidateFolderPreviews()
+            }
+            if (materialChanged || folderChanged || featureChanged) {
+                IconGlassHook.invalidateShaders()
                 IconGlassHook.invalidateActiveIcons()
             }
-            if (loaded && (masterChanged || backendChanged || blurStyleChanged)) {
+            // Liquid and Frosted use the same native icon sources. Reloading the
+            // workspace here rebuilds Quick App hosts and briefly restores their stock plates.
+            if (loaded && (masterChanged || backendChanged || (colorOnlyChanged && !autoAppearance) || featureChanged)) {
                 IconGlassHook.onIconThemeChanged()
                 IconGlassHook.reloadNativeIcons()
             }
@@ -383,20 +455,22 @@ object PrefsHelper {
                 ModuleHooks.setEnabled(true)
                 com.cosmod.launcherglass.util.LauncherWallpaperCapture.onModuleEnabled()
             }
-            LiveBlurEngine.onPrefsChanged()
+            if (!appearanceOnly || colorOnlyChanged) LiveBlurEngine.onPrefsChanged()
             NativeSurfaceLive.onSettingsChanged()
             TransitionCapture.onSettingsChanged()
             FolderMaterialHook.onSettingsChanged()
             LiftedBackdrop.onSettingsChanged()
             MultiIconMaterialHook.onSettingsChanged()
             PhotoWidgetMaterial.onSettingsChanged()
-            if(dockChanged || dockSettingsChanged || materialChanged || masterChanged)DockMaterial.onSettingsChanged()
+            if(dockChanged || dockSettingsChanged || masterChanged || backendChanged ||
+                (materialChanged && !DockSettings.auto))DockMaterial.onSettingsChanged()
             if(!enabled){
                 IconGlassHook.onModuleDisabled()
                 com.cosmod.launcherglass.util.LauncherWallpaperCapture.onModuleDisabled()
                 ModuleHooks.setEnabled(false)
             }
             loaded=true
+            WallpaperHelper.onPrefsReady()
 
             GlassLogger.i(
                 "PrefsHelper",

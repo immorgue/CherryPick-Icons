@@ -10,8 +10,9 @@ internal object WallpaperProfiles {
     private const val FILE="wallpaper_profiles_v1"
     private const val ACTIVE="active"
     private val excluded=setOf(SettingsProvider.KEY_ENABLED,SettingsProvider.KEY_DEVELOPER_MODE,
-        SettingsProvider.KEY_HIDE_HOME_GESTURE_BAR,SettingsProvider.KEY_SCENE_DRAG_BACKDROP,SettingsProvider.KEY_STATIC_ANIMATION_BLUR,SettingsProvider.KEY_MODULE_LOGGING,SettingsProvider.KEY_FLIGHT_ICON_REVEAL,
+        SettingsProvider.KEY_HIDE_HOME_GESTURE_BAR,SettingsProvider.KEY_SCENE_DRAG_BACKDROP,SettingsProvider.KEY_STATIC_ANIMATION_BLUR,SettingsProvider.KEY_MODULE_LOGGING,
         SettingsProvider.KEY_GPU_EFFECTS,SettingsProvider.KEY_DOCK_BLUR_HEIGHT,SettingsProvider.KEY_DOCK_BLUR_Y,SettingsProvider.KEY_MUSIC_ISLAND_EXPANSION,
+        SettingsProvider.KEY_HAZE_ENABLED,SettingsProvider.KEY_BLUR_TRANSPARENCY,
         SettingsProvider.KEY_MUSIC_ISLAND_BLUR,SettingsProvider.KEY_MUSIC_ISLAND_GLOW,
         SettingsProvider.KEY_MUSIC_ISLAND_OUTER,SettingsProvider.KEY_MUSIC_ISLAND_CONTENT_X,SettingsProvider.KEY_MUSIC_ISLAND_CONTENT_Y,
         SettingsProvider.KEY_MUSIC_ISLAND_RADIUS,
@@ -20,11 +21,15 @@ internal object WallpaperProfiles {
         SettingsProvider.KEY_DISABLE_EDGE_OPTIMIZATION,SettingsProvider.KEY_OPTIMIZE_MINI_ICONS,
         SettingsProvider.KEY_SWIPE_LEAD,
         SettingsProvider.KEY_SMOOTH_SWIPE_LEAD)+
-        SettingsProvider.APP_ANIMATION_SWITCHES+SettingsProvider.APP_ANIMATION_RANGES.keys
-    private val keys get()=SettingsDefaults.portable().keys-excluded-
+        SettingsProvider.APP_ANIMATION_SWITCHES+SettingsProvider.APP_ANIMATION_RANGES.keys+
+        com.cosmod.launcherglass.util.AutoIconStyle.defaults.keys
+    private val keys get()=SettingsDefaults.portable().keys-excluded-ModuleFeatures.keys.toSet()-
         com.cosmod.launcherglass.util.DesktopSizing.ranges.keys
     internal fun appearanceKeys():Set<String> = keys
     private fun store(context:Context)=context.getSharedPreferences(FILE,Context.MODE_PRIVATE)
+    @Synchronized fun clearSaved(context:Context) {
+        check(store(context).edit().clear().commit()) { "Could not clear wallpaper profiles" }
+    }
     private fun snapshot(prefs:SharedPreferences)=prefs.all.filter {it.key in keys && (it.value is Int || it.value is Boolean)}.mapValues {it.value!!}
     private fun profileKey(identity:String)="profile:$identity"
     @Synchronized fun saveCurrent(context:Context,prefs:SharedPreferences) {
@@ -35,9 +40,9 @@ internal object WallpaperProfiles {
         require(identity.length in 1..256 && label.length<=256)
         val db=store(context);val old=db.getString(ACTIVE,null)
         if(old==identity){db.edit().putString("label:$identity",label).apply();return false}
-        val auto=prefs.getBoolean(ENABLED,false)
+        val auto=prefs.getBoolean(ENABLED,true)
         val saved=if(auto)db.getString(profileKey(identity),null)?.let(::JSONObject)else null
-        val restored=saved?.let {json -> keys.mapNotNull {key -> json.opt(key)?.takeIf {it is Int || it is Boolean}?.let {key to it}}.toMap()}
+        val restored = saved?.let(::readAppearance)
         val plan=WallpaperProfileSwitch.plan(old,identity,auto,snapshot(prefs),restored)
         // Persist the old appearance before applying any incoming values.
         val edit=db.edit()
@@ -64,11 +69,15 @@ internal object WallpaperProfiles {
         return db.getString("label:$id",id)
     }
     fun count(context:Context)=store(context).all.keys.count {it.startsWith("profile:")}
+    private fun readAppearance(json: JSONObject): Map<String, Any> = SettingsDefaults.migrateWidgetSwitches(
+        keys.mapNotNull { key -> json.opt(key)?.takeIf { it is Int || it is Boolean }?.let { key to it } }.toMap())
+
     @Synchronized fun copyFrom(context:Context,prefs:SharedPreferences,identity:String):Boolean {
         val saved=store(context).getString(profileKey(identity),null)?.let(::JSONObject) ?: return false
+        val appearance = readAppearance(saved)
         val schema=SettingsDefaults.portable();val editor=prefs.edit()
         for(key in keys){
-            val value=saved.opt(key)
+            val value=appearance[key]
             when {
                 value is Boolean && schema[key] is Boolean -> editor.putBoolean(key,value)
                 value is Int && schema[key] is Int -> editor.putInt(key,value)

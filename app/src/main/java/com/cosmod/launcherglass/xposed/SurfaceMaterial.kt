@@ -5,7 +5,7 @@ import android.os.SystemClock
 import android.util.LruCache
 import android.view.View
 import com.cosmod.launcherglass.util.*
-import de.robv.android.xposed.XposedHelpers
+import com.cosmod.launcherglass.bridge.HookReflection
 import java.util.WeakHashMap
 import kotlin.math.roundToInt
 
@@ -26,7 +26,7 @@ internal object SurfaceMaterial {
     private const val REBUILD_INTERVAL_MS=48L
     var geometryRevision=0L
         private set
-    fun invalidateGeometry(){geometryRevision++;shapes.evictAll();tracks.clear()}
+    fun invalidateGeometry(){geometryRevision++;shapes.evictAll();tracks.clear();FolderPreviewShape.reset()}
     /**
      * Translation- and size-independent description of how the OEM built a
      * contour. Hashing absolute path coordinates changed the key whenever a
@@ -135,7 +135,8 @@ internal object SurfaceMaterial {
      * [fallback] is the native plate a drag preview draws if no material can.
      */
     fun draw(canvas:Canvas,bounds:Rect,view:View,identity:android.graphics.drawable.Drawable,radius:Float,path:Path?=null,decorate:Boolean=true,alpha:Int=255,style:GlassStyle=GlassStyle.icons(),nativeShape:android.graphics.drawable.Drawable?=null,nativeMask:Bitmap?=null,pathFingerprint:Long?=null,
-             local:RectF?=null,fallback:android.graphics.drawable.Drawable?=null,drawContour:Boolean=true):Boolean {
+             local:RectF?=null,fallback:android.graphics.drawable.Drawable?=null,drawContour:Boolean=true,
+             folderPreviewSource: View? = null, folderPreviewSpan: Int = 0):Boolean {
         if(bounds.isEmpty)return false
         if(canvas.quickReject(bounds.left.toFloat(),bounds.top.toFloat(),bounds.right.toFloat(),bounds.bottom.toFloat()))return true
         // Even an owner awaiting its first wallpaper needs the ready event.
@@ -151,6 +152,7 @@ internal object SurfaceMaterial {
         // The launcher may render a drag shadow to a software Canvas. A GPU
         // wallpaper cannot be sampled there; use the shared software snapshot.
         val shape=shape(bounds,radius,path,nativeShape,nativeMask,pathFingerprint,identity,view)
+        if (folderPreviewSource != null) FolderPreviewShape.report(folderPreviewSource, shape.mask, bounds, folderPreviewSpan)
         // A native destination clip owns the silhouette. Reuse its path for
         // a narrow rim, with no extra inner bevel or rounded lens.
         val contourMask=if(!drawContour && path!=null && !path.isEmpty)
@@ -163,7 +165,7 @@ internal object SurfaceMaterial {
             val capturedBounds=Rect(bounds)
             val resting=RectF(footprint)
             val world=Matrix()
-            XposedHelpers.callMethod(view,"transformMatrixToGlobal",world);world.mapRect(resting)
+            HookReflection.callMethod(view,"transformMatrixToGlobal",world);world.mapRect(resting)
             val screenW=metrics.widthPixels;val screenH=metrics.heightPixels
             val plateColor=style.plateColor ?: PrefsHelper.plateColor(SurfaceTone.base())
             if(NativeSurfaceLive.capture(canvas,shape.mask.width,shape.mask.height){target ->
@@ -191,7 +193,7 @@ internal object SurfaceMaterial {
         if(wallpaper!=null && !canvas.isHardwareAccelerated && wallpaper.config==Bitmap.Config.HARDWARE)return false
         val source=if(wallpaper==null)null else {
             val world=Matrix()
-            try {XposedHelpers.callMethod(view,"transformMatrixToGlobal",world)}catch(_:Throwable){return false}
+            try {WallpaperSampleCoordinates.world(view,world)}catch(_:Throwable){return false}
             val screen=RectF(footprint);world.mapRect(screen)
             WallpaperFootprint.source(wallpaper,metrics.widthPixels,metrics.heightPixels,screen)
         }
@@ -231,9 +233,22 @@ internal object SurfaceMaterial {
             }
         }finally{target.restoreToCount(save)}
     }
-    fun contour(canvas:Canvas,bounds:Rect,radius:Float,path:Path?=null,nativeMask:Bitmap?=null){
+    fun contour(canvas:Canvas,bounds:Rect,radius:Float,path:Path?=null,nativeMask:Bitmap?=null,alpha:Float=1f){
         if(!PrefsHelper.iconStroke || PrefsHelper.strokeOpacity<=0 || bounds.isEmpty)return
         val shape=shape(bounds,radius,path,nativeMask=nativeMask)
-        canvas.drawBitmap(GlassGeometry.rim(shape.mask),null,bounds,Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
+        canvas.drawBitmap(GlassGeometry.rim(shape.mask),null,bounds,Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+            this.alpha = (alpha * 255f).roundToInt()
+        })
+    }
+
+    internal fun drawWidgetFlight(canvas: Canvas, bounds: Rect, radius: Float, path: Path?,
+        nativeMask: Bitmap?, color: Int, opacity: Int, alpha: Float) {
+        if (bounds.isEmpty || alpha <= 0f) return
+        val mask = shape(bounds, radius, path, nativeMask = nativeMask).mask
+        val paint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
+            colorFilter = PorterDuffColorFilter(color, PorterDuff.Mode.SRC_IN)
+            this.alpha = (opacity * 2.55f * alpha).roundToInt()
+        }
+        canvas.drawBitmap(mask, null, bounds, paint)
     }
 }
